@@ -1,6 +1,7 @@
 /**
  * Creates Azure DevOps pull requests, and lists/creates/replies-to/resolves PR comment threads,
- * for the pull request associated with the current branch of a scada-ui checkout.
+ * for the pull request associated with the current branch of a git checkout whose origin remote
+ * points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
  * is enough for `list`, "Read & Write" is needed for `create`/`comment`/`reply`/`resolve`/`batch`).
@@ -10,9 +11,8 @@
 import minimist from "minimist";
 
 import type { AzureDevOpsRepoContext } from "./lib.ts";
-import { assertRunningFromProjectRoot, parseAzureDevOpsRemote, runCommand } from "./lib.ts";
+import { parseAzureDevOpsRemote, runCommand } from "./lib.ts";
 
-const ROOT_DIR = process.cwd();
 const API_VERSION = "7.1";
 
 type Action = "list" | "reply" | "resolve" | "create" | "comment" | "batch";
@@ -107,7 +107,8 @@ Options:
   -h, --help               Show this help.
 
 Requires:
-  - Being run from the root of a scada-ui checkout (so the current branch/remote can be read).
+  - Being run from within a git checkout whose origin remote points at Azure Repos (so the
+    current branch/remote can be read).
   - AZURE_DEVOPS_PAT set in the environment (pr.sh sets this up via 1Password).
 `);
   process.exit(message ? 1 : 0);
@@ -884,7 +885,6 @@ async function executeBatchOperation(
 }
 
 async function main(): Promise<void> {
-  assertRunningFromProjectRoot(ROOT_DIR);
   const options = parseArgs();
   const pat = getPat();
   const ctx = await getRepoContext();
