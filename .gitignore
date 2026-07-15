@@ -1,6 +1,5 @@
 node_modules/
 
-# Personal 1Password op:// reference (or plain secret, if not using 1Password) for
-# AZURE_DEVOPS_PAT. Copy .env.tpl.example to .env.tpl and fill in your own vault/item.
-.env.tpl
+# Personal secret file (literal AZURE_DEVOPS_PAT, or an op:// 1Password reference) - copy
+# .env.tpl to .env and fill in your own value.
 .env

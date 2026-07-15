@@ -5,8 +5,9 @@
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
  * is enough for `list`, "Read & Write" is needed for `create`/`comment`/`reply`/`resolve`/`batch`).
- * Run this via pr.sh, which injects the token from 1Password via `op run --env-file=.env.tpl` so
- * it's never written to disk.
+ * Run this via pr.sh, which loads it from .env via `op run --env-file=.env` (see .env.tpl) so a
+ * literal secret is never written to disk (an op:// 1Password reference works too, in which case
+ * only the resolved value briefly lives in the child process's environment).
  */
 import minimist from "minimist";
 
@@ -109,7 +110,7 @@ Options:
 Requires:
   - Being run from within a git checkout whose origin remote points at Azure Repos (so the
     current branch/remote can be read).
-  - AZURE_DEVOPS_PAT set in the environment (pr.sh sets this up via 1Password).
+  - AZURE_DEVOPS_PAT set in the environment (pr.sh loads this from .env - see .env.tpl).
 `);
   process.exit(message ? 1 : 0);
 }
