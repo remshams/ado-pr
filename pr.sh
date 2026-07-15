@@ -10,12 +10,20 @@
 #   - Node.js >= 22.6 (native TypeScript support). No ts-node/build step needed.
 #   - The 1Password CLI (`op`), signed in/unlocked, to resolve the AZURE_DEVOPS_PAT reference in
 #     .env.tpl without ever writing the token to disk.
+#   - A .env.tpl file alongside this script (gitignored, personal to you - copy .env.tpl.example
+#     to .env.tpl and fill in your own op:// vault/item reference, or a plain secret if you're not
+#     using 1Password).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if ! command -v op >/dev/null 2>&1; then
   echo "Error: the 1Password CLI ('op') is required but was not found on PATH. Install it and run 'op signin' first." >&2
+  exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/.env.tpl" ]; then
+  echo "Error: ${SCRIPT_DIR}/.env.tpl not found. Copy ${SCRIPT_DIR}/.env.tpl.example to ${SCRIPT_DIR}/.env.tpl and fill in your own AZURE_DEVOPS_PAT reference." >&2
   exit 1
 fi
 
