@@ -10,5 +10,15 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["pr.ts", "lib.ts"]
+  "include": [
+    "pr.ts",
+    "cli.ts",
+    "operation-types.ts",
+    "lib.ts",
+    "azure.ts",
+    "pull-requests.ts",
+    "file-anchors.ts",
+    "threads.ts",
+    "batch.ts"
+  ]
 }
