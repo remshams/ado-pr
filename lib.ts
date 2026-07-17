@@ -1,5 +1,5 @@
 /**
- * Shared helpers for pr.ts: parsing an Azure DevOps remote URL and running shell commands.
+ * Shared helpers for parsing Azure DevOps remotes and running Git commands.
  */
 import { spawn } from "child_process";
 
@@ -39,6 +39,16 @@ export function parseAzureDevOpsRemote(remoteUrl: string): AzureDevOpsRepoContex
   throw new Error(
     `Could not parse an Azure DevOps organization/project/repository from remote URL: "${remoteUrl}"`,
   );
+}
+
+export async function getRepoContext(): Promise<AzureDevOpsRepoContext> {
+  const { stdout } = await runCommand("git", ["remote", "get-url", "origin"]);
+  return parseAzureDevOpsRemote(stdout.trim());
+}
+
+export async function getCurrentBranch(): Promise<string> {
+  const { stdout } = await runCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+  return stdout.trim();
 }
 
 export function runCommand(
