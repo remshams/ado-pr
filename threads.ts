@@ -1,10 +1,9 @@
-import { API_VERSION, azureRequest, pullRequestApiUrl, pullRequestWebUrl } from "./azure.ts";
+import { API_VERSION, pullRequestApiUrl, pullRequestWebUrl, type AzureRequester } from "./azure.ts";
 import type {
   CommentThreadContext,
-  FileAnchorCache,
+  FileAnchorService,
   PullRequestThreadContext,
 } from "./file-anchors.ts";
-import { resolveFileAnchor } from "./file-anchors.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
 import type { CommentLocation } from "./operation-types.ts";
 
@@ -25,21 +24,19 @@ export interface CommentThread {
   comments: Comment[];
 }
 
-async function getThreads(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  pat: string,
-): Promise<CommentThread[]> {
-  const url = `${pullRequestApiUrl(ctx, prId, "/threads")}?api-version=${API_VERSION}`;
-  const data = await azureRequest<{ value: CommentThread[] }>(url, pat);
-  return data.value;
-}
-
-/** Looks up the Azure identity id associated with the PAT, only when --exclude-own needs it. */
-async function getCurrentUserId(ctx: AzureDevOpsRepoContext, pat: string): Promise<string> {
-  const url = `https://vssps.dev.azure.com/${encodeURIComponent(ctx.organization)}/_apis/profile/profiles/me?api-version=${API_VERSION}`;
-  const data = await azureRequest<{ id: string }>(url, pat);
-  return data.id;
+export interface ThreadService {
+  list(
+    prId: number,
+    options: { excludeResolved: boolean; excludeOwn: boolean },
+  ): Promise<CommentThread[]>;
+  comment(prId: number, message: string, location?: CommentLocation): Promise<CommentThread>;
+  reply(prId: number, threadId: number, message: string): Promise<void>;
+  edit(prId: number, threadId: number, commentId: number, message: string): Promise<void>;
+  delete(prId: number, threadId: number, commentId: number): Promise<void>;
+  resolve(prId: number, threadId: number): Promise<void>;
+  webUrl(prId: number, threadId: number): string;
+  format(thread: CommentThread, prId: number): string;
+  formatSummary(threads: CommentThread[], prId: number): string;
 }
 
 const UNRESOLVED_STATUSES = new Set<string | undefined>(["active", "pending", undefined]);
@@ -66,26 +63,6 @@ function hasCommentFromSomeoneElse(thread: CommentThread, currentUserId: string)
   );
 }
 
-/** Fetches threads for a PR and applies the --exclude-* filters requested via options. */
-export async function getFilteredThreads(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  pat: string,
-  options: { excludeResolved: boolean; excludeOwn: boolean },
-): Promise<CommentThread[]> {
-  let threads = (await getThreads(ctx, prId, pat)).filter(isRelevantThread);
-
-  if (options.excludeResolved) {
-    threads = threads.filter(isUnresolvedThread);
-  }
-  if (options.excludeOwn) {
-    const currentUserId = await getCurrentUserId(ctx, pat);
-    threads = threads.filter((thread) => hasCommentFromSomeoneElse(thread, currentUserId));
-  }
-
-  return threads;
-}
-
 /** Formats the file location a thread is anchored to, preferring the current side of the diff. */
 function formatLocation(threadContext: CommentThreadContext | undefined): string {
   if (!threadContext?.filePath) {
@@ -103,109 +80,134 @@ function formatLocation(threadContext: CommentThreadContext | undefined): string
   return `${threadContext.filePath}:${start}-${end}`;
 }
 
-export function threadWebUrl(ctx: AzureDevOpsRepoContext, prId: number, threadId: number): string {
-  return `${pullRequestWebUrl(ctx, prId)}?discussionId=${threadId}`;
-}
-
-export function formatThread(
-  thread: CommentThread,
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-): string {
-  const lines = [
-    `### Thread ${thread.id} — ${formatLocation(thread.threadContext)} [${thread.status ?? "active"}]`,
-    threadWebUrl(ctx, prId, thread.id),
-  ];
-  for (const comment of thread.comments.filter(isRealComment)) {
-    lines.push(
-      `- **${comment.author?.displayName ?? "unknown"}** (comment ${comment.id}): ${comment.content!.trim()}`,
-    );
+export function createThreadService({
+  azure,
+  ctx,
+  fileAnchors,
+}: {
+  azure: AzureRequester;
+  ctx: AzureDevOpsRepoContext;
+  fileAnchors: FileAnchorService;
+}): ThreadService {
+  async function getThreads(prId: number): Promise<CommentThread[]> {
+    const url = `${pullRequestApiUrl(ctx, prId, "/threads")}?api-version=${API_VERSION}`;
+    const data = await azure.request<{ value: CommentThread[] }>(url);
+    return data.value;
   }
-  return lines.join("\n");
-}
 
-/** Compact index of all threads, meant as a quick-scan summary below the full detail above. */
-export function formatSummaryTable(
-  threads: CommentThread[],
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-): string {
-  const header = "| Thread | Location | Status | Link |\n| --- | --- | --- | --- |";
-  const rows = threads.map(
-    (thread) =>
-      `| ${thread.id} | ${formatLocation(thread.threadContext)} | ${thread.status ?? "active"} | [Open](${threadWebUrl(ctx, prId, thread.id)}) |`,
-  );
-  return [header, ...rows].join("\n");
-}
+  /** Looks up the Azure identity id associated with the PAT, only when excludeOwn needs it. */
+  async function getCurrentUserId(): Promise<string> {
+    const url = `https://vssps.dev.azure.com/${encodeURIComponent(ctx.organization)}/_apis/profile/profiles/me?api-version=${API_VERSION}`;
+    const data = await azure.request<{ id: string }>(url);
+    return data.id;
+  }
 
-export async function postReply(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  threadId: number,
-  message: string,
-  pat: string,
-): Promise<void> {
-  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments`)}?api-version=${API_VERSION}`;
-  await azureRequest(url, pat, { method: "POST", body: { content: message } });
-}
+  /** Fetches threads for a PR and applies the requested exclude filters. */
+  async function list(
+    prId: number,
+    options: { excludeResolved: boolean; excludeOwn: boolean },
+  ): Promise<CommentThread[]> {
+    let result = (await getThreads(prId)).filter(isRelevantThread);
 
-export async function editComment(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  threadId: number,
-  commentId: number,
-  message: string,
-  pat: string,
-): Promise<void> {
-  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
-  await azureRequest(url, pat, { method: "PATCH", body: { content: message } });
-}
+    if (options.excludeResolved) {
+      result = result.filter(isUnresolvedThread);
+    }
+    if (options.excludeOwn) {
+      const currentUserId = await getCurrentUserId();
+      result = result.filter((thread) => hasCommentFromSomeoneElse(thread, currentUserId));
+    }
 
-export async function deleteComment(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  threadId: number,
-  commentId: number,
-  pat: string,
-): Promise<void> {
-  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
-  await azureRequest(url, pat, { method: "DELETE", responseType: "none" });
-}
+    return result;
+  }
 
-/** Posts a new top-level thread, optionally anchored to a file and line range. */
-export async function postComment(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  message: string,
-  pat: string,
-  location: CommentLocation | undefined,
-  fileAnchorCache: FileAnchorCache,
-): Promise<CommentThread> {
-  const url = `${pullRequestApiUrl(ctx, prId, "/threads")}?api-version=${API_VERSION}`;
-  const anchor = location
-    ? await resolveFileAnchor(ctx, prId, pat, location, fileAnchorCache)
-    : undefined;
+  /** Posts a new top-level thread, optionally anchored to a file and line range. */
+  const fileAnchorCache = fileAnchors.createCache();
 
-  return azureRequest<CommentThread>(url, pat, {
-    method: "POST",
-    body: {
-      comments: [{ content: message }],
-      status: "active",
-      ...(anchor?.threadContext ? { threadContext: anchor.threadContext } : {}),
-      ...(anchor?.pullRequestThreadContext
-        ? { pullRequestThreadContext: anchor.pullRequestThreadContext }
-        : {}),
-    },
-  });
-}
+  async function comment(
+    prId: number,
+    message: string,
+    location?: CommentLocation,
+  ): Promise<CommentThread> {
+    const url = `${pullRequestApiUrl(ctx, prId, "/threads")}?api-version=${API_VERSION}`;
+    const anchor = location
+      ? await fileAnchors.resolve(prId, location, fileAnchorCache)
+      : undefined;
 
-/** Marks a thread as resolved using Azure DevOps' "fixed" status. */
-export async function resolveThread(
-  ctx: AzureDevOpsRepoContext,
-  prId: number,
-  threadId: number,
-  pat: string,
-): Promise<void> {
-  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}`)}?api-version=${API_VERSION}`;
-  await azureRequest(url, pat, { method: "PATCH", body: { status: "fixed" } });
+    return azure.request<CommentThread>(url, {
+      method: "POST",
+      body: {
+        comments: [{ content: message }],
+        status: "active",
+        ...(anchor?.threadContext ? { threadContext: anchor.threadContext } : {}),
+        ...(anchor?.pullRequestThreadContext
+          ? { pullRequestThreadContext: anchor.pullRequestThreadContext }
+          : {}),
+      },
+    });
+  }
+
+  async function reply(prId: number, threadId: number, message: string): Promise<void> {
+    const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments`)}?api-version=${API_VERSION}`;
+    await azure.request(url, { method: "POST", body: { content: message } });
+  }
+
+  async function edit(
+    prId: number,
+    threadId: number,
+    commentId: number,
+    message: string,
+  ): Promise<void> {
+    const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
+    await azure.request(url, { method: "PATCH", body: { content: message } });
+  }
+
+  async function deleteComment(prId: number, threadId: number, commentId: number): Promise<void> {
+    const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
+    await azure.request(url, { method: "DELETE", responseType: "none" });
+  }
+
+  /** Marks a thread as resolved using Azure DevOps' "fixed" status. */
+  async function resolve(prId: number, threadId: number): Promise<void> {
+    const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}`)}?api-version=${API_VERSION}`;
+    await azure.request(url, { method: "PATCH", body: { status: "fixed" } });
+  }
+
+  function webUrl(prId: number, threadId: number): string {
+    return `${pullRequestWebUrl(ctx, prId)}?discussionId=${threadId}`;
+  }
+
+  function format(thread: CommentThread, prId: number): string {
+    const lines = [
+      `### Thread ${thread.id} — ${formatLocation(thread.threadContext)} [${thread.status ?? "active"}]`,
+      webUrl(prId, thread.id),
+    ];
+    for (const comment of thread.comments.filter(isRealComment)) {
+      lines.push(
+        `- **${comment.author?.displayName ?? "unknown"}** (comment ${comment.id}): ${comment.content!.trim()}`,
+      );
+    }
+    return lines.join("\n");
+  }
+
+  /** Compact index of all threads, meant as a quick-scan summary below the full detail above. */
+  function formatSummary(threads: CommentThread[], prId: number): string {
+    const header = "| Thread | Location | Status | Link |\n| --- | --- | --- | --- |";
+    const rows = threads.map(
+      (thread) =>
+        `| ${thread.id} | ${formatLocation(thread.threadContext)} | ${thread.status ?? "active"} | [Open](${webUrl(prId, thread.id)}) |`,
+    );
+    return [header, ...rows].join("\n");
+  }
+
+  return {
+    list,
+    comment,
+    reply,
+    edit,
+    delete: deleteComment,
+    resolve,
+    webUrl,
+    format,
+    formatSummary,
+  };
 }

@@ -6,46 +6,57 @@ function authHeader(pat: string): string {
   return `Basic ${Buffer.from(`:${pat}`).toString("base64")}`;
 }
 
-interface AzureRequestOptions {
+interface AzureRequestBaseOptions {
   method?: string;
   body?: unknown;
-  responseType?: "json" | "none";
 }
 
-export function azureRequest(
-  url: string,
-  pat: string,
-  options: AzureRequestOptions & { responseType: "none" },
-): Promise<void>;
-export function azureRequest<T>(
-  url: string,
-  pat: string,
-  options?: AzureRequestOptions,
-): Promise<T>;
-export async function azureRequest<T>(
-  url: string,
-  pat: string,
-  options: AzureRequestOptions = {},
-): Promise<T | void> {
-  const response = await fetch(url, {
-    method: options.method ?? "GET",
-    headers: {
-      Authorization: authHeader(pat),
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+export interface AzureJsonRequestOptions extends AzureRequestBaseOptions {
+  responseType?: "json";
+}
 
-  if (!response.ok) {
-    throw new Error(
-      `Azure DevOps API request (${options.method ?? "GET"} ${url}) failed: ${response.status} ${response.statusText}\n${await response.text()}`,
-    );
+export interface AzureNoContentRequestOptions extends AzureRequestBaseOptions {
+  responseType: "none";
+}
+
+export type AzureRequestOptions = AzureJsonRequestOptions | AzureNoContentRequestOptions;
+
+export interface AzureRequester {
+  request(url: string, options: AzureNoContentRequestOptions): Promise<void>;
+  request<T>(url: string, options?: AzureJsonRequestOptions): Promise<T>;
+}
+
+/** Creates an authenticated Azure requester around an explicitly owned fetch implementation. */
+export function createAzureRequester({
+  pat,
+  fetch: fetchImpl = globalThis.fetch,
+}: {
+  pat: string;
+  fetch?: typeof globalThis.fetch;
+}): AzureRequester {
+  async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | void> {
+    const response = await fetchImpl(url, {
+      method: options.method ?? "GET",
+      headers: {
+        Authorization: authHeader(pat),
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Azure DevOps API request (${options.method ?? "GET"} ${url}) failed: ${response.status} ${response.statusText}\n${await response.text()}`,
+      );
+    }
+
+    if (options.responseType === "none") {
+      return;
+    }
+    return (await response.json()) as T;
   }
 
-  if (options.responseType === "none") {
-    return;
-  }
-  return (await response.json()) as T;
+  return { request: request as AzureRequester["request"] };
 }
 
 /** Base `https://dev.azure.com/{org}/{project}` URL shared by both the REST API and web UI. */

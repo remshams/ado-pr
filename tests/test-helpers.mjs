@@ -190,18 +190,17 @@ async function recordRequest(input, init) {
 }
 
 /**
- * Replaces `globalThis.fetch` for one test with a strict FIFO response queue.
+ * Creates a strict FIFO fetch fake without mutating global state.
  *
  * Queue entries may be native `Response` objects or descriptors containing
  * `{ body?, json?, status?, statusText?, headers?, delayMs? }`. Every request is exposed
  * through `calls`; an unexpected request rejects immediately, and unused
  * responses fail the test during teardown.
  */
-export function mockFetch(t, responses = []) {
+export function createMockFetch(t, responses = []) {
   const queue = [...responses];
   const calls = [];
-
-  t.mock.method(globalThis, "fetch", async (input, init) => {
+  const fetch = async (input, init) => {
     const call = await recordRequest(input, init);
     calls.push(call);
     assert.ok(queue.length > 0, `Unexpected fetch request: ${call.method} ${call.url}`);
@@ -210,12 +209,19 @@ export function mockFetch(t, responses = []) {
       await new Promise((resolve) => setTimeout(resolve, descriptor.delayMs));
     }
     return responseFromDescriptor(descriptor);
-  });
+  };
 
   t.after(() => {
     assert.equal(queue.length, 0, `${queue.length} queued fetch response(s) were not consumed`);
   });
 
+  return { fetch, calls };
+}
+
+/** Replaces `globalThis.fetch` for tests that specifically exercise global integration. */
+export function mockFetch(t, responses = []) {
+  const { fetch, calls } = createMockFetch(t, responses);
+  t.mock.method(globalThis, "fetch", fetch);
   return calls;
 }
 

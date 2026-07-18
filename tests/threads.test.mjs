@@ -1,19 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createFileAnchorCache } from "../file-anchors.ts";
-import {
-  deleteComment,
-  editComment,
-  formatSummaryTable,
-  formatThread,
-  getFilteredThreads,
-  postComment,
-  postReply,
-  resolveThread,
-  threadWebUrl,
-} from "../threads.ts";
-import { mockFetch } from "./test-helpers.mjs";
+import { createAzureRequester } from "../azure.ts";
+import { createFileAnchorService } from "../file-anchors.ts";
+import { createThreadService } from "../threads.ts";
+import { createMockFetch } from "./test-helpers.mjs";
 
 const ctx = {
   organization: "my org",
@@ -40,18 +31,30 @@ function thread(id, overrides = {}) {
 }
 
 function requestShapes(calls) {
-  return calls.map(({ url, method, body }) => ({ url, method, body }));
+  return calls.map(({ url, method, body }) => ({
+    url,
+    method,
+    body: body === null ? null : JSON.parse(body),
+  }));
 }
 
-test.describe("threads", { concurrency: false }, () => {
-  test("getFilteredThreads removes deleted threads/comments and threads without real comments", async (t) => {
+function createServices(t, responses = []) {
+  const { fetch, calls } = createMockFetch(t, responses);
+  const azure = createAzureRequester({ pat, fetch });
+  const fileAnchors = createFileAnchorService({ azure, ctx });
+  const threads = createThreadService({ azure, ctx, fileAnchors });
+  return { calls, fileAnchors, threads };
+}
+
+test.describe("threads", () => {
+  test("list removes deleted threads/comments and threads without real comments", async (t) => {
     const relevant = thread(5, {
       comments: [
         { id: 50, content: "build event", commentType: "system" },
         textComment(51, "  useful review  "),
       ],
     });
-    const calls = mockFetch(t, [
+    const { calls, threads } = createServices(t, [
       {
         json: {
           value: [
@@ -66,7 +69,7 @@ test.describe("threads", { concurrency: false }, () => {
       },
     ]);
 
-    const result = await getFilteredThreads(ctx, prId, pat, {
+    const result = await threads.list(prId, {
       excludeResolved: false,
       excludeOwn: false,
     });
@@ -81,12 +84,12 @@ test.describe("threads", { concurrency: false }, () => {
     ]);
   });
 
-  test("getFilteredThreads keeps only active, pending, and status-less threads when excluding resolved", async (t) => {
+  test("list keeps only active, pending, and status-less threads when excluding resolved", async (t) => {
     const active = thread(1);
     const pending = thread(2, { status: "pending" });
     const statusLess = thread(3);
     delete statusLess.status;
-    const calls = mockFetch(t, [
+    const { calls, threads } = createServices(t, [
       {
         json: {
           value: [
@@ -100,7 +103,7 @@ test.describe("threads", { concurrency: false }, () => {
       },
     ]);
 
-    const result = await getFilteredThreads(ctx, prId, pat, {
+    const result = await threads.list(prId, {
       excludeResolved: true,
       excludeOwn: false,
     });
@@ -109,7 +112,7 @@ test.describe("threads", { concurrency: false }, () => {
     assert.equal(calls.length, 1, "identity lookup stays lazy when --exclude-own is disabled");
   });
 
-  test("getFilteredThreads excludes own-only threads and requests identity after threads", async (t) => {
+  test("list excludes own-only threads and requests identity after threads", async (t) => {
     const ownAuthor = { id: "me", displayName: "Current User" };
     const otherAuthor = { id: "reviewer", displayName: "Reviewer" };
     const fromReviewer = thread(2, {
@@ -118,7 +121,7 @@ test.describe("threads", { concurrency: false }, () => {
     const fromUnknownAuthor = thread(4, {
       comments: [{ id: 40, content: "anonymous review" }],
     });
-    const calls = mockFetch(t, [
+    const { calls, threads } = createServices(t, [
       {
         json: {
           value: [
@@ -142,7 +145,7 @@ test.describe("threads", { concurrency: false }, () => {
       { json: { id: "me" } },
     ]);
 
-    const result = await getFilteredThreads(ctx, prId, pat, {
+    const result = await threads.list(prId, {
       excludeResolved: false,
       excludeOwn: true,
     });
@@ -162,13 +165,13 @@ test.describe("threads", { concurrency: false }, () => {
     ]);
   });
 
-  test("getFilteredThreads combines resolved and own-thread exclusions in request order", async (t) => {
+  test("list combines resolved and own-thread exclusions in request order", async (t) => {
     const ownAuthor = { id: "me", displayName: "Current User" };
     const otherAuthor = { id: "reviewer", displayName: "Reviewer" };
     const activeOther = thread(3, {
       comments: [textComment(30, "active review", otherAuthor)],
     });
-    const calls = mockFetch(t, [
+    const { calls, threads } = createServices(t, [
       {
         json: {
           value: [
@@ -184,7 +187,7 @@ test.describe("threads", { concurrency: false }, () => {
       { json: { id: "me" } },
     ]);
 
-    const result = await getFilteredThreads(ctx, prId, pat, {
+    const result = await threads.list(prId, {
       excludeResolved: true,
       excludeOwn: true,
     });
@@ -204,7 +207,8 @@ test.describe("threads", { concurrency: false }, () => {
     ]);
   });
 
-  test("formatThread exactly formats general threads and unknown authors", () => {
+  test("format exactly formats general threads and unknown authors", (t) => {
+    const { threads } = createServices(t);
     const value = thread(7, {
       status: undefined,
       comments: [
@@ -215,12 +219,13 @@ test.describe("threads", { concurrency: false }, () => {
     });
 
     assert.equal(
-      formatThread(value, ctx, prId),
+      threads.format(value, prId),
       `### Thread 7 — General (not tied to a file/line) [active]\n${webBase}?discussionId=7\n- **unknown** (comment 70): Please explain this.`,
     );
   });
 
-  test("formatThread exactly formats single-line, range, and right-side-preferred locations", () => {
+  test("format exactly formats single-line, range, and right-side-preferred locations", (t) => {
+    const { threads } = createServices(t);
     const single = thread(8, {
       status: "pending",
       threadContext: {
@@ -241,17 +246,18 @@ test.describe("threads", { concurrency: false }, () => {
     });
 
     assert.equal(
-      formatThread(single, ctx, prId),
+      threads.format(single, prId),
       `### Thread 8 — /src/single.ts:5 [pending]\n${webBase}?discussionId=8\n- **User 8** (comment 8): comment 8`,
     );
     assert.equal(
-      formatThread(range, ctx, prId),
+      threads.format(range, prId),
       `### Thread 9 — /src/range.ts:20-24 [fixed]\n${webBase}?discussionId=9\n- **User 9** (comment 9): comment 9`,
     );
   });
 
-  test("formatSummaryTable exactly formats general, file-only, single, and range rows", () => {
-    const threads = [
+  test("formatSummary exactly formats general, file-only, single, and range rows", (t) => {
+    const { threads: threadService } = createServices(t);
+    const values = [
       thread(1, { status: undefined }),
       thread(2, { threadContext: { filePath: "/src/file-only.ts" } }),
       thread(3, {
@@ -275,7 +281,7 @@ test.describe("threads", { concurrency: false }, () => {
     ];
 
     assert.equal(
-      formatSummaryTable(threads, ctx, prId),
+      threadService.formatSummary(values, prId),
       `| Thread | Location | Status | Link |\n` +
         `| --- | --- | --- | --- |\n` +
         `| 1 | General (not tied to a file/line) | active | [Open](${webBase}?discussionId=1) |\n` +
@@ -285,40 +291,42 @@ test.describe("threads", { concurrency: false }, () => {
     );
   });
 
-  test("threadWebUrl returns the exact encoded Azure DevOps discussion URL", () => {
-    assert.equal(threadWebUrl(ctx, prId, 123), `${webBase}?discussionId=123`);
+  test("webUrl returns the exact encoded Azure DevOps discussion URL", (t) => {
+    const { threads } = createServices(t);
+
+    assert.equal(threads.webUrl(prId, 123), `${webBase}?discussionId=123`);
   });
 
-  test("postReply sends the exact comments request", async (t) => {
-    const calls = mockFetch(t, [{ json: {} }]);
+  test("reply sends the comments request", async (t) => {
+    const { calls, threads } = createServices(t, [{ json: {} }]);
 
-    await postReply(ctx, prId, 17, "Reply text", pat);
+    await threads.reply(prId, 17, "Reply text");
 
     assert.deepEqual(requestShapes(calls), [
       {
         url: `${apiBase}/threads/17/comments?api-version=7.1`,
         method: "POST",
-        body: '{"content":"Reply text"}',
+        body: { content: "Reply text" },
       },
     ]);
   });
 
-  test("editComment PATCHes the comment content", async (t) => {
-    const calls = mockFetch(t, [{ json: {} }]);
+  test("edit PATCHes the identified comment content", async (t) => {
+    const { calls, threads } = createServices(t, [{ json: {} }]);
 
-    await editComment(ctx, prId, 17, 23, "Edited text", pat);
+    await threads.edit(prId, 17, 23, "Edited text");
 
     assert.equal(calls.length, 1);
     const [call] = requestShapes(calls);
     assert.equal(call.url, `${apiBase}/threads/17/comments/23?api-version=7.1`);
     assert.equal(call.method, "PATCH");
-    assert.deepEqual(JSON.parse(call.body), { content: "Edited text" });
+    assert.deepEqual(call.body, { content: "Edited text" });
   });
 
-  test("deleteComment DELETEs the comment and accepts an empty success response", async (t) => {
-    const calls = mockFetch(t, [{ body: "" }]);
+  test("delete DELETEs the identified comment and accepts an empty success response", async (t) => {
+    const { calls, threads } = createServices(t, [{ body: "" }]);
 
-    await deleteComment(ctx, prId, 17, 23, pat);
+    await threads.delete(prId, 17, 23);
 
     assert.deepEqual(requestShapes(calls), [
       {
@@ -329,32 +337,25 @@ test.describe("threads", { concurrency: false }, () => {
     ]);
   });
 
-  test("postComment sends the exact general-thread request", async (t) => {
+  test("comment sends the general-thread request", async (t) => {
     const posted = thread(51);
-    const calls = mockFetch(t, [{ json: posted }]);
+    const { calls, threads } = createServices(t, [{ json: posted }]);
 
-    const result = await postComment(
-      ctx,
-      prId,
-      "General comment",
-      pat,
-      undefined,
-      createFileAnchorCache(),
-    );
+    const result = await threads.comment(prId, "General comment");
 
     assert.deepEqual(result, posted);
     assert.deepEqual(requestShapes(calls), [
       {
         url: `${apiBase}/threads?api-version=7.1`,
         method: "POST",
-        body: '{"comments":[{"content":"General comment"}],"status":"active"}',
+        body: { comments: [{ content: "General comment" }], status: "active" },
       },
     ]);
   });
 
-  test("postComment resolves a real file anchor and sends the exact anchored-thread request", async (t) => {
+  test("comment resolves a real file anchor and sends the anchored-thread request", async (t) => {
     const posted = thread(52);
-    const calls = mockFetch(t, [
+    const { calls, threads } = createServices(t, [
       { json: { value: [{ id: 1 }, { id: 3 }, { id: 2 }] } },
       {
         json: {
@@ -367,14 +368,11 @@ test.describe("threads", { concurrency: false }, () => {
       { json: posted },
     ]);
 
-    const result = await postComment(
-      ctx,
-      prId,
-      "Anchored comment",
-      pat,
-      { file: "src/app.ts", line: 4, endLine: 9 },
-      createFileAnchorCache(),
-    );
+    const result = await threads.comment(prId, "Anchored comment", {
+      file: "src/app.ts",
+      line: 4,
+      endLine: 9,
+    });
 
     assert.deepEqual(result, posted);
     assert.deepEqual(requestShapes(calls), [
@@ -391,21 +389,36 @@ test.describe("threads", { concurrency: false }, () => {
       {
         url: `${apiBase}/threads?api-version=7.1`,
         method: "POST",
-        body: '{"comments":[{"content":"Anchored comment"}],"status":"active","threadContext":{"filePath":"/src/app.ts","rightFileStart":{"line":4,"offset":1},"rightFileEnd":{"line":9,"offset":1}},"pullRequestThreadContext":{"iterationContext":{"firstComparingIteration":3,"secondComparingIteration":3},"changeTrackingId":77}}',
+        body: {
+          comments: [{ content: "Anchored comment" }],
+          status: "active",
+          threadContext: {
+            filePath: "/src/app.ts",
+            rightFileStart: { line: 4, offset: 1 },
+            rightFileEnd: { line: 9, offset: 1 },
+          },
+          pullRequestThreadContext: {
+            iterationContext: {
+              firstComparingIteration: 3,
+              secondComparingIteration: 3,
+            },
+            changeTrackingId: 77,
+          },
+        },
       },
     ]);
   });
 
-  test("resolveThread sends the exact fixed-status request", async (t) => {
-    const calls = mockFetch(t, [{ json: {} }]);
+  test("resolve sends the fixed-status request", async (t) => {
+    const { calls, threads } = createServices(t, [{ json: {} }]);
 
-    await resolveThread(ctx, prId, 19, pat);
+    await threads.resolve(prId, 19);
 
     assert.deepEqual(requestShapes(calls), [
       {
         url: `${apiBase}/threads/19?api-version=7.1`,
         method: "PATCH",
-        body: '{"status":"fixed"}',
+        body: { status: "fixed" },
       },
     ]);
   });

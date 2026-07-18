@@ -2,120 +2,108 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  azureRequest,
+  createAzureRequester,
   orgProjectUrl,
   pullRequestApiUrl,
   pullRequestWebUrl,
   reposBaseUrl,
 } from "../azure.ts";
-import { mockFetch } from "./test-helpers.mjs";
+import { createMockFetch } from "./test-helpers.mjs";
 
 const fakePat = "test-only-fake-pat";
 const expectedAuthorization = "Basic OnRlc3Qtb25seS1mYWtlLXBhdA==";
 
-test(
-  "azureRequest defaults to an authenticated GET without a body",
-  { concurrency: false },
-  async (t) => {
-    const calls = mockFetch(t, [{ json: { value: ["fake-result"] } }]);
+test("Azure requester defaults to an authenticated GET without a body", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [{ json: { value: ["fake-result"] } }]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
 
-    const result = await azureRequest("https://example.invalid/default", fakePat);
+  const result = await azure.request("https://example.invalid/default");
 
-    assert.deepEqual(result, { value: ["fake-result"] });
-    assert.deepEqual(calls, [
-      {
-        url: "https://example.invalid/default",
-        method: "GET",
-        headers: { authorization: expectedAuthorization },
-        body: null,
-      },
-    ]);
-  },
-);
+  assert.deepEqual(result, { value: ["fake-result"] });
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/default",
+      method: "GET",
+      headers: { authorization: expectedAuthorization },
+      body: null,
+    },
+  ]);
+});
 
-test(
-  "azureRequest sends mutations with a JSON body and Content-Type",
-  { concurrency: false },
-  async (t) => {
-    const calls = mockFetch(t, [{ json: { id: 17, status: "fake-created" } }]);
-    const body = {
-      title: "Fake pull request",
-      reviewers: [{ id: "fake-reviewer" }],
-      draft: false,
-    };
+test("Azure requester sends mutations with a JSON body and Content-Type", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [{ json: { id: 17, status: "fake-created" } }]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+  const body = {
+    title: "Fake pull request",
+    reviewers: [{ id: "fake-reviewer" }],
+    draft: false,
+  };
 
-    const result = await azureRequest("https://example.invalid/mutation", fakePat, {
+  const result = await azure.request("https://example.invalid/mutation", {
+    method: "PATCH",
+    body,
+  });
+
+  assert.deepEqual(result, { id: 17, status: "fake-created" });
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/mutation",
       method: "PATCH",
-      body,
-    });
-
-    assert.deepEqual(result, { id: 17, status: "fake-created" });
-    assert.deepEqual(calls, [
-      {
-        url: "https://example.invalid/mutation",
-        method: "PATCH",
-        headers: {
-          authorization: expectedAuthorization,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
+      headers: {
+        authorization: expectedAuthorization,
+        "content-type": "application/json",
       },
-    ]);
-  },
-);
+      body: JSON.stringify(body),
+    },
+  ]);
+});
 
-test(
-  "azureRequest supports successful requests that expect no response body",
-  { concurrency: false },
-  async (t) => {
-    mockFetch(t, [{ body: "" }, { status: 204 }]);
+test("Azure requester supports successful requests that expect no response body", async (t) => {
+  const { fetch } = createMockFetch(t, [{ body: "" }, { status: 204 }]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
 
-    assert.equal(
-      await azureRequest("https://example.invalid/empty", fakePat, {
-        method: "PATCH",
-        responseType: "none",
-      }),
-      undefined,
-    );
-    assert.equal(
-      await azureRequest("https://example.invalid/no-content", fakePat, {
-        method: "DELETE",
-        responseType: "none",
-      }),
-      undefined,
-    );
-  },
-);
+  assert.equal(
+    await azure.request("https://example.invalid/empty", {
+      method: "PATCH",
+      responseType: "none",
+    }),
+    undefined,
+  );
+  assert.equal(
+    await azure.request("https://example.invalid/no-content", {
+      method: "DELETE",
+      responseType: "none",
+    }),
+    undefined,
+  );
+});
 
-test(
-  "azureRequest reports the method, URL, status, status text, and response body on failure",
-  { concurrency: false },
-  async (t) => {
-    const url = "https://example.invalid/failure?continuation=fake-token";
-    mockFetch(t, [
-      {
-        status: 429,
-        statusText: "Too Many Requests",
-        body: '{"message":"fake rate limit detail"}',
-      },
-    ]);
+test("Azure requester reports the method, URL, status, status text, and response body on failure", async (t) => {
+  const url = "https://example.invalid/failure?continuation=fake-token";
+  const { fetch } = createMockFetch(t, [
+    {
+      status: 429,
+      statusText: "Too Many Requests",
+      body: '{"message":"fake rate limit detail"}',
+    },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
 
-    await assert.rejects(
-      azureRequest(url, fakePat, {
-        method: "POST",
-        body: { comment: "fake comment" },
-      }),
-      (error) => {
-        assert.equal(error?.name, "Error");
-        assert.equal(
-          error?.message,
-          `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
-        );
-        return true;
-      },
-    );
-  },
-);
+  await assert.rejects(
+    azure.request(url, {
+      method: "POST",
+      body: { comment: "fake comment" },
+    }),
+    (error) => {
+      assert.equal(error?.name, "Error");
+      assert.equal(
+        error?.message,
+        `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
+      );
+      return true;
+    },
+  );
+});
 
 test("URL builders encode each context component and preserve API path syntax exactly", () => {
   const context = {

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createPullRequest, resolvePullRequestId } from "../pull-requests.ts";
-import { createTempGitRepo, isolateGitEnvironment, mockFetch } from "./test-helpers.mjs";
+import { createAzureRequester } from "../azure.ts";
+import { createPullRequestService } from "../pull-requests.ts";
+import { createMockFetch } from "./test-helpers.mjs";
 
 const ctx = {
   organization: "test-org",
@@ -14,16 +15,6 @@ const repositoryUrl =
   "https://dev.azure.com/test-org/test-project/_apis/git/repositories/test-repository";
 const pullRequestsUrl = `${repositoryUrl}/pullrequests?api-version=7.1`;
 
-async function withWorkingDirectory(path, callback) {
-  const previousCwd = process.cwd();
-  process.chdir(path);
-  try {
-    return await callback();
-  } finally {
-    process.chdir(previousCwd);
-  }
-}
-
 function pullRequest(overrides = {}) {
   return {
     pullRequestId: 42,
@@ -33,22 +24,33 @@ function pullRequest(overrides = {}) {
   };
 }
 
-describe("pull request resolution and creation", { concurrency: false }, () => {
-  test("an explicit pull request ID short-circuits without inspecting Git or fetching", async (t) => {
-    const calls = mockFetch(t);
+function createService(
+  t,
+  responses = [],
+  getCurrentBranch = async () => assert.fail("Unexpected current branch lookup"),
+) {
+  const { fetch, calls } = createMockFetch(t, responses);
+  const azure = createAzureRequester({ pat, fetch });
+  const service = createPullRequestService({ azure, ctx, getCurrentBranch });
+  return { service, calls };
+}
 
-    assert.equal(await resolvePullRequestId(ctx, 123, pat), 123);
+describe("pull request resolution and creation", () => {
+  test("an explicit pull request ID short-circuits without looking up the branch or fetching", async (t) => {
+    const { service, calls } = createService(t);
+
+    assert.equal(await service.resolveId(123), 123);
     assert.deepEqual(calls, []);
   });
 
-  test("auto-detects the current branch and URL-encodes its full source ref", async (t) => {
-    isolateGitEnvironment(t);
-    const repo = createTempGitRepo(t, { branch: "feature/a+b" });
-    const calls = mockFetch(t, [{ json: { value: [pullRequest({ pullRequestId: 73 })] } }]);
+  test("uses the current branch and URL-encodes its full source ref", async (t) => {
+    const { service, calls } = createService(
+      t,
+      [{ json: { value: [pullRequest({ pullRequestId: 73 })] } }],
+      async () => "feature/a+b",
+    );
 
-    await withWorkingDirectory(repo, async () => {
-      assert.equal(await resolvePullRequestId(ctx, undefined, pat), 73);
-    });
+    assert.equal(await service.resolveId(undefined), 73);
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].method, "GET");
@@ -59,82 +61,42 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
     assert.equal(calls[0].body, null);
   });
 
-  test("ignores hostile ambient Git redirection when auto-detecting the branch", async (t) => {
-    const hostileEnvironment = {
-      GIT_DIR: "/hostile/not-a-repository",
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "url.https://attacker.invalid/.insteadOf",
-      GIT_CONFIG_VALUE_0: "https://dev.azure.com/",
-    };
-    const previousEnvironment = new Map(
-      Object.keys(hostileEnvironment).map((name) => [name, process.env[name]]),
+  test("reports when the current branch has no active pull request", async (t) => {
+    const { service, calls } = createService(
+      t,
+      [{ json: { value: [] } }],
+      async () => "feature/missing",
     );
 
-    try {
-      Object.assign(process.env, hostileEnvironment);
-      await t.test(
-        "with isolated production Git environment",
-        { concurrency: false },
-        async (t) => {
-          isolateGitEnvironment(t);
-          const repo = createTempGitRepo(t, { branch: "feature/isolated" });
-          const calls = mockFetch(t, [{ json: { value: [pullRequest({ pullRequestId: 74 })] } }]);
-
-          await withWorkingDirectory(repo, async () => {
-            assert.equal(await resolvePullRequestId(ctx, undefined, pat), 74);
-          });
-
-          assert.equal(calls.length, 1);
-          assert.match(
-            calls[0].url,
-            /searchCriteria\.sourceRefName=refs%2Fheads%2Ffeature%2Fisolated/,
-          );
-        },
-      );
-    } finally {
-      for (const [name, value] of previousEnvironment) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-    }
-  });
-
-  test("reports when the current branch has no active pull request", async (t) => {
-    isolateGitEnvironment(t);
-    const repo = createTempGitRepo(t, { branch: "feature/missing" });
-    const calls = mockFetch(t, [{ json: { value: [] } }]);
-
-    await withWorkingDirectory(repo, async () => {
-      await assert.rejects(resolvePullRequestId(ctx, undefined, pat), {
-        message:
-          'No active pull request found for branch "feature/missing" in test-org/test-project/test-repository.',
-      });
+    await assert.rejects(service.resolveId(undefined), {
+      message:
+        'No active pull request found for branch "feature/missing" in test-org/test-project/test-repository.',
     });
 
     assert.equal(calls.length, 1);
   });
 
   test("reports every candidate when the current branch has multiple active pull requests", async (t) => {
-    isolateGitEnvironment(t);
-    const repo = createTempGitRepo(t, { branch: "feature/ambiguous" });
-    const calls = mockFetch(t, [
-      {
-        json: {
-          value: [
-            pullRequest({ pullRequestId: 10, title: "First candidate" }),
-            pullRequest({ pullRequestId: 20, title: "Second candidate" }),
-          ],
+    const { service, calls } = createService(
+      t,
+      [
+        {
+          json: {
+            value: [
+              pullRequest({ pullRequestId: 10, title: "First candidate" }),
+              pullRequest({ pullRequestId: 20, title: "Second candidate" }),
+            ],
+          },
         },
-      },
-    ]);
+      ],
+      async () => "feature/ambiguous",
+    );
 
-    await withWorkingDirectory(repo, async () => {
-      await assert.rejects(resolvePullRequestId(ctx, undefined, pat), {
-        message:
-          'Multiple active pull requests found for branch "feature/ambiguous"; pass --pr <id> to disambiguate:\n' +
-          "  #10: First candidate\n" +
-          "  #20: Second candidate",
-      });
+    await assert.rejects(service.resolveId(undefined), {
+      message:
+        'Multiple active pull requests found for branch "feature/ambiguous"; pass --pr <id> to disambiguate:\n' +
+        "  #10: First candidate\n" +
+        "  #20: Second candidate",
     });
 
     assert.equal(calls.length, 1);
@@ -142,10 +104,10 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
 
   test("creates from explicit source and target branches while normalizing only plain refs", async (t) => {
     const created = pullRequest({ pullRequestId: 88 });
-    const calls = mockFetch(t, [{ json: created }]);
+    const { service, calls } = createService(t, [{ json: created }]);
 
     assert.deepEqual(
-      await createPullRequest(ctx, pat, {
+      await service.create({
         title: "Release fix",
         description: "Ready to merge",
         sourceBranch: "feature/release-fix",
@@ -168,20 +130,20 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("resolves the current source and default target before posting the creation request", async (t) => {
-    isolateGitEnvironment(t);
-    const repo = createTempGitRepo(t, { branch: "feature/from-git" });
     const created = pullRequest({ pullRequestId: 91 });
-    const calls = mockFetch(t, [{ json: { defaultBranch: "refs/heads/main" } }, { json: created }]);
+    const { service, calls } = createService(
+      t,
+      [{ json: { defaultBranch: "refs/heads/main" } }, { json: created }],
+      async () => "feature/from-git",
+    );
 
-    await withWorkingDirectory(repo, async () => {
-      assert.deepEqual(
-        await createPullRequest(ctx, pat, {
-          title: "Detected branches",
-          draft: false,
-        }),
-        created,
-      );
-    });
+    assert.deepEqual(
+      await service.create({
+        title: "Detected branches",
+        draft: false,
+      }),
+      created,
+    );
 
     assert.equal(calls.length, 2);
     assert.deepEqual(
@@ -201,10 +163,10 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("does not post when the repository has no default branch", async (t) => {
-    const calls = mockFetch(t, [{ json: {} }]);
+    const { service, calls } = createService(t, [{ json: {} }]);
 
     await assert.rejects(
-      createPullRequest(ctx, pat, {
+      service.create({
         title: "Cannot target",
         sourceBranch: "feature/known-source",
         draft: false,
@@ -222,9 +184,9 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("sends an empty description and the requested draft state", async (t) => {
-    const calls = mockFetch(t, [{ json: pullRequest() }]);
+    const { service, calls } = createService(t, [{ json: pullRequest() }]);
 
-    await createPullRequest(ctx, pat, {
+    await service.create({
       title: "Draft without description",
       sourceBranch: "refs/heads/feature/draft",
       targetBranch: "main",

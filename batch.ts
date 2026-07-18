@@ -1,5 +1,3 @@
-import { createFileAnchorCache, type FileAnchorCache } from "./file-anchors.ts";
-import type { AzureDevOpsRepoContext } from "./lib.ts";
 import {
   actionRequiresComment,
   actionRequiresMessage,
@@ -7,14 +5,7 @@ import {
   isPositiveInteger,
   toCommentLocation,
 } from "./operation-types.ts";
-import {
-  deleteComment,
-  editComment,
-  postComment,
-  postReply,
-  resolveThread,
-  threadWebUrl,
-} from "./threads.ts";
+import type { ThreadService } from "./threads.ts";
 
 interface BatchOperation {
   action: "comment" | "reply" | "edit" | "delete" | "resolve";
@@ -122,67 +113,66 @@ async function readStdinJson(): Promise<unknown> {
 
 /** Executes a single batch operation and returns a short human-readable description of it. */
 async function executeBatchOperation(
-  ctx: AzureDevOpsRepoContext,
-  pat: string,
+  threads: ThreadService,
   defaultPrId: number,
   op: BatchOperation,
-  fileAnchorCache: FileAnchorCache,
 ): Promise<string> {
   const prId = op.pr ?? defaultPrId;
   switch (op.action) {
     case "comment": {
       const location = toCommentLocation(op);
-      const thread = await postComment(ctx, prId, op.message!, pat, location, fileAnchorCache);
-      const url = threadWebUrl(ctx, prId, thread.id);
+      const thread = await threads.comment(prId, op.message!, location);
+      const url = threads.webUrl(prId, thread.id);
       return `posted new comment thread ${thread.id} on PR #${prId} (${url})`;
     }
     case "reply": {
-      await postReply(ctx, prId, op.thread!, op.message!, pat);
+      await threads.reply(prId, op.thread!, op.message!);
       return `posted reply to thread ${op.thread} on PR #${prId}`;
     }
     case "edit": {
-      await editComment(ctx, prId, op.thread!, op.comment!, op.message!, pat);
+      await threads.edit(prId, op.thread!, op.comment!, op.message!);
       return `edited comment ${op.comment} in thread ${op.thread} on PR #${prId}`;
     }
     case "delete": {
-      await deleteComment(ctx, prId, op.thread!, op.comment!, pat);
+      await threads.delete(prId, op.thread!, op.comment!);
       return `deleted comment ${op.comment} from thread ${op.thread} on PR #${prId}`;
     }
     case "resolve": {
-      await resolveThread(ctx, prId, op.thread!, pat);
+      await threads.resolve(prId, op.thread!);
       return `marked thread ${op.thread} on PR #${prId} as resolved`;
     }
   }
 }
 
-export async function runBatch(
-  ctx: AzureDevOpsRepoContext,
-  pat: string,
-  defaultPrId: number,
-): Promise<void> {
-  const raw = await readStdinJson();
-  if (!Array.isArray(raw)) {
-    throw new Error("Batch operations must be a JSON array.");
-  }
-  const operations = raw.map((entry, index) => parseBatchOperation(entry, index));
-  if (operations.length === 0) {
-    console.log("No batch operations to run.");
-    return;
-  }
+export function createBatchRunner({ threads }: { threads: ThreadService }): {
+  run(defaultPrId: number): Promise<void>;
+} {
+  async function run(defaultPrId: number): Promise<void> {
+    const raw = await readStdinJson();
+    if (!Array.isArray(raw)) {
+      throw new Error("Batch operations must be a JSON array.");
+    }
+    const operations = raw.map((entry, index) => parseBatchOperation(entry, index));
+    if (operations.length === 0) {
+      console.log("No batch operations to run.");
+      return;
+    }
 
-  const fileAnchorCache = createFileAnchorCache();
-  let hadFailure = false;
-  for (const [index, op] of operations.entries()) {
-    const label = `[${index + 1}/${operations.length}] ${op.action}`;
-    try {
-      const result = await executeBatchOperation(ctx, pat, defaultPrId, op, fileAnchorCache);
-      console.log(`${label}: ${result}`);
-    } catch (error) {
-      hadFailure = true;
-      console.error(`${label}: FAILED - ${(error as Error).message}`);
+    let hadFailure = false;
+    for (const [index, op] of operations.entries()) {
+      const label = `[${index + 1}/${operations.length}] ${op.action}`;
+      try {
+        const result = await executeBatchOperation(threads, defaultPrId, op);
+        console.log(`${label}: ${result}`);
+      } catch (error) {
+        hadFailure = true;
+        console.error(`${label}: FAILED - ${(error as Error).message}`);
+      }
+    }
+    if (hadFailure) {
+      process.exitCode = 1;
     }
   }
-  if (hadFailure) {
-    process.exitCode = 1;
-  }
+
+  return { run };
 }

@@ -10,96 +10,85 @@
  * just-in-time, never written to disk); otherwise .env is loaded directly, which requires
  * AZURE_DEVOPS_PAT to be a literal secret.
  */
-import { pullRequestWebUrl } from "./azure.ts";
-import { runBatch } from "./batch.ts";
+import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
+import { createBatchRunner } from "./batch.ts";
 import { getPat, parseArgs } from "./cli.ts";
-import { createFileAnchorCache } from "./file-anchors.ts";
+import { createFileAnchorService } from "./file-anchors.ts";
 import { getRepoContext } from "./lib.ts";
 import { toCommentLocation } from "./operation-types.ts";
-import { createPullRequest, resolvePullRequestId } from "./pull-requests.ts";
-import {
-  deleteComment,
-  editComment,
-  formatSummaryTable,
-  formatThread,
-  getFilteredThreads,
-  postComment,
-  postReply,
-  resolveThread,
-  threadWebUrl,
-} from "./threads.ts";
+import { createPullRequestService } from "./pull-requests.ts";
+import { createThreadService } from "./threads.ts";
 
 async function main(): Promise<void> {
   const options = parseArgs();
   const pat = getPat();
   const ctx = await getRepoContext();
 
+  const azure = createAzureRequester({ pat });
+  const pullRequests = createPullRequestService({ azure, ctx });
+  const fileAnchors = createFileAnchorService({ azure, ctx });
+  const threads = createThreadService({ azure, ctx, fileAnchors });
+  const batch = createBatchRunner({ threads });
+
   // "create" makes a brand-new PR, so there's no existing PR ID to resolve yet.
   if (options.action === "create") {
-    const pr = await createPullRequest(ctx, pat, options);
+    const pr = await pullRequests.create(options);
     console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
     console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
     return;
   }
 
-  const prId = await resolvePullRequestId(ctx, options.pr, pat);
+  const prId = await pullRequests.resolveId(options.pr);
 
   switch (options.action) {
     case "list": {
-      const threads = await getFilteredThreads(ctx, prId, pat, options);
+      const commentThreads = await threads.list(prId, options);
 
       if (options.json) {
-        console.log(JSON.stringify(threads, null, 2));
+        console.log(JSON.stringify(commentThreads, null, 2));
         return;
       }
-      if (threads.length === 0) {
+      if (commentThreads.length === 0) {
         console.log(`No matching comment threads on PR #${prId}.`);
         return;
       }
       console.log(`Comment threads on PR #${prId}:\n`);
-      console.log(threads.map((thread) => formatThread(thread, ctx, prId)).join("\n\n"));
+      console.log(commentThreads.map((thread) => threads.format(thread, prId)).join("\n\n"));
       console.log("\n---\n\nSummary:\n");
-      console.log(formatSummaryTable(threads, ctx, prId));
+      console.log(threads.formatSummary(commentThreads, prId));
       return;
     }
     case "comment": {
       const location = toCommentLocation(options);
-      const thread = await postComment(
-        ctx,
-        prId,
-        options.message!,
-        pat,
-        location,
-        createFileAnchorCache(),
-      );
+      const thread = await threads.comment(prId, options.message!, location);
       console.log(`Posted new comment thread ${thread.id} on PR #${prId}.`);
-      console.log(threadWebUrl(ctx, prId, thread.id));
+      console.log(threads.webUrl(prId, thread.id));
       return;
     }
     case "reply": {
-      await postReply(ctx, prId, options.thread!, options.message!, pat);
+      await threads.reply(prId, options.thread!, options.message!);
       console.log(`Posted reply to thread ${options.thread} on PR #${prId}.`);
       return;
     }
     case "edit": {
-      await editComment(ctx, prId, options.thread!, options.comment!, options.message!, pat);
+      await threads.edit(prId, options.thread!, options.comment!, options.message!);
       console.log(`Edited comment ${options.comment} in thread ${options.thread} on PR #${prId}.`);
       return;
     }
     case "delete": {
-      await deleteComment(ctx, prId, options.thread!, options.comment!, pat);
+      await threads.delete(prId, options.thread!, options.comment!);
       console.log(
         `Deleted comment ${options.comment} from thread ${options.thread} on PR #${prId}.`,
       );
       return;
     }
     case "resolve": {
-      await resolveThread(ctx, prId, options.thread!, pat);
+      await threads.resolve(prId, options.thread!);
       console.log(`Marked thread ${options.thread} on PR #${prId} as resolved.`);
       return;
     }
     case "batch": {
-      await runBatch(ctx, pat, prId);
+      await batch.run(prId);
       return;
     }
   }

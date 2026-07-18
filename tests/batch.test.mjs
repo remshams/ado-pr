@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runBatch } from "../batch.ts";
-import { captureConsole, isolateExitCode, mockFetch, mockStdin } from "./test-helpers.mjs";
+import { createAzureRequester } from "../azure.ts";
+import { createBatchRunner } from "../batch.ts";
+import { createFileAnchorService } from "../file-anchors.ts";
+import { createThreadService } from "../threads.ts";
+import { captureConsole, createMockFetch, isolateExitCode, mockStdin } from "./test-helpers.mjs";
 
 const ctx = {
   organization: "test-org",
@@ -35,23 +38,27 @@ function prepareBatchTest(t, input, responses = []) {
   isolateExitCode(t);
   const stdin = mockStdin(t, Buffer.from(input));
   const consoleCalls = captureConsole(t);
-  const fetchCalls = mockFetch(t, responses);
-  return { stdin, consoleCalls, fetchCalls };
+  const { fetch, calls: fetchCalls } = createMockFetch(t, responses);
+  const azure = createAzureRequester({ pat, fetch });
+  const fileAnchors = createFileAnchorService({ azure, ctx });
+  const threads = createThreadService({ azure, ctx, fileAnchors });
+  const runner = createBatchRunner({ threads });
+  return { runner, stdin, consoleCalls, fetchCalls };
 }
 
 async function assertInputRejected(t, input, expected, { tty = false } = {}) {
-  const { stdin, consoleCalls, fetchCalls } = prepareBatchTest(t, input);
+  const { runner, stdin, consoleCalls, fetchCalls } = prepareBatchTest(t, input);
   if (tty) {
     Object.defineProperty(stdin, "isTTY", { configurable: true, value: true });
   }
 
-  await assert.rejects(runBatch(ctx, pat, defaultPrId), expected);
+  await assert.rejects(runner.run(defaultPrId), expected);
   assert.deepEqual(fetchCalls, [], "invalid input must not make an API request");
   assert.deepEqual(consoleCalls, [], "invalid input must not print progress");
   assert.equal(process.exitCode, undefined);
 }
 
-test.describe("runBatch", { concurrency: false }, () => {
+test.describe("createBatchRunner", { concurrency: false }, () => {
   test("rejects terminal stdin with actionable guidance", async (t) => {
     await assertInputRejected(
       t,
@@ -84,9 +91,9 @@ test.describe("runBatch", { concurrency: false }, () => {
   });
 
   test("accepts an empty operations array without making requests", async (t) => {
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, "[]");
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, "[]");
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(fetchCalls, []);
     assert.deepEqual(consoleCalls, [{ method: "log", args: ["No batch operations to run."] }]);
@@ -207,9 +214,9 @@ test.describe("runBatch", { concurrency: false }, () => {
       { action: "comment", message: "would otherwise be posted" },
       { action: "resolve" },
     ]);
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, input);
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input);
 
-    await assert.rejects(runBatch(ctx, pat, defaultPrId), {
+    await assert.rejects(runner.run(defaultPrId), {
       message: 'Batch operation 2 ("resolve") requires a "thread".',
     });
 
@@ -226,7 +233,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { action: "delete", thread: 21, comment: 6 },
       { action: "resolve", thread: 23 },
     ]);
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
       { json: { id: 101, comments: [] } },
       { json: {} },
       { json: {} },
@@ -234,7 +241,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { json: {} },
     ]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(semanticRequestShapes(fetchCalls), [
       {
@@ -286,9 +293,9 @@ test.describe("runBatch", { concurrency: false }, () => {
 
   test("uses an operation PR override instead of the default PR", async (t) => {
     const input = JSON.stringify([{ action: "reply", pr: 91, thread: 8, message: "Override" }]);
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, input, [{ json: {} }]);
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input, [{ json: {} }]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(requestShapes(fetchCalls), [
       {
@@ -308,12 +315,12 @@ test.describe("runBatch", { concurrency: false }, () => {
       { action: "reply", thread: 5, message: "This fails" },
       { action: "resolve", thread: 6 },
     ]);
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
       { status: 503, statusText: "Service Unavailable", body: "temporary outage" },
       { json: {} },
     ]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(requestShapes(fetchCalls), [
       {
@@ -341,9 +348,9 @@ test.describe("runBatch", { concurrency: false }, () => {
 
   test("leaves the exit code clear when every operation succeeds", async (t) => {
     const input = JSON.stringify([{ action: "resolve", thread: 12 }]);
-    prepareBatchTest(t, input, [{ json: {} }]);
+    const { runner } = prepareBatchTest(t, input, [{ json: {} }]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.equal(process.exitCode, undefined);
   });
@@ -353,7 +360,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { action: "comment", message: "First", file: "src/shared.ts", line: 4 },
       { action: "comment", message: "Second", file: "/src/shared.ts", line: 9, endLine: 11 },
     ]);
-    const { consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
+    const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
       { json: { value: [{ id: 2 }, { id: 7 }] } },
       {
         json: {
@@ -364,7 +371,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { json: { id: 202, comments: [] } },
     ]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(requestShapes(fetchCalls), [
       {
@@ -410,7 +417,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { action: "comment", pr: 42, message: "First PR", file: "src/shared.ts", line: 4 },
       { action: "comment", pr: 91, message: "Second PR", file: "src/shared.ts", line: 9 },
     ]);
-    const { fetchCalls } = prepareBatchTest(t, input, [
+    const { runner, fetchCalls } = prepareBatchTest(t, input, [
       { json: { value: [{ id: 4 }] } },
       {
         json: {
@@ -427,7 +434,7 @@ test.describe("runBatch", { concurrency: false }, () => {
       { json: { id: 302, comments: [] } },
     ]);
 
-    await runBatch(ctx, pat, defaultPrId);
+    await runner.run(defaultPrId);
 
     assert.deepEqual(requestShapes(fetchCalls), [
       {
