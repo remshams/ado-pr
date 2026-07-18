@@ -92,6 +92,55 @@ test("list uses an explicit PR and prints the filtered response as JSON", (t) =>
   assert.equal(result.stdout, `${JSON.stringify(threads, null, 2)}\n`);
 });
 
+test("list forwards exclude flags, fetches the profile after threads, and prints only threads surviving both filters", (t) => {
+  const cwd = createRepo(t);
+  const currentUser = { id: "me", displayName: "Current User" };
+  const reviewer = { id: "reviewer", displayName: "Reviewer" };
+  const survivor = {
+    id: 13,
+    status: "active",
+    comments: [{ id: 3, content: "Keep this", author: reviewer }],
+  };
+  const result = runPr(t, ["list", "--pr", "42", "--json", "--exclude-own", "--exclude-resolved"], {
+    cwd,
+    responses: [
+      {
+        json: {
+          value: [
+            {
+              id: 11,
+              status: "active",
+              comments: [{ id: 1, content: "My note", author: currentUser }],
+            },
+            {
+              id: 12,
+              status: "fixed",
+              comments: [{ id: 2, content: "Already resolved", author: reviewer }],
+            },
+            survivor,
+          ],
+        },
+      },
+      { json: { id: currentUser.id } },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(request), [
+    {
+      url: `${apiBase}/pullRequests/42/threads?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+    {
+      url: "https://vssps.dev.azure.com/acme/_apis/profile/profiles/me?api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+  ]);
+  assert.equal(result.stdout, `${JSON.stringify([survivor], null, 2)}\n`);
+});
+
 test("list auto-resolves the branch PR before fetching threads and handles an empty text result", (t) => {
   const cwd = createRepo(t, "feature/dispatch-order");
   const result = runPr(t, ["list"], {
