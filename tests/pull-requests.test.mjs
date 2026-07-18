@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { createPullRequest, resolvePullRequestId } from "../pull-requests.ts";
-import { createTempGitRepo, mockFetch } from "./test-helpers.mjs";
+import { createTempGitRepo, isolateGitEnvironment, mockFetch } from "./test-helpers.mjs";
 
 const ctx = {
   organization: "test-org",
@@ -42,6 +42,7 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("auto-detects the current branch and URL-encodes its full source ref", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, { branch: "feature/a+b" });
     const calls = mockFetch(t, [{ json: { value: [pullRequest({ pullRequestId: 73 })] } }]);
 
@@ -58,7 +59,48 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
     assert.equal(calls[0].body, null);
   });
 
+  test("ignores hostile ambient Git redirection when auto-detecting the branch", async (t) => {
+    const hostileEnvironment = {
+      GIT_DIR: "/hostile/not-a-repository",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "url.https://attacker.invalid/.insteadOf",
+      GIT_CONFIG_VALUE_0: "https://dev.azure.com/",
+    };
+    const previousEnvironment = new Map(
+      Object.keys(hostileEnvironment).map((name) => [name, process.env[name]]),
+    );
+
+    try {
+      Object.assign(process.env, hostileEnvironment);
+      await t.test(
+        "with isolated production Git environment",
+        { concurrency: false },
+        async (t) => {
+          isolateGitEnvironment(t);
+          const repo = createTempGitRepo(t, { branch: "feature/isolated" });
+          const calls = mockFetch(t, [{ json: { value: [pullRequest({ pullRequestId: 74 })] } }]);
+
+          await withWorkingDirectory(repo, async () => {
+            assert.equal(await resolvePullRequestId(ctx, undefined, pat), 74);
+          });
+
+          assert.equal(calls.length, 1);
+          assert.match(
+            calls[0].url,
+            /searchCriteria\.sourceRefName=refs%2Fheads%2Ffeature%2Fisolated/,
+          );
+        },
+      );
+    } finally {
+      for (const [name, value] of previousEnvironment) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("reports when the current branch has no active pull request", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, { branch: "feature/missing" });
     const calls = mockFetch(t, [{ json: { value: [] } }]);
 
@@ -73,6 +115,7 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("reports every candidate when the current branch has multiple active pull requests", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, { branch: "feature/ambiguous" });
     const calls = mockFetch(t, [
       {
@@ -125,6 +168,7 @@ describe("pull request resolution and creation", { concurrency: false }, () => {
   });
 
   test("resolves the current source and default target before posting the creation request", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, { branch: "feature/from-git" });
     const created = pullRequest({ pullRequestId: 91 });
     const calls = mockFetch(t, [{ json: { defaultBranch: "refs/heads/main" } }, { json: created }]);
