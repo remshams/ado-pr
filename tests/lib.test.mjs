@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, test } from "node:test";
 
 import { getCurrentBranch, getRepoContext, parseAzureDevOpsRemote, runCommand } from "../lib.ts";
-import { createTempGitRepo, TEST_SUBPROCESS_TIMEOUT_MS } from "./test-helpers.mjs";
+import {
+  createTempGitRepo,
+  gitTestEnvironment,
+  isolateGitEnvironment,
+  spawnTestProcess,
+} from "./test-helpers.mjs";
 
 const supportedRemotes = [
   {
@@ -97,26 +103,32 @@ async function withWorkingDirectory(path, callback) {
 }
 
 function git(cwd, ...args) {
-  const command = `git ${args.join(" ")}`;
-  const result = spawnSync("git", args, {
+  const commandArgs = ["-c", `core.hooksPath=${join(cwd, "disabled-hooks")}`, ...args];
+  const result = spawnTestProcess("git", commandArgs, {
     cwd,
+    env: gitTestEnvironment(),
     encoding: "utf8",
-    timeout: TEST_SUBPROCESS_TIMEOUT_MS,
+    description: `git ${args.join(" ")} in ${cwd}`,
   });
-  if (result.error?.code === "ETIMEDOUT") {
-    assert.fail(
-      `${command} timed out after ${TEST_SUBPROCESS_TIMEOUT_MS}ms in ${cwd}` +
-        `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
-        `${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`,
-    );
-  }
-  assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, `${command} failed:\n${result.stderr}`);
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed:\n${result.stderr}`);
   return result.stdout.trim();
+}
+
+function setGitEnvironment(values) {
+  const previousValues = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
+  for (const [name, value] of Object.entries(values)) process.env[name] = value;
+
+  return () => {
+    for (const [name, value] of previousValues) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
 }
 
 describe("Git repository integration", { concurrency: false }, () => {
   test("getRepoContext reads origin and getCurrentBranch reads the checked-out branch", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, {
       origin: "https://dev.azure.com/acme/Test%20Project/_git/widgets.git",
       branch: "feature/lib-tests",
@@ -133,6 +145,7 @@ describe("Git repository integration", { concurrency: false }, () => {
   });
 
   test("getRepoContext reports the current parser error when origin is missing", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t);
 
     await withWorkingDirectory(repo, async () => {
@@ -144,6 +157,7 @@ describe("Git repository integration", { concurrency: false }, () => {
   });
 
   test('getCurrentBranch reports "HEAD" for a detached checkout', async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t, { branch: "main" });
     git(repo, "checkout", "--detach");
 
@@ -153,6 +167,7 @@ describe("Git repository integration", { concurrency: false }, () => {
   });
 
   test("runCommand resolves the current non-zero Git result instead of rejecting", async (t) => {
+    isolateGitEnvironment(t);
     const repo = createTempGitRepo(t);
 
     await withWorkingDirectory(repo, async () => {
@@ -161,5 +176,50 @@ describe("Git repository integration", { concurrency: false }, () => {
         stdout: "",
       });
     });
+  });
+
+  test("getRepoContext ignores a hostile ambient insteadOf URL rewrite", async (t) => {
+    const origin = "https://dev.azure.com/acme/Project/_git/widgets";
+    const repo = createTempGitRepo(t, { origin });
+    const restoreEnvironment = setGitEnvironment({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "url.https://attacker.invalid/.insteadOf",
+      GIT_CONFIG_VALUE_0: "https://dev.azure.com/",
+    });
+
+    try {
+      await t.test(
+        "with isolated production Git environment",
+        { concurrency: false },
+        async (t) => {
+          isolateGitEnvironment(t);
+          await withWorkingDirectory(repo, async () => {
+            assert.deepEqual(await getRepoContext(), {
+              organization: "acme",
+              project: "Project",
+              repository: "widgets",
+            });
+          });
+        },
+      );
+    } finally {
+      restoreEnvironment();
+    }
+  });
+
+  test("detached checkout does not execute a hostile post-checkout hook", async (t) => {
+    isolateGitEnvironment(t);
+    const repo = createTempGitRepo(t, { branch: "main" });
+    const markerPath = join(repo, "post-checkout-hook-ran");
+    const hookPath = join(repo, ".git", "hooks", "post-checkout");
+    writeFileSync(hookPath, `#!/bin/sh\nprintf hook-ran > ${JSON.stringify(markerPath)}\n`);
+    chmodSync(hookPath, 0o755);
+
+    git(repo, "checkout", "--detach");
+
+    await withWorkingDirectory(repo, async () => {
+      assert.equal(await getCurrentBranch(), "HEAD");
+    });
+    assert.equal(existsSync(markerPath), false, "hostile post-checkout hook created its marker");
   });
 });
