@@ -13,74 +13,86 @@ import { mockFetch } from "./test-helpers.mjs";
 const fakePat = "test-only-fake-pat";
 const expectedAuthorization = "Basic OnRlc3Qtb25seS1mYWtlLXBhdA==";
 
-test("azureRequest defaults to an authenticated GET without a body", async (t) => {
-  const calls = mockFetch(t, [{ json: { value: ["fake-result"] } }]);
+test(
+  "azureRequest defaults to an authenticated GET without a body",
+  { concurrency: false },
+  async (t) => {
+    const calls = mockFetch(t, [{ json: { value: ["fake-result"] } }]);
 
-  const result = await azureRequest("https://example.invalid/default", fakePat);
+    const result = await azureRequest("https://example.invalid/default", fakePat);
 
-  assert.deepEqual(result, { value: ["fake-result"] });
-  assert.deepEqual(calls, [
-    {
-      url: "https://example.invalid/default",
-      method: "GET",
-      headers: { authorization: expectedAuthorization },
-      body: null,
-    },
-  ]);
-});
-
-test("azureRequest sends mutations with a JSON body and Content-Type", async (t) => {
-  const calls = mockFetch(t, [{ json: { id: 17, status: "fake-created" } }]);
-  const body = {
-    title: "Fake pull request",
-    reviewers: [{ id: "fake-reviewer" }],
-    draft: false,
-  };
-
-  const result = await azureRequest("https://example.invalid/mutation", fakePat, {
-    method: "PATCH",
-    body,
-  });
-
-  assert.deepEqual(result, { id: 17, status: "fake-created" });
-  assert.deepEqual(calls, [
-    {
-      url: "https://example.invalid/mutation",
-      method: "PATCH",
-      headers: {
-        authorization: expectedAuthorization,
-        "content-type": "application/json",
+    assert.deepEqual(result, { value: ["fake-result"] });
+    assert.deepEqual(calls, [
+      {
+        url: "https://example.invalid/default",
+        method: "GET",
+        headers: { authorization: expectedAuthorization },
+        body: null,
       },
-      body: JSON.stringify(body),
-    },
-  ]);
-});
+    ]);
+  },
+);
 
-test("azureRequest reports the method, URL, status, status text, and response body on failure", async (t) => {
-  const url = "https://example.invalid/failure?continuation=fake-token";
-  mockFetch(t, [
-    {
-      status: 429,
-      statusText: "Too Many Requests",
-      body: '{"message":"fake rate limit detail"}',
-    },
-  ]);
+test(
+  "azureRequest sends mutations with a JSON body and Content-Type",
+  { concurrency: false },
+  async (t) => {
+    const calls = mockFetch(t, [{ json: { id: 17, status: "fake-created" } }]);
+    const body = {
+      title: "Fake pull request",
+      reviewers: [{ id: "fake-reviewer" }],
+      draft: false,
+    };
 
-  await assert.rejects(
-    azureRequest(url, fakePat, {
-      method: "POST",
-      body: { comment: "fake comment" },
-    }),
-    (error) => {
-      assert.equal(error?.name, "Error");
-      assert.equal(
-        error?.message,
-        `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
-      );
-      return true;
-    },
-  );
-});
+    const result = await azureRequest("https://example.invalid/mutation", fakePat, {
+      method: "PATCH",
+      body,
+    });
+
+    assert.deepEqual(result, { id: 17, status: "fake-created" });
+    assert.deepEqual(calls, [
+      {
+        url: "https://example.invalid/mutation",
+        method: "PATCH",
+        headers: {
+          authorization: expectedAuthorization,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    ]);
+  },
+);
+
+test(
+  "azureRequest reports the method, URL, status, status text, and response body on failure",
+  { concurrency: false },
+  async (t) => {
+    const url = "https://example.invalid/failure?continuation=fake-token";
+    mockFetch(t, [
+      {
+        status: 429,
+        statusText: "Too Many Requests",
+        body: '{"message":"fake rate limit detail"}',
+      },
+    ]);
+
+    await assert.rejects(
+      azureRequest(url, fakePat, {
+        method: "POST",
+        body: { comment: "fake comment" },
+      }),
+      (error) => {
+        assert.equal(error?.name, "Error");
+        assert.equal(
+          error?.message,
+          `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
+        );
+        return true;
+      },
+    );
+  },
+);
 
 test("URL builders encode each context component and preserve API path syntax exactly", () => {
   const context = {
