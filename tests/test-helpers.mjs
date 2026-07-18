@@ -52,6 +52,65 @@ function inheritedTestEnvironment() {
   );
 }
 
+const NON_GIT_CREDENTIAL_ENV_NAMES = new Set(["SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"]);
+
+function isGitEnvironmentName(name) {
+  const normalized = name.toUpperCase();
+  return (
+    normalized.startsWith("GIT_") ||
+    normalized.startsWith("GCM_") ||
+    NON_GIT_CREDENTIAL_ENV_NAMES.has(normalized)
+  );
+}
+
+/**
+ * Builds a minimal child environment for deterministic Git commands. Ambient
+ * Git configuration, URL rewrites, repository redirection, signing, hooks,
+ * askpass, SSH, and credential-manager injection are omitted by construction.
+ */
+export function gitTestEnvironment() {
+  return {
+    ...inheritedTestEnvironment(),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: devNull,
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_COUNT: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+  };
+}
+
+/**
+ * Applies the same clean Git policy to serial in-process tests whose production
+ * code spawns Git with the ambient `process.env`. All existing Git, GCM, and
+ * askpass variables are restored after the test, including variables absent
+ * when isolation began.
+ */
+export function isolateGitEnvironment(t) {
+  const cleanEnvironment = gitTestEnvironment();
+  const affectedNames = new Set([
+    ...Object.keys(process.env).filter(isGitEnvironmentName),
+    ...Object.keys(cleanEnvironment).filter(isGitEnvironmentName),
+  ]);
+  const previousValues = new Map([...affectedNames].map((name) => [name, process.env[name]]));
+
+  for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
+    delete process.env[name];
+  }
+  for (const [name, value] of Object.entries(cleanEnvironment)) {
+    if (isGitEnvironmentName(name)) process.env[name] = value;
+  }
+
+  t.after(() => {
+    for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
+      delete process.env[name];
+    }
+    for (const [name, value] of previousValues) {
+      if (value !== undefined) process.env[name] = value;
+    }
+  });
+}
+
 function capturedOutput(result) {
   return (
     `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
@@ -60,20 +119,26 @@ function capturedOutput(result) {
 }
 
 /**
- * Runs a bounded synchronous test subprocess. A nonzero exit status is returned
- * to the caller, while spawn failures, signals, and timeouts fail immediately
- * with the command description and any captured output.
+ * Runs a bounded synchronous test subprocess. Timeouts use `SIGKILL` by default
+ * so a child cannot extend the bound by handling `SIGTERM`. A nonzero exit status
+ * is returned to the caller, while spawn failures, signals, and timeouts fail
+ * immediately with the command description and any captured output.
  */
 export function spawnTestProcess(
   command,
   args,
-  { description = `${command} subprocess`, timeout = TEST_SUBPROCESS_TIMEOUT_MS, ...options } = {},
+  {
+    description = `${command} subprocess`,
+    timeout = TEST_SUBPROCESS_TIMEOUT_MS,
+    killSignal = "SIGKILL",
+    ...options
+  } = {},
 ) {
   assert.ok(
     Number.isFinite(timeout) && timeout > 0,
     "test subprocess timeout must be a positive number",
   );
-  const result = spawnSync(command, args, { ...options, timeout });
+  const result = spawnSync(command, args, { ...options, timeout, killSignal });
 
   if (result.error?.code === "ETIMEDOUT") {
     assert.fail(`${description} timed out after ${timeout}ms${capturedOutput(result)}`);
@@ -165,18 +230,9 @@ export function createTempGitRepo(t, { origin, branch = "main" } = {}) {
   mkdirSync(hooksPath);
   t.after(() => rmSync(path, { recursive: true, force: true }));
 
-  // Starting from the platform allowlist strips GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and all
-  // GIT_CONFIG_KEY_*/VALUE_* entries, repository redirection, template injection, and signing or
-  // askpass settings. The explicit values below then disable every external config source.
-  const gitEnv = {
-    ...inheritedTestEnvironment(),
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_SYSTEM: devNull,
-    GIT_CONFIG_GLOBAL: devNull,
-    GIT_CONFIG_COUNT: "0",
-    GIT_TERMINAL_PROMPT: "0",
-    GCM_INTERACTIVE: "Never",
-  };
+  // The shared policy strips GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_*/VALUE_* entries,
+  // repository redirection, template injection, signing, askpass, and credential settings.
+  const gitEnv = gitTestEnvironment();
 
   const git = (...args) => {
     const commandArgs = [

@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
   createTempGitRepo,
+  gitTestEnvironment,
+  isolateGitEnvironment,
   mockFetch,
   runPr,
   spawnTestProcess,
@@ -99,20 +101,103 @@ test("createTempGitRepo ignores hostile ambient Git configuration", (t) => {
   assert.equal(existsSync(markerPath), false);
 });
 
-test("spawnTestProcess applies a shared timeout with captured diagnostics", () => {
+test("Git environment helpers remove injection and restore serial in-process state", async (t) => {
+  const ambientEnvironment = {
+    GIT_CONFIG_GLOBAL: "/hostile/global-config",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "url.https://attacker.invalid/.insteadOf",
+    GIT_CONFIG_VALUE_0: "https://dev.azure.com/",
+    GIT_CONFIG_PARAMETERS: "'commit.gpgSign=true'",
+    GIT_ASKPASS: "/hostile/askpass",
+    GIT_SSH_COMMAND: "hostile-ssh-command",
+    GCM_INTERACTIVE: "Always",
+    GCM_CREDENTIAL_STORE: "hostile-store",
+    SSH_ASKPASS: "/hostile/ssh-askpass",
+  };
+  for (const [name, value] of Object.entries(ambientEnvironment)) {
+    restoreEnv(t, name, process.env[name]);
+    process.env[name] = value;
+  }
+
+  const childEnvironment = gitTestEnvironment();
+  assert.equal(childEnvironment.PATH, process.env.PATH);
+  assert.equal(childEnvironment.HOME, process.env.HOME);
+  assert.equal(childEnvironment.GIT_CONFIG_GLOBAL, devNull);
+  assert.equal(childEnvironment.GIT_CONFIG_COUNT, "0");
+  assert.equal(childEnvironment.GCM_INTERACTIVE, "Never");
+  assert.equal(childEnvironment.GIT_CONFIG_PARAMETERS, undefined);
+  assert.equal(childEnvironment.GIT_ASKPASS, undefined);
+  assert.equal(childEnvironment.GCM_CREDENTIAL_STORE, undefined);
+  assert.equal(childEnvironment.SSH_ASKPASS, undefined);
+
+  await t.test("isolates production-style ambient Git calls", { concurrency: false }, (t) => {
+    isolateGitEnvironment(t);
+
+    assert.equal(process.env.GIT_CONFIG_GLOBAL, devNull);
+    assert.equal(process.env.GIT_CONFIG_COUNT, "0");
+    assert.equal(process.env.GIT_CONFIG_PARAMETERS, undefined);
+    assert.equal(process.env.GIT_CONFIG_KEY_0, undefined);
+    assert.equal(process.env.GIT_ASKPASS, undefined);
+    assert.equal(process.env.GIT_SSH_COMMAND, undefined);
+    assert.equal(process.env.GCM_INTERACTIVE, "Never");
+    assert.equal(process.env.GCM_CREDENTIAL_STORE, undefined);
+    assert.equal(process.env.SSH_ASKPASS, undefined);
+
+    const result = spawnTestProcess("git", ["config", "--global", "--get", "commit.gpgSign"], {
+      encoding: "utf8",
+      description: "isolated ambient git config lookup",
+    });
+    assert.equal(result.status, 1);
+  });
+
+  for (const [name, value] of Object.entries(ambientEnvironment)) {
+    assert.equal(process.env[name], value);
+  }
+});
+
+test("spawnTestProcess hard-kills a child that handles SIGTERM", () => {
   assert.equal(TEST_SUBPROCESS_TIMEOUT_MS, 15_000);
+  const timeout = 250;
+  const startedAt = Date.now();
   assert.throws(
     () =>
       spawnTestProcess(
         process.execPath,
-        ["--eval", "process.stderr.write('waiting'); setTimeout(() => {}, 10_000)"],
+        [
+          "--eval",
+          "process.on('SIGTERM', () => {}); " +
+            "process.stderr.write('ready'); setInterval(() => {}, 10_000)",
+        ],
+        {
+          encoding: "utf8",
+          timeout,
+          description: "SIGTERM-resistant helper subprocess",
+        },
+      ),
+    /SIGTERM-resistant helper subprocess timed out after 250ms/,
+  );
+  const elapsed = Date.now() - startedAt;
+  assert.ok(
+    elapsed >= timeout - 50,
+    `child returned before the ${timeout}ms timeout: ${elapsed}ms`,
+  );
+  assert.ok(elapsed < 2_000, `SIGTERM-resistant child returned too late: ${elapsed}ms`);
+});
+
+test("spawnTestProcess preserves diagnostics from a cooperative timeout", () => {
+  assert.throws(
+    () =>
+      spawnTestProcess(
+        process.execPath,
+        ["--eval", "process.stderr.write('waiting'); setInterval(() => {}, 10_000)"],
         {
           encoding: "utf8",
           timeout: 250,
-          description: "hanging helper subprocess",
+          killSignal: "SIGTERM",
+          description: "cooperative helper subprocess",
         },
       ),
-    /hanging helper subprocess timed out after 250ms\nstderr:\nwaiting/,
+    /cooperative helper subprocess timed out after 250ms\nstderr:\nwaiting/,
   );
 });
 
