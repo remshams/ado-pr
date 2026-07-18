@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { spawnTestProcess } from "./test-helpers.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
 const usageFirstLine =
   "Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]";
-const cliTimeoutMs = 10_000;
 const childEnvAllowlist = new Set([
   "HOME",
   "PATH",
@@ -33,24 +33,17 @@ function runCli(...args) {
   assert.equal(env.NODE_OPTIONS, undefined);
   assert.equal(env.AZURE_DEVOPS_PAT, undefined);
 
-  const result = spawnSync(
+  const result = spawnTestProcess(
     process.execPath,
     ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", cliPath, ...args],
     {
       cwd: projectRoot,
+      description: `pr.ts ${JSON.stringify(args)}`,
       encoding: "utf8",
       env,
-      timeout: cliTimeoutMs,
     },
   );
 
-  assert.notEqual(
-    result.error?.code,
-    "ETIMEDOUT",
-    `pr.ts timed out after ${cliTimeoutMs}ms for arguments ${JSON.stringify(args)}`,
-  );
-  assert.equal(result.error, undefined);
-  assert.equal(result.signal, null);
   return result;
 }
 
