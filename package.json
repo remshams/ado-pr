@@ -3,6 +3,10 @@
   "private": true,
   "description": "A CLI for managing Azure DevOps pull requests (create/edit, comment threads, replies, resolving, batch operations) from within any git checkout whose origin remote points at Azure Repos.",
   "type": "module",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "minimist": "1.2.8"
   },
@@ -10,5 +14,8 @@
     "@types/minimist": "^1.2.5",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.6.0"
   }
 }
