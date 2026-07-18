@@ -9,11 +9,15 @@ export function isPositiveInteger(value: unknown): value is number {
 }
 
 export function actionRequiresThread(action: string): boolean {
-  return action === "reply" || action === "resolve";
+  return action === "reply" || action === "resolve" || action === "edit" || action === "delete";
+}
+
+export function actionRequiresComment(action: string): boolean {
+  return action === "edit" || action === "delete";
 }
 
 export function actionRequiresMessage(action: string): boolean {
-  return action === "reply" || action === "comment";
+  return action === "reply" || action === "comment" || action === "edit";
 }
 
 /** Builds an optional file-anchor location from CLI options or a batch operation. */

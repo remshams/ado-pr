@@ -64,10 +64,20 @@ test("--help prints the documented actions and options", () => {
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "");
   assert.equal(firstLine(result.stderr), usageFirstLine);
+  assert.ok(
+    result.stderr.includes(
+      '       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]',
+    ),
+  );
+  assert.ok(result.stderr.includes("       pr.sh delete --thread <id> --comment <id> [--pr <id>]"));
   assert.match(result.stderr, /\nActions:\n/);
   assert.match(result.stderr, /  reply\s+Posts a reply comment to an existing thread\./);
+  assert.match(result.stderr, /  edit\s+Edits an existing comment in a thread\./);
+  assert.match(result.stderr, /  delete\s+Deletes an existing comment from a thread\./);
   assert.match(result.stderr, /\nOptions:\n/);
-  assert.match(result.stderr, /  --thread <id>\s+Required for reply\/resolve\./);
+  assert.match(result.stderr, /  --thread <id>\s+Required for reply\/edit\/delete\/resolve\./);
+  assert.match(result.stderr, /  --comment <id>\s+Required for edit\/delete\./);
+  assert.match(result.stderr, /  --message <text>\s+Required for comment\/reply\/edit\./);
   assert.match(result.stderr, /  -h, --help\s+Show this help\./);
   assert.match(result.stderr, /\nRequires:\n/);
 });
@@ -85,6 +95,42 @@ test("reply validates a missing thread before a missing message", () => {
 
   const missingMessage = runCli("reply", "--thread", "7");
   assertUsageError(missingMessage, 'Error: --message is required for "reply"');
+});
+
+test("edit requires a thread, comment, and message in order", () => {
+  const missingAll = runCli("edit");
+  assertUsageError(missingAll, 'Error: --thread is required for "edit"');
+
+  const missingComment = runCli("edit", "--thread", "7");
+  assertUsageError(missingComment, 'Error: --comment is required for "edit"');
+
+  const missingMessage = runCli("edit", "--thread", "7", "--comment", "8");
+  assertUsageError(missingMessage, 'Error: --message is required for "edit"');
+});
+
+test("delete requires a thread and comment, but not a message", () => {
+  const missingBoth = runCli("delete");
+  assertUsageError(missingBoth, 'Error: --thread is required for "delete"');
+
+  const missingComment = runCli("delete", "--thread", "7");
+  assertUsageError(missingComment, 'Error: --comment is required for "delete"');
+
+  const valid = runCli("delete", "--thread", "7", "--comment", "8");
+  assert.equal(valid.status, 1);
+  assert.equal(valid.stdout, "");
+  assert.equal(
+    valid.stderr,
+    "Error: AZURE_DEVOPS_PAT is not set. Run this via pr.sh, which injects it from 1Password.\n",
+  );
+});
+
+test("comment IDs must be positive integers", () => {
+  const result = runCli("delete", "--thread", "7", "--comment", "0");
+
+  assertUsageError(
+    result,
+    'Error: invalid --comment "0" (pass it once, as a single positive integer)',
+  );
 });
 
 test("a repeated string flag is rejected", () => {

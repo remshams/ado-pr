@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { createFileAnchorCache } from "../file-anchors.ts";
 import {
+  deleteComment,
+  editComment,
   formatSummaryTable,
   formatThread,
   getFilteredThreads,
@@ -42,7 +44,7 @@ function requestShapes(calls) {
 }
 
 test.describe("threads", { concurrency: false }, () => {
-  test("getFilteredThreads always removes deleted threads and threads without real comments", async (t) => {
+  test("getFilteredThreads removes deleted threads/comments and threads without real comments", async (t) => {
     const relevant = thread(5, {
       comments: [
         { id: 50, content: "build event", commentType: "system" },
@@ -57,6 +59,7 @@ test.describe("threads", { concurrency: false }, () => {
             thread(2, { comments: [] }),
             thread(3, { comments: [{ id: 30, content: "system", commentType: "system" }] }),
             thread(4, { comments: [textComment(40, "   ")] }),
+            thread(6, { comments: [{ ...textComment(60, "deleted"), isDeleted: true }] }),
             relevant,
           ],
         },
@@ -213,7 +216,7 @@ test.describe("threads", { concurrency: false }, () => {
 
     assert.equal(
       formatThread(value, ctx, prId),
-      `### Thread 7 — General (not tied to a file/line) [active]\n${webBase}?discussionId=7\n- **unknown**: Please explain this.`,
+      `### Thread 7 — General (not tied to a file/line) [active]\n${webBase}?discussionId=7\n- **unknown** (comment 70): Please explain this.`,
     );
   });
 
@@ -239,11 +242,11 @@ test.describe("threads", { concurrency: false }, () => {
 
     assert.equal(
       formatThread(single, ctx, prId),
-      `### Thread 8 — /src/single.ts:5 [pending]\n${webBase}?discussionId=8\n- **User 8**: comment 8`,
+      `### Thread 8 — /src/single.ts:5 [pending]\n${webBase}?discussionId=8\n- **User 8** (comment 8): comment 8`,
     );
     assert.equal(
       formatThread(range, ctx, prId),
-      `### Thread 9 — /src/range.ts:20-24 [fixed]\n${webBase}?discussionId=9\n- **User 9**: comment 9`,
+      `### Thread 9 — /src/range.ts:20-24 [fixed]\n${webBase}?discussionId=9\n- **User 9** (comment 9): comment 9`,
     );
   });
 
@@ -296,6 +299,32 @@ test.describe("threads", { concurrency: false }, () => {
         url: `${apiBase}/threads/17/comments?api-version=7.1`,
         method: "POST",
         body: '{"content":"Reply text"}',
+      },
+    ]);
+  });
+
+  test("editComment PATCHes the comment content", async (t) => {
+    const calls = mockFetch(t, [{ json: {} }]);
+
+    await editComment(ctx, prId, 17, 23, "Edited text", pat);
+
+    assert.equal(calls.length, 1);
+    const [call] = requestShapes(calls);
+    assert.equal(call.url, `${apiBase}/threads/17/comments/23?api-version=7.1`);
+    assert.equal(call.method, "PATCH");
+    assert.deepEqual(JSON.parse(call.body), { content: "Edited text" });
+  });
+
+  test("deleteComment DELETEs the comment and accepts an empty success response", async (t) => {
+    const calls = mockFetch(t, [{ body: "" }]);
+
+    await deleteComment(ctx, prId, 17, 23, pat);
+
+    assert.deepEqual(requestShapes(calls), [
+      {
+        url: `${apiBase}/threads/17/comments/23?api-version=7.1`,
+        method: "DELETE",
+        body: null,
       },
     ]);
   });

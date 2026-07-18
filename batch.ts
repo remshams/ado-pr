@@ -1,24 +1,33 @@
 import { createFileAnchorCache, type FileAnchorCache } from "./file-anchors.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
 import {
+  actionRequiresComment,
   actionRequiresMessage,
   actionRequiresThread,
   isPositiveInteger,
   toCommentLocation,
 } from "./operation-types.ts";
-import { postComment, postReply, resolveThread, threadWebUrl } from "./threads.ts";
+import {
+  deleteComment,
+  editComment,
+  postComment,
+  postReply,
+  resolveThread,
+  threadWebUrl,
+} from "./threads.ts";
 
 interface BatchOperation {
-  action: "comment" | "reply" | "resolve";
+  action: "comment" | "reply" | "edit" | "delete" | "resolve";
   pr?: number;
   thread?: number;
+  comment?: number;
   message?: string;
   file?: string;
   line?: number;
   endLine?: number;
 }
 
-const BATCH_ACTIONS: BatchOperation["action"][] = ["comment", "reply", "resolve"];
+const BATCH_ACTIONS: BatchOperation["action"][] = ["comment", "reply", "edit", "delete", "resolve"];
 
 /** Validates and normalizes a single element of a `batch` action's JSON operations array. */
 function parseBatchOperation(raw: unknown, index: number): BatchOperation {
@@ -48,6 +57,7 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
 
   const pr = positiveIntField("pr");
   const thread = positiveIntField("thread");
+  const comment = positiveIntField("comment");
   const line = positiveIntField("line");
   const endLine = positiveIntField("endLine");
   const message = typeof op.message === "string" ? op.message : undefined;
@@ -55,6 +65,9 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
 
   if (actionRequiresThread(action) && !thread) {
     throw new Error(`${label} ("${action}") requires a "thread".`);
+  }
+  if (actionRequiresComment(action) && !comment) {
+    throw new Error(`${label} ("${action}") requires a "comment".`);
   }
   if (actionRequiresMessage(action) && !message) {
     throw new Error(`${label} ("${action}") requires a "message".`);
@@ -73,6 +86,7 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
     action: action as BatchOperation["action"],
     pr,
     thread,
+    comment,
     message,
     file,
     line,
@@ -125,6 +139,14 @@ async function executeBatchOperation(
     case "reply": {
       await postReply(ctx, prId, op.thread!, op.message!, pat);
       return `posted reply to thread ${op.thread} on PR #${prId}`;
+    }
+    case "edit": {
+      await editComment(ctx, prId, op.thread!, op.comment!, op.message!, pat);
+      return `edited comment ${op.comment} in thread ${op.thread} on PR #${prId}`;
+    }
+    case "delete": {
+      await deleteComment(ctx, prId, op.thread!, op.comment!, pat);
+      return `deleted comment ${op.comment} from thread ${op.thread} on PR #${prId}`;
     }
     case "resolve": {
       await resolveThread(ctx, prId, op.thread!, pat);

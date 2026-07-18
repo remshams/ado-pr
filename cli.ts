@@ -1,17 +1,27 @@
 import minimist from "minimist";
 
 import {
+  actionRequiresComment,
   actionRequiresMessage,
   actionRequiresThread,
   isPositiveInteger,
 } from "./operation-types.ts";
 
-export type Action = "list" | "reply" | "resolve" | "create" | "comment" | "batch";
+export type Action =
+  | "list"
+  | "reply"
+  | "resolve"
+  | "create"
+  | "comment"
+  | "edit"
+  | "delete"
+  | "batch";
 
 export interface Options {
   action: Action;
   pr?: number;
   thread?: number;
+  comment?: number;
   message?: string;
   json: boolean;
   excludeOwn: boolean;
@@ -34,6 +44,8 @@ function printUsageAndExit(message?: string): never {
        pr.sh create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
        pr.sh comment --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
        pr.sh reply --thread <id> --message "..." [--pr <id>]
+       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]
+       pr.sh delete --thread <id> --comment <id> [--pr <id>]
        pr.sh resolve --thread <id> [--pr <id>]
        pr.sh batch [--pr <id>] < operations.json
 
@@ -47,18 +59,22 @@ Actions:
                            general, or anchored to a file (optionally a specific line/range).
                            Use \`reply\` instead to respond within an existing thread.
   reply                    Posts a reply comment to an existing thread.
+  edit                     Edits an existing comment in a thread.
+  delete                   Deletes an existing comment from a thread.
   resolve                  Marks an existing thread as resolved. This always sets the thread's
                            status to Azure DevOps' "fixed" state (not "closed"/"won't fix" -
                            there's currently no flag to choose those instead).
-  batch                    Runs several comment/reply/resolve operations from a single invocation
-                           (a JSON array of operations, read from stdin). Useful for posting
-                           multiple review comments (or replying to/resolving several threads) at
-                           once - only needs approving/authenticating one command instead of one
-                           per operation, and shares file-anchoring lookups across comments on the
-                           same PR instead of repeating them per comment. Each array element is an
-                           object shaped like one of:
+  batch                    Runs several comment/reply/edit/delete/resolve operations from a single
+                           invocation (a JSON array of operations, read from stdin). Useful for
+                           applying multiple comment changes at once - only needs approving/
+                           authenticating one command instead of one per operation, and shares
+                           file-anchoring lookups across comments on the same PR instead of
+                           repeating them per comment. Each array element is an object shaped like
+                           one of:
                              {"action": "comment", "message": "...", "file"?: "...", "line"?: n, "endLine"?: n}
                              {"action": "reply", "thread": n, "message": "..."}
+                             {"action": "edit", "thread": n, "comment": n, "message": "..."}
+                             {"action": "delete", "thread": n, "comment": n}
                              {"action": "resolve", "thread": n}
                            Every operation may set its own "pr" to override --pr/the auto-detected
                            PR for just that operation. Operations run in order; a failure is
@@ -71,8 +87,10 @@ Options:
                            active pull request matches the current branch. Not used by \`create\`.
                            For \`batch\`, this is the default for operations that don't set their
                            own "pr".
-  --thread <id>            Required for reply/resolve. The thread ID, as shown by \`list\`.
-  --message <text>         Required for reply/comment. The comment text to post.
+  --thread <id>            Required for reply/edit/delete/resolve. The thread ID, as shown by
+                           \`list\`.
+  --comment <id>           Required for edit/delete. The comment ID, as shown by \`list\`.
+  --message <text>         Required for comment/reply/edit. The comment text to post or replace.
   --title <text>           Required for \`create\`. The pull request's title.
   --description <text>     For \`create\`. The pull request's description. Defaults to empty.
   --source <branch>        For \`create\`. The branch to create the pull request from. Defaults to
@@ -111,7 +129,7 @@ function stringArg(value: unknown): string | undefined {
 
 function parsePositiveIntFlag(
   argv: minimist.ParsedArgs,
-  flag: "pr" | "thread" | "line" | "end-line",
+  flag: "pr" | "thread" | "comment" | "line" | "end-line",
 ): number | undefined {
   if (argv[flag] === undefined) {
     return undefined;
@@ -134,13 +152,23 @@ function parseStringFlag(argv: minimist.ParsedArgs, flag: string): string | unde
   return value;
 }
 
-const ACTIONS: Action[] = ["list", "reply", "resolve", "create", "comment", "batch"];
+const ACTIONS: Action[] = [
+  "list",
+  "reply",
+  "resolve",
+  "create",
+  "comment",
+  "edit",
+  "delete",
+  "batch",
+];
 
 export function parseArgs(): Options {
   const argv = minimist(process.argv.slice(2), {
     string: [
       "pr",
       "thread",
+      "comment",
       "message",
       "title",
       "description",
@@ -166,6 +194,7 @@ export function parseArgs(): Options {
 
   const pr = parsePositiveIntFlag(argv, "pr");
   const thread = parsePositiveIntFlag(argv, "thread");
+  const comment = parsePositiveIntFlag(argv, "comment");
   const line = parsePositiveIntFlag(argv, "line");
   const endLine = parsePositiveIntFlag(argv, "end-line");
 
@@ -178,6 +207,9 @@ export function parseArgs(): Options {
 
   if (actionRequiresThread(action) && !thread) {
     printUsageAndExit(`--thread is required for "${action}"`);
+  }
+  if (actionRequiresComment(action) && !comment) {
+    printUsageAndExit(`--comment is required for "${action}"`);
   }
   if (actionRequiresMessage(action) && !message) {
     printUsageAndExit(`--message is required for "${action}"`);
@@ -202,6 +234,7 @@ export function parseArgs(): Options {
     action,
     pr,
     thread,
+    comment,
     message,
     json: !!argv.json,
     excludeOwn: !!argv["exclude-own"],

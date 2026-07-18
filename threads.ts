@@ -13,6 +13,7 @@ interface Comment {
   content?: string;
   author?: { id?: string; displayName: string };
   commentType?: string;
+  isDeleted?: boolean;
 }
 
 export interface CommentThread {
@@ -44,7 +45,9 @@ async function getCurrentUserId(ctx: AzureDevOpsRepoContext, pat: string): Promi
 const UNRESOLVED_STATUSES = new Set<string | undefined>(["active", "pending", undefined]);
 
 function isRealComment(comment: Comment): boolean {
-  return (comment.commentType ?? "text") === "text" && !!comment.content?.trim();
+  return (
+    !comment.isDeleted && (comment.commentType ?? "text") === "text" && !!comment.content?.trim()
+  );
 }
 
 function isUnresolvedThread(thread: CommentThread): boolean {
@@ -114,7 +117,9 @@ export function formatThread(
     threadWebUrl(ctx, prId, thread.id),
   ];
   for (const comment of thread.comments.filter(isRealComment)) {
-    lines.push(`- **${comment.author?.displayName ?? "unknown"}**: ${comment.content!.trim()}`);
+    lines.push(
+      `- **${comment.author?.displayName ?? "unknown"}** (comment ${comment.id}): ${comment.content!.trim()}`,
+    );
   }
   return lines.join("\n");
 }
@@ -142,6 +147,29 @@ export async function postReply(
 ): Promise<void> {
   const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments`)}?api-version=${API_VERSION}`;
   await azureRequest(url, pat, { method: "POST", body: { content: message } });
+}
+
+export async function editComment(
+  ctx: AzureDevOpsRepoContext,
+  prId: number,
+  threadId: number,
+  commentId: number,
+  message: string,
+  pat: string,
+): Promise<void> {
+  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
+  await azureRequest(url, pat, { method: "PATCH", body: { content: message } });
+}
+
+export async function deleteComment(
+  ctx: AzureDevOpsRepoContext,
+  prId: number,
+  threadId: number,
+  commentId: number,
+  pat: string,
+): Promise<void> {
+  const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments/${commentId}`)}?api-version=${API_VERSION}`;
+  await azureRequest(url, pat, { method: "DELETE", responseType: "none" });
 }
 
 /** Posts a new top-level thread, optionally anchored to a file and line range. */

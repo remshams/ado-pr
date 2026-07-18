@@ -15,6 +15,14 @@ function request(call) {
   return { url: call.url, method: call.method, body: call.body };
 }
 
+function semanticRequest(call) {
+  return {
+    url: call.url,
+    method: call.method,
+    body: call.body === null ? null : JSON.parse(call.body),
+  };
+}
+
 function assertSucceeded(result) {
   assert.equal(result.status, 0);
   assert.equal(result.stderr, "");
@@ -218,7 +226,7 @@ test("list prints representative nonempty text output", (t) => {
     `Comment threads on PR #42:\n\n` +
       `### Thread 9 — General (not tied to a file/line) [active]\n` +
       `${webBase}/42?discussionId=9\n` +
-      `- **Ada**: Looks good\n\n` +
+      `- **Ada** (comment 1): Looks good\n\n` +
       `---\n\nSummary:\n\n` +
       `| Thread | Location | Status | Link |\n` +
       `| --- | --- | --- | --- |\n` +
@@ -338,6 +346,46 @@ test("reply dispatches to the selected thread", (t) => {
   assert.equal(result.stdout, "Posted reply to thread 8 on PR #42.\n");
 });
 
+test("edit dispatches a comment content update and prints success", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(
+    t,
+    ["edit", "--pr", "42", "--thread", "8", "--comment", "3", "--message", "Revised text"],
+    {
+      cwd,
+      responses: [{ json: { id: 3, content: "Revised text" } }],
+    },
+  );
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url: `${apiBase}/pullRequests/42/threads/8/comments/3?api-version=7.1`,
+      method: "PATCH",
+      body: { content: "Revised text" },
+    },
+  ]);
+  assert.equal(result.stdout, "Edited comment 3 in thread 8 on PR #42.\n");
+});
+
+test("delete dispatches a bodyless comment deletion and prints success", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(t, ["delete", "--pr", "42", "--thread", "8", "--comment", "3"], {
+    cwd,
+    responses: [{ body: "" }],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(request), [
+    {
+      url: `${apiBase}/pullRequests/42/threads/8/comments/3?api-version=7.1`,
+      method: "DELETE",
+      body: null,
+    },
+  ]);
+  assert.equal(result.stdout, "Deleted comment 3 from thread 8 on PR #42.\n");
+});
+
 test("resolve dispatches a fixed status update to the selected thread", (t) => {
   const cwd = createRepo(t);
   const result = runPr(t, ["resolve", "--pr", "42", "--thread", "9"], {
@@ -361,7 +409,9 @@ test("batch reads stdin and dispatches operations in order with per-operation PR
   const operations = [
     { action: "comment", message: "Batch note" },
     { action: "reply", pr: 77, thread: 8, message: "Batch reply" },
-    { action: "resolve", thread: 9 },
+    { action: "edit", thread: 9, comment: 3, message: "Batch edit" },
+    { action: "delete", thread: 10, comment: 4 },
+    { action: "resolve", thread: 11 },
   ];
   const result = runPr(t, ["batch", "--pr", "42"], {
     cwd,
@@ -369,36 +419,50 @@ test("batch reads stdin and dispatches operations in order with per-operation PR
     responses: [
       { json: { id: 51, comments: [] } },
       { json: { id: 2 } },
-      { json: { id: 9, status: "fixed" } },
+      { json: { id: 3, content: "Batch edit" } },
+      { body: "" },
+      { json: { id: 11, status: "fixed" } },
     ],
   });
 
   assertSucceeded(result);
-  assert.deepEqual(result.calls.map(request), [
+  assert.deepEqual(result.calls.map(semanticRequest), [
     {
       url: `${apiBase}/pullRequests/42/threads?api-version=7.1`,
       method: "POST",
-      body: JSON.stringify({
+      body: {
         comments: [{ content: "Batch note" }],
         status: "active",
-      }),
+      },
     },
     {
       url: `${apiBase}/pullRequests/77/threads/8/comments?api-version=7.1`,
       method: "POST",
-      body: JSON.stringify({ content: "Batch reply" }),
+      body: { content: "Batch reply" },
     },
     {
-      url: `${apiBase}/pullRequests/42/threads/9?api-version=7.1`,
+      url: `${apiBase}/pullRequests/42/threads/9/comments/3?api-version=7.1`,
       method: "PATCH",
-      body: JSON.stringify({ status: "fixed" }),
+      body: { content: "Batch edit" },
+    },
+    {
+      url: `${apiBase}/pullRequests/42/threads/10/comments/4?api-version=7.1`,
+      method: "DELETE",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/42/threads/11?api-version=7.1`,
+      method: "PATCH",
+      body: { status: "fixed" },
     },
   ]);
   assert.equal(
     result.stdout,
-    `[1/3] comment: posted new comment thread 51 on PR #42 (${webBase}/42?discussionId=51)\n` +
-      `[2/3] reply: posted reply to thread 8 on PR #77\n` +
-      `[3/3] resolve: marked thread 9 on PR #42 as resolved\n`,
+    `[1/5] comment: posted new comment thread 51 on PR #42 (${webBase}/42?discussionId=51)\n` +
+      `[2/5] reply: posted reply to thread 8 on PR #77\n` +
+      `[3/5] edit: edited comment 3 in thread 9 on PR #42\n` +
+      `[4/5] delete: deleted comment 4 from thread 10 on PR #42\n` +
+      `[5/5] resolve: marked thread 11 on PR #42 as resolved\n`,
   );
 });
 

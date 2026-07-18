@@ -6,11 +6,27 @@ function authHeader(pat: string): string {
   return `Basic ${Buffer.from(`:${pat}`).toString("base64")}`;
 }
 
+interface AzureRequestOptions {
+  method?: string;
+  body?: unknown;
+  responseType?: "json" | "none";
+}
+
+export function azureRequest(
+  url: string,
+  pat: string,
+  options: AzureRequestOptions & { responseType: "none" },
+): Promise<void>;
+export function azureRequest<T>(
+  url: string,
+  pat: string,
+  options?: AzureRequestOptions,
+): Promise<T>;
 export async function azureRequest<T>(
   url: string,
   pat: string,
-  options: { method?: string; body?: unknown } = {},
-): Promise<T> {
+  options: AzureRequestOptions = {},
+): Promise<T | void> {
   const response = await fetch(url, {
     method: options.method ?? "GET",
     headers: {
@@ -26,6 +42,9 @@ export async function azureRequest<T>(
     );
   }
 
+  if (options.responseType === "none") {
+    return;
+  }
   return (await response.json()) as T;
 }
 

@@ -23,6 +23,14 @@ function requestShapes(calls) {
   return calls.map(({ url, method, body }) => ({ url, method, body }));
 }
 
+function semanticRequestShapes(calls) {
+  return calls.map(({ url, method, body }) => ({
+    url,
+    method,
+    body: body === null ? null : JSON.parse(body),
+  }));
+}
+
 function prepareBatchTest(t, input, responses = []) {
   isolateExitCode(t);
   const stdin = mockStdin(t, Buffer.from(input));
@@ -100,13 +108,13 @@ test.describe("runBatch", { concurrency: false }, () => {
       name: "missing action",
       operation: { message: "hello" },
       message:
-        'Batch operation 1 has an invalid "action" (must be one of: comment, reply, resolve).',
+        'Batch operation 1 has an invalid "action" (must be one of: comment, reply, edit, delete, resolve).',
     },
     {
       name: "unknown action",
-      operation: { action: "delete" },
+      operation: { action: "archive" },
       message:
-        'Batch operation 1 has an invalid "action" (must be one of: comment, reply, resolve).',
+        'Batch operation 1 has an invalid "action" (must be one of: comment, reply, edit, delete, resolve).',
     },
     {
       name: "non-positive PR",
@@ -117,6 +125,11 @@ test.describe("runBatch", { concurrency: false }, () => {
       name: "fractional thread",
       operation: { action: "reply", message: "hello", thread: 1.5 },
       message: 'Batch operation 1 has an invalid "thread" (must be a positive integer).',
+    },
+    {
+      name: "invalid comment",
+      operation: { action: "edit", thread: 7, comment: 0, message: "hello" },
+      message: 'Batch operation 1 has an invalid "comment" (must be a positive integer).',
     },
     {
       name: "string line",
@@ -137,6 +150,16 @@ test.describe("runBatch", { concurrency: false }, () => {
       name: "resolve missing thread",
       operation: { action: "resolve" },
       message: 'Batch operation 1 ("resolve") requires a "thread".',
+    },
+    {
+      name: "delete missing comment",
+      operation: { action: "delete", thread: 7 },
+      message: 'Batch operation 1 ("delete") requires a "comment".',
+    },
+    {
+      name: "edit missing message",
+      operation: { action: "edit", thread: 7, comment: 3 },
+      message: 'Batch operation 1 ("edit") requires a "message".',
     },
     {
       name: "comment missing message",
@@ -199,42 +222,64 @@ test.describe("runBatch", { concurrency: false }, () => {
     const input = JSON.stringify([
       { action: "comment", message: "Top-level comment" },
       { action: "reply", thread: 17, message: "Reply text" },
+      { action: "edit", thread: 19, comment: 4, message: "Edited text" },
+      { action: "delete", thread: 21, comment: 6 },
       { action: "resolve", thread: 23 },
     ]);
     const { consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
       { json: { id: 101, comments: [] } },
       { json: {} },
       { json: {} },
+      { body: "" },
+      { json: {} },
     ]);
 
     await runBatch(ctx, pat, defaultPrId);
 
-    assert.deepEqual(requestShapes(fetchCalls), [
+    assert.deepEqual(semanticRequestShapes(fetchCalls), [
       {
         url: threadUrl(42),
         method: "POST",
-        body: '{"comments":[{"content":"Top-level comment"}],"status":"active"}',
+        body: { comments: [{ content: "Top-level comment" }], status: "active" },
       },
       {
         url: threadUrl(42, "/17/comments"),
         method: "POST",
-        body: '{"content":"Reply text"}',
+        body: { content: "Reply text" },
+      },
+      {
+        url: threadUrl(42, "/19/comments/4"),
+        method: "PATCH",
+        body: { content: "Edited text" },
+      },
+      {
+        url: threadUrl(42, "/21/comments/6"),
+        method: "DELETE",
+        body: null,
       },
       {
         url: threadUrl(42, "/23"),
         method: "PATCH",
-        body: '{"status":"fixed"}',
+        body: { status: "fixed" },
       },
     ]);
     assert.deepEqual(consoleCalls, [
       {
         method: "log",
         args: [
-          `[1/3] comment: posted new comment thread 101 on PR #42 (${webBase}/42?discussionId=101)`,
+          `[1/5] comment: posted new comment thread 101 on PR #42 (${webBase}/42?discussionId=101)`,
         ],
       },
-      { method: "log", args: ["[2/3] reply: posted reply to thread 17 on PR #42"] },
-      { method: "log", args: ["[3/3] resolve: marked thread 23 on PR #42 as resolved"] },
+      { method: "log", args: ["[2/5] reply: posted reply to thread 17 on PR #42"] },
+      {
+        method: "log",
+        args: ["[3/5] edit: edited comment 4 in thread 19 on PR #42"],
+      },
+      {
+        method: "log",
+        args: ["[4/5] delete: deleted comment 6 from thread 21 on PR #42"],
+      },
+      { method: "log", args: ["[5/5] resolve: marked thread 23 on PR #42 as resolved"] },
     ]);
     assert.equal(process.exitCode, undefined);
   });

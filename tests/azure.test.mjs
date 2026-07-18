@@ -65,6 +65,29 @@ test(
 );
 
 test(
+  "azureRequest supports successful requests that expect no response body",
+  { concurrency: false },
+  async (t) => {
+    mockFetch(t, [{ body: "" }, { status: 204 }]);
+
+    assert.equal(
+      await azureRequest("https://example.invalid/empty", fakePat, {
+        method: "PATCH",
+        responseType: "none",
+      }),
+      undefined,
+    );
+    assert.equal(
+      await azureRequest("https://example.invalid/no-content", fakePat, {
+        method: "DELETE",
+        responseType: "none",
+      }),
+      undefined,
+    );
+  },
+);
+
+test(
   "azureRequest reports the method, URL, status, status text, and response body on failure",
   { concurrency: false },
   async (t) => {

@@ -1,10 +1,10 @@
 /**
- * Creates Azure DevOps pull requests, and lists/creates/replies-to/resolves PR comment threads,
+ * Creates Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves PR comments,
  * for the pull request associated with the current branch of a git checkout whose origin remote
  * points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
- * is enough for `list`, "Read & Write" is needed for `create`/`comment`/`reply`/`resolve`/`batch`).
+ * is enough for `list`, "Read & Write" is needed for comment-changing actions and `batch`).
  * Run this via pr.sh, which loads it from .env (see .env.tpl). If the 1Password CLI (`op`) is
  * installed, .env is loaded via `op run` so an op:// 1Password reference works too (resolved
  * just-in-time, never written to disk); otherwise .env is loaded directly, which requires
@@ -18,6 +18,8 @@ import { getRepoContext } from "./lib.ts";
 import { toCommentLocation } from "./operation-types.ts";
 import { createPullRequest, resolvePullRequestId } from "./pull-requests.ts";
 import {
+  deleteComment,
+  editComment,
   formatSummaryTable,
   formatThread,
   getFilteredThreads,
@@ -77,6 +79,18 @@ async function main(): Promise<void> {
     case "reply": {
       await postReply(ctx, prId, options.thread!, options.message!, pat);
       console.log(`Posted reply to thread ${options.thread} on PR #${prId}.`);
+      return;
+    }
+    case "edit": {
+      await editComment(ctx, prId, options.thread!, options.comment!, options.message!, pat);
+      console.log(`Edited comment ${options.comment} in thread ${options.thread} on PR #${prId}.`);
+      return;
+    }
+    case "delete": {
+      await deleteComment(ctx, prId, options.thread!, options.comment!, pat);
+      console.log(
+        `Deleted comment ${options.comment} from thread ${options.thread} on PR #${prId}.`,
+      );
       return;
     }
     case "resolve": {
