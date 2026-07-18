@@ -7,17 +7,48 @@ const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
 const usageFirstLine =
   "Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]";
+const cliTimeoutMs = 10_000;
+const childEnvAllowlist = new Set([
+  "HOME",
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USERPROFILE",
+  "WINDIR",
+]);
+
+function minimalChildEnv() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key, value]) => value !== undefined && childEnvAllowlist.has(key.toUpperCase()),
+    ),
+  );
+}
 
 function runCli(...args) {
-  const env = { ...process.env };
-  delete env.AZURE_DEVOPS_PAT;
+  const env = minimalChildEnv();
+  assert.equal(env.NODE_OPTIONS, undefined);
+  assert.equal(env.AZURE_DEVOPS_PAT, undefined);
 
-  const result = spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: projectRoot,
-    encoding: "utf8",
-    env,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", cliPath, ...args],
+    {
+      cwd: projectRoot,
+      encoding: "utf8",
+      env,
+      timeout: cliTimeoutMs,
+    },
+  );
 
+  assert.notEqual(
+    result.error?.code,
+    "ETIMEDOUT",
+    `pr.ts timed out after ${cliTimeoutMs}ms for arguments ${JSON.stringify(args)}`,
+  );
   assert.equal(result.error, undefined);
   assert.equal(result.signal, null);
   return result;
