@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { describe, test } from "node:test";
 
 import { getCurrentBranch, getRepoContext, parseAzureDevOpsRemote, runCommand } from "../lib.ts";
-import { createTempGitRepo } from "./test-helpers.mjs";
+import { createTempGitRepo, TEST_SUBPROCESS_TIMEOUT_MS } from "./test-helpers.mjs";
 
 const supportedRemotes = [
   {
@@ -97,9 +97,21 @@ async function withWorkingDirectory(path, callback) {
 }
 
 function git(cwd, ...args) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const command = `git ${args.join(" ")}`;
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: TEST_SUBPROCESS_TIMEOUT_MS,
+  });
+  if (result.error?.code === "ETIMEDOUT") {
+    assert.fail(
+      `${command} timed out after ${TEST_SUBPROCESS_TIMEOUT_MS}ms in ${cwd}` +
+        `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
+        `${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`,
+    );
+  }
   assert.equal(result.error, undefined);
-  assert.equal(result.status, 0, `git ${args.join(" ")} failed:\n${result.stderr}`);
+  assert.equal(result.status, 0, `${command} failed:\n${result.stderr}`);
   return result.stdout.trim();
 }
 
