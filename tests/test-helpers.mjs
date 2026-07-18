@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { createFetchQueue, validateFetchResponses } from "./support/fetch-harness.mjs";
+
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const prPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
 const fetchPreloadPath = fileURLToPath(new URL("./fixtures/fetch-preload.mjs", import.meta.url));
@@ -157,37 +159,10 @@ export function spawnTestProcess(
 }
 
 /**
- * Helpers that replace `fetch`, `process.stdin`, `process.exitCode`, or console methods mutate
+ * Helpers that replace `process.stdin`, `process.exitCode`, or console methods mutate
  * process-global state. Use them only in tests that run serially within the same test process;
  * their state is restored automatically through `t.mock` or `t.after`.
  */
-
-function responseFromDescriptor(descriptor) {
-  if (descriptor instanceof Response) return descriptor;
-
-  const headers = new Headers(descriptor.headers);
-  let body = descriptor.body ?? null;
-  if (Object.hasOwn(descriptor, "json")) {
-    body = JSON.stringify(descriptor.json);
-    if (!headers.has("content-type")) headers.set("content-type", "application/json");
-  }
-
-  return new Response(body, {
-    status: descriptor.status ?? 200,
-    statusText: descriptor.statusText,
-    headers,
-  });
-}
-
-async function recordRequest(input, init) {
-  const request = new Request(input, init);
-  return {
-    url: request.url,
-    method: request.method,
-    headers: Object.fromEntries(request.headers),
-    body: request.body === null ? null : await request.clone().text(),
-  };
-}
 
 /**
  * Creates a strict FIFO fetch fake without mutating global state.
@@ -198,31 +173,17 @@ async function recordRequest(input, init) {
  * responses fail the test during teardown.
  */
 export function createMockFetch(t, responses = []) {
-  const queue = [...responses];
-  const calls = [];
-  const fetch = async (input, init) => {
-    const call = await recordRequest(input, init);
-    calls.push(call);
-    assert.ok(queue.length > 0, `Unexpected fetch request: ${call.method} ${call.url}`);
-    const descriptor = queue.shift();
-    if (descriptor?.delayMs !== undefined) {
-      await new Promise((resolve) => setTimeout(resolve, descriptor.delayMs));
-    }
-    return responseFromDescriptor(descriptor);
-  };
+  const queue = createFetchQueue(responses);
 
   t.after(() => {
-    assert.equal(queue.length, 0, `${queue.length} queued fetch response(s) were not consumed`);
+    assert.equal(
+      queue.remainingResponses,
+      0,
+      `${queue.remainingResponses} queued fetch response(s) were not consumed`,
+    );
   });
 
-  return { fetch, calls };
-}
-
-/** Replaces `globalThis.fetch` for tests that specifically exercise global integration. */
-export function mockFetch(t, responses = []) {
-  const { fetch, calls } = createMockFetch(t, responses);
-  t.mock.method(globalThis, "fetch", fetch);
-  return calls;
+  return { fetch: queue.fetch, calls: queue.calls };
 }
 
 /**
@@ -319,7 +280,7 @@ export function captureConsole(t, methods = ["log", "error", "warn"]) {
 /**
  * Runs `pr.ts` in an isolated subprocess using Node's TypeScript stripping and
  * the fetch preload fixture. `responses` uses the same descriptor shape as
- * `mockFetch` (native `Response` objects are intentionally unsupported across
+ * `createMockFetch` (native `Response` objects are intentionally unsupported across
  * the process boundary). Only cross-platform path/temp/locale/system variables
  * are inherited; `env` supplies explicit test-only overrides, after which the
  * Azure PAT and fixture variables are forcibly set. In particular, an ambient
@@ -348,6 +309,7 @@ export function runPr(
   } = {},
 ) {
   assert.ok(Array.isArray(args), "runPr args must be an array");
+  validateFetchResponses(responses);
   assert.ok(
     responses.every((response) => !(response instanceof Response)),
     "runPr responses must be serializable descriptors, not Response objects",

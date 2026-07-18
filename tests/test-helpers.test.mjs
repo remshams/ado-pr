@@ -6,10 +6,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  createMockFetch,
   createTempGitRepo,
   gitTestEnvironment,
   isolateGitEnvironment,
-  mockFetch,
   runPr,
   spawnTestProcess,
   TEST_SUBPROCESS_TIMEOUT_MS,
@@ -31,8 +31,8 @@ function restoreEnv(t, name, value) {
   });
 }
 
-test("mockFetch rejects an unexpected request and records it", async (t) => {
-  const calls = mockFetch(t);
+test("createMockFetch rejects an unexpected request and records it", async (t) => {
+  const { fetch, calls } = createMockFetch(t);
 
   await assert.rejects(fetch("https://example.invalid/unexpected"), {
     message: "Unexpected fetch request: GET https://example.invalid/unexpected",
@@ -47,11 +47,11 @@ test("mockFetch rejects an unexpected request and records it", async (t) => {
   ]);
 });
 
-test("mockFetch reports responses left unused during test teardown", () => {
+test("createMockFetch reports responses left unused during test teardown", () => {
   const script = `
     import test from "node:test";
-    import { mockFetch } from ${JSON.stringify(testHelpersUrl)};
-    test("leaves a response", (t) => mockFetch(t, [{ json: {} }]));
+    import { createMockFetch } from ${JSON.stringify(testHelpersUrl)};
+    test("leaves a response", (t) => createMockFetch(t, [{ json: {} }]));
   `;
   const result = spawnTestProcess(process.execPath, ["--input-type=module", "--eval", script], {
     encoding: "utf8",
@@ -63,6 +63,21 @@ test("mockFetch reports responses left unused during test teardown", () => {
     `${result.stdout}\n${result.stderr}`,
     /1 queued fetch response\(s\) were not consumed/,
   );
+});
+
+test("createMockFetch validates queued response fixtures eagerly", (t) => {
+  assert.throws(() => createMockFetch(t, {}), {
+    name: "TypeError",
+    message: "Queued fetch responses must be an array",
+  });
+  assert.throws(() => createMockFetch(t, [null]), {
+    name: "TypeError",
+    message: "Queued fetch response 1 must be a Response or descriptor object",
+  });
+  assert.throws(() => createMockFetch(t, [{ delayMs: -1 }]), {
+    name: "TypeError",
+    message: "Queued fetch response 1 has an invalid delayMs",
+  });
 });
 
 test("createTempGitRepo ignores hostile ambient Git configuration", (t) => {
@@ -201,6 +216,15 @@ test("spawnTestProcess preserves diagnostics from a cooperative timeout", () => 
   );
 });
 
+test("runPr rejects non-finite response delays before serializing fixtures", (t) => {
+  for (const delayMs of [Number.POSITIVE_INFINITY, Number.NaN]) {
+    assert.throws(() => runPr(t, ["--help"], { responses: [{ delayMs }] }), {
+      name: "TypeError",
+      message: "Queued fetch response 1 has an invalid delayMs",
+    });
+  }
+});
+
 test("runPr rejects unexpected requests and preserves their call record", (t) => {
   const result = runPr(t, ["list", "--pr", "7"], { cwd: createRepo(t) });
 
@@ -293,4 +317,28 @@ test("fetch preload rejects missing and malformed configuration", (t) => {
   });
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /SyntaxError/);
+
+  const nonArray = spawnPreload({
+    ADO_PR_TEST_FETCH_RESPONSES: "{}",
+    ADO_PR_TEST_FETCH_CALLS_FILE: callsPath,
+  });
+  assert.equal(nonArray.status, 1);
+  assert.match(nonArray.stderr, /Queued fetch responses must be an array/);
+
+  const invalidDescriptor = spawnPreload({
+    ADO_PR_TEST_FETCH_RESPONSES: "[null]",
+    ADO_PR_TEST_FETCH_CALLS_FILE: callsPath,
+  });
+  assert.equal(invalidDescriptor.status, 1);
+  assert.match(
+    invalidDescriptor.stderr,
+    /Queued fetch response 1 must be a Response or descriptor object/,
+  );
+
+  const invalidDelay = spawnPreload({
+    ADO_PR_TEST_FETCH_RESPONSES: '[{"delayMs":-1}]',
+    ADO_PR_TEST_FETCH_CALLS_FILE: callsPath,
+  });
+  assert.equal(invalidDelay.status, 1);
+  assert.match(invalidDelay.stderr, /Queued fetch response 1 has an invalid delayMs/);
 });
