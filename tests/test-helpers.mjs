@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,9 @@ const FETCH_RESPONSES_ENV = "ADO_PR_TEST_FETCH_RESPONSES";
 const FETCH_CALLS_FILE_ENV = "ADO_PR_TEST_FETCH_CALLS_FILE";
 const ENV_PROBE_NAMES_ENV = "ADO_PR_TEST_ENV_PROBE_NAMES";
 const ENV_PROBE_FILE_ENV = "ADO_PR_TEST_ENV_PROBE_FILE";
-const DEFAULT_RUN_TIMEOUT_MS = 15_000;
+
+/** Default upper bound for every synchronous test subprocess. */
+export const TEST_SUBPROCESS_TIMEOUT_MS = 15_000;
 
 // Keep subprocesses usable on macOS/Linux/Windows without inheriting credentials, proxy settings,
 // NODE_OPTIONS, or other ambient process configuration from the developer's shell.
@@ -48,6 +50,45 @@ function inheritedTestEnvironment() {
       process.env[name] === undefined ? [] : [[name, process.env[name]]],
     ),
   );
+}
+
+function capturedOutput(result) {
+  return (
+    `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
+    `${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`
+  );
+}
+
+/**
+ * Runs a bounded synchronous test subprocess. A nonzero exit status is returned
+ * to the caller, while spawn failures, signals, and timeouts fail immediately
+ * with the command description and any captured output.
+ */
+export function spawnTestProcess(
+  command,
+  args,
+  { description = `${command} subprocess`, timeout = TEST_SUBPROCESS_TIMEOUT_MS, ...options } = {},
+) {
+  assert.ok(
+    Number.isFinite(timeout) && timeout > 0,
+    "test subprocess timeout must be a positive number",
+  );
+  const result = spawnSync(command, args, { ...options, timeout });
+
+  if (result.error?.code === "ETIMEDOUT") {
+    assert.fail(`${description} timed out after ${timeout}ms${capturedOutput(result)}`);
+  }
+  assert.equal(
+    result.error,
+    undefined,
+    `${description} failed to spawn: ${result.error?.message}${capturedOutput(result)}`,
+  );
+  assert.equal(
+    result.signal,
+    null,
+    `${description} terminated by ${result.signal}${capturedOutput(result)}`,
+  );
+  return result;
 }
 
 /**
@@ -120,11 +161,37 @@ export function mockFetch(t, responses = []) {
  */
 export function createTempGitRepo(t, { origin, branch = "main" } = {}) {
   const path = mkdtempSync(join(tmpdir(), "ado-pr-test-repo-"));
+  const hooksPath = join(path, "disabled-hooks");
+  mkdirSync(hooksPath);
   t.after(() => rmSync(path, { recursive: true, force: true }));
 
+  // Starting from the platform allowlist strips GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and all
+  // GIT_CONFIG_KEY_*/VALUE_* entries, repository redirection, template injection, and signing or
+  // askpass settings. The explicit values below then disable every external config source.
+  const gitEnv = {
+    ...inheritedTestEnvironment(),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: devNull,
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_COUNT: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "Never",
+  };
+
   const git = (...args) => {
-    const result = spawnSync("git", args, { cwd: path, encoding: "utf8" });
-    assert.equal(result.error, undefined);
+    const commandArgs = [
+      "-c",
+      `core.hooksPath=${hooksPath}`,
+      "-c",
+      "commit.gpgSign=false",
+      ...args,
+    ];
+    const result = spawnTestProcess("git", commandArgs, {
+      cwd: path,
+      env: gitEnv,
+      encoding: "utf8",
+      description: `git ${args.join(" ")}`,
+    });
     assert.equal(result.status, 0, `git ${args.join(" ")} failed:\n${result.stderr}`);
     return result.stdout.trim();
   };
@@ -134,7 +201,7 @@ export function createTempGitRepo(t, { origin, branch = "main" } = {}) {
   git("config", "user.email", "ado-pr-tests@example.invalid");
   writeFileSync(join(path, "README.md"), "# Test repository\n");
   git("add", "README.md");
-  git("commit", "-m", "Initial commit");
+  git("commit", "--no-gpg-sign", "-m", "Initial commit");
   if (origin !== undefined) git("remote", "add", "origin", origin);
 
   return path;
@@ -215,7 +282,7 @@ export function runPr(
     env = {},
     fakePat = "test-only-fake-pat",
     inspectEnv = [],
-    timeout = DEFAULT_RUN_TIMEOUT_MS,
+    timeout = TEST_SUBPROCESS_TIMEOUT_MS,
   } = {},
 ) {
   assert.ok(Array.isArray(args), "runPr args must be an array");
@@ -243,7 +310,7 @@ export function runPr(
   childEnv[ENV_PROBE_NAMES_ENV] = JSON.stringify(inspectEnv);
   childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
 
-  const result = spawnSync(
+  const result = spawnTestProcess(
     process.execPath,
     [
       "--disable-warning=ExperimentalWarning",
@@ -259,18 +326,9 @@ export function runPr(
       encoding: "utf8",
       input: stdin,
       timeout,
+      description: "pr.ts",
     },
   );
-
-  if (result.error?.code === "ETIMEDOUT") {
-    assert.fail(
-      `pr.ts timed out after ${timeout}ms` +
-        `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
-        `${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`,
-    );
-  }
-  assert.equal(result.error, undefined, `Failed to spawn pr.ts: ${result.error?.message}`);
-  assert.equal(result.signal, null);
   return {
     ...result,
     calls: JSON.parse(readFileSync(callsPath, "utf8")),

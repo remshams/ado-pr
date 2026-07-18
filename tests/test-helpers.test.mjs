@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { createTempGitRepo, mockFetch, runPr } from "./test-helpers.mjs";
+import {
+  createTempGitRepo,
+  mockFetch,
+  runPr,
+  spawnTestProcess,
+  TEST_SUBPROCESS_TIMEOUT_MS,
+} from "./test-helpers.mjs";
 
 const fetchPreloadPath = fileURLToPath(new URL("./fixtures/fetch-preload.mjs", import.meta.url));
 const testHelpersUrl = new URL("./test-helpers.mjs", import.meta.url).href;
@@ -46,14 +51,68 @@ test("mockFetch reports responses left unused during test teardown", () => {
     import { mockFetch } from ${JSON.stringify(testHelpersUrl)};
     test("leaves a response", (t) => mockFetch(t, [{ json: {} }]));
   `;
-  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+  const result = spawnTestProcess(process.execPath, ["--input-type=module", "--eval", script], {
     encoding: "utf8",
+    description: "unused-response test subprocess",
   });
 
   assert.equal(result.status, 1);
   assert.match(
     `${result.stdout}\n${result.stderr}`,
     /1 queued fetch response\(s\) were not consumed/,
+  );
+});
+
+test("createTempGitRepo ignores hostile ambient Git configuration", (t) => {
+  const hostilePath = mkdtempSync(join(tmpdir(), "ado-pr-hostile-git-"));
+  const hooksPath = join(hostilePath, "hooks");
+  const markerPath = join(hostilePath, "hook-ran");
+  const globalConfigPath = join(hostilePath, "global.gitconfig");
+  mkdirSync(hooksPath);
+  writeFileSync(
+    join(hooksPath, "pre-commit"),
+    `#!/bin/sh\nprintf hook-ran > ${JSON.stringify(markerPath)}\nexit 91\n`,
+  );
+  chmodSync(join(hooksPath, "pre-commit"), 0o755);
+  writeFileSync(
+    globalConfigPath,
+    `[commit]\n\tgpgSign = true\n[core]\n\thooksPath = ${JSON.stringify(hooksPath)}\n`,
+  );
+  t.after(() => rmSync(hostilePath, { recursive: true, force: true }));
+
+  const hostileEnvironment = {
+    GIT_CONFIG_NOSYSTEM: "0",
+    GIT_CONFIG_GLOBAL: globalConfigPath,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "commit.gpgSign",
+    GIT_CONFIG_VALUE_0: "true",
+    GIT_CONFIG_PARAMETERS: "'commit.gpgSign=true'",
+  };
+  for (const [name, value] of Object.entries(hostileEnvironment)) {
+    restoreEnv(t, name, process.env[name]);
+    process.env[name] = value;
+  }
+
+  const repoPath = createTempGitRepo(t, { branch: "test/hostile-config" });
+
+  assert.ok(existsSync(join(repoPath, ".git", "refs", "heads", "test", "hostile-config")));
+  assert.equal(existsSync(markerPath), false);
+});
+
+test("spawnTestProcess applies a shared timeout with captured diagnostics", () => {
+  assert.equal(TEST_SUBPROCESS_TIMEOUT_MS, 15_000);
+  assert.throws(
+    () =>
+      spawnTestProcess(
+        process.execPath,
+        ["--eval", "process.stderr.write('waiting'); setTimeout(() => {}, 10_000)"],
+        {
+          encoding: "utf8",
+          timeout: 250,
+          description: "hanging helper subprocess",
+        },
+      ),
+    /hanging helper subprocess timed out after 250ms\nstderr:\nwaiting/,
   );
 });
 
@@ -133,9 +192,10 @@ test("fetch preload rejects missing and malformed configuration", (t) => {
   t.after(() => rmSync(tempPath, { recursive: true, force: true }));
 
   const spawnPreload = (env) =>
-    spawnSync(process.execPath, ["--import", fetchPreloadPath, "--eval", ""], {
+    spawnTestProcess(process.execPath, ["--import", fetchPreloadPath, "--eval", ""], {
       encoding: "utf8",
       env: { PATH: process.env.PATH, ...env },
+      description: "fetch preload test subprocess",
     });
 
   const missing = spawnPreload({});
