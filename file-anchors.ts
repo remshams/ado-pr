@@ -60,10 +60,11 @@ async function fetchChangeTrackingId(
   pat: string,
 ): Promise<number | undefined> {
   let skip = 0;
+  let top = ITERATION_CHANGES_PAGE_SIZE;
   for (;;) {
     const url =
       `${pullRequestApiUrl(ctx, prId, `/iterations/${iterationId}/changes`)}` +
-      `?api-version=${API_VERSION}&$top=${ITERATION_CHANGES_PAGE_SIZE}&$skip=${skip}`;
+      `?api-version=${API_VERSION}&$top=${top}&$skip=${skip}`;
     const data = await azureRequest<IterationChangesPage>(url, pat);
 
     const match = data.changeEntries.find((entry) => entry.item?.path === filePath);
@@ -71,10 +72,19 @@ async function fetchChangeTrackingId(
       return match.changeTrackingId;
     }
 
-    if (data.changeEntries.length < ITERATION_CHANGES_PAGE_SIZE) {
-      return undefined;
+    const { nextSkip, nextTop } = data;
+    if (nextSkip !== undefined || nextTop !== undefined) {
+      if ((nextSkip !== undefined && nextSkip <= 0) || (nextTop !== undefined && nextTop <= 0)) {
+        return undefined;
+      }
+      skip = nextSkip ?? skip + top;
+      top = nextTop ?? top;
+    } else {
+      if (data.changeEntries.length < top) {
+        return undefined;
+      }
+      skip += top;
     }
-    skip += ITERATION_CHANGES_PAGE_SIZE;
   }
 }
 
