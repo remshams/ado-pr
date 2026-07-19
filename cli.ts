@@ -10,6 +10,7 @@ import {
 export type Action =
   | "list"
   | "show"
+  | "update"
   | "reply"
   | "resolve"
   | "create"
@@ -43,6 +44,7 @@ function printUsageAndExit(message?: string): never {
   }
   console.error(`Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
        pr.sh show [--pr <id>] [--json]
+       pr.sh update --description "..." [--pr <id>]
        pr.sh create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
        pr.sh comment --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
        pr.sh reply --thread <id> --message "..." [--pr <id>]
@@ -58,6 +60,8 @@ Actions:
   show                     Shows details for the pull request matching the current branch,
                            including its description, status, draft state, and source/target
                            branches. Use --json to print the raw pull request data.
+  update                   Replaces the pull request's description. An empty description clears
+                           the existing value.
   create                   Creates a new pull request from the current branch (or --source, if
                            given). Prints the new PR's ID and web URL.
   comment                  Posts a new, top-level comment thread on the pull request - either
@@ -97,7 +101,8 @@ Options:
   --comment <id>           Required for edit/delete. The comment ID, as shown by \`list\`.
   --message <text>         Required for comment/reply/edit. The comment text to post or replace.
   --title <text>           Required for \`create\`. The pull request's title.
-  --description <text>     For \`create\`. The pull request's description. Defaults to empty.
+  --description <text>     For \`create\`, the pull request's description (defaults to empty).
+                           For \`update\`, the replacement description (required, but may be empty).
   --source <branch>        For \`create\`. The branch to create the pull request from. Defaults to
                            the current branch. Must already exist on the remote.
   --target <branch>        For \`create\`. The branch to merge into. Defaults to the repository's
@@ -160,9 +165,18 @@ function parseStringFlag(argv: minimist.ParsedArgs, flag: string): string | unde
   return value;
 }
 
+function hasBareStringFlag(args: string[], flag: string): boolean {
+  const token = `--${flag}`;
+  return args.some((arg, index) => {
+    const next = args[index + 1];
+    return arg === token && (next === undefined || (next !== "-" && next.startsWith("-")));
+  });
+}
+
 const ACTIONS: Action[] = [
   "list",
   "show",
+  "update",
   "reply",
   "resolve",
   "create",
@@ -173,7 +187,8 @@ const ACTIONS: Action[] = [
 ];
 
 export function parseArgs(): Options {
-  const argv = minimist(process.argv.slice(2), {
+  const args = process.argv.slice(2);
+  const argv = minimist(args, {
     string: [
       "pr",
       "thread",
@@ -225,6 +240,12 @@ export function parseArgs(): Options {
   }
   if (action === "create" && !title) {
     printUsageAndExit(`--title is required for "create"`);
+  }
+  if (action === "update" && description === undefined) {
+    printUsageAndExit(`--description is required for "update"`);
+  }
+  if (action === "update" && hasBareStringFlag(args, "description")) {
+    printUsageAndExit(`--description requires an explicit value (use --description "" to clear)`);
   }
   if (action !== "comment" && (line || endLine)) {
     printUsageAndExit(`--line/--end-line are only valid for "comment"`);

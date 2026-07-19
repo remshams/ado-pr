@@ -171,6 +171,83 @@ test("show hydrates the active PR found for the current branch", (t) => {
   assert.equal(result.stdout, `${JSON.stringify(pr, null, 2)}\n`);
 });
 
+test("update replaces the description for an explicit PR without fetching it first", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(
+    t,
+    ["update", "--pr", "42", "--description", "Updated from the command line"],
+    {
+      cwd,
+      responses: [
+        {
+          json: {
+            pullRequestId: 42,
+            title: "Updated PR",
+            description: "Updated from the command line",
+            sourceRefName: "refs/heads/feature/dispatch",
+          },
+        },
+      ],
+    },
+  );
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url: `${apiBase}/pullRequests/42?api-version=7.1`,
+      method: "PATCH",
+      body: { description: "Updated from the command line" },
+    },
+  ]);
+  assert.equal(result.stdout, `Updated description for PR #42.\n${webBase}/42\n`);
+});
+
+test("update resolves the branch PR and can clear its description", (t) => {
+  const cwd = createRepo(t, "feature/clear-description");
+  const result = runPr(t, ["update", "--description", ""], {
+    cwd,
+    responses: [
+      {
+        json: {
+          value: [
+            {
+              pullRequestId: 73,
+              title: "Clear description",
+              sourceRefName: "refs/heads/feature/clear-description",
+            },
+          ],
+        },
+      },
+      {
+        json: {
+          pullRequestId: 73,
+          title: "Clear description",
+          description: "",
+          sourceRefName: "refs/heads/feature/clear-description",
+        },
+      },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url:
+        `${apiBase}/pullrequests?` +
+        "searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fclear-description&" +
+        "searchCriteria.status=active&api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/73?api-version=7.1`,
+      method: "PATCH",
+      body: { description: "" },
+    },
+  ]);
+  assert.equal(result.stdout, `Updated description for PR #73.\n${webBase}/73\n`);
+});
+
 test("list uses an explicit PR and prints the filtered response as JSON", (t) => {
   const cwd = createRepo(t);
   const threads = [

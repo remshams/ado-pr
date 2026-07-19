@@ -35,7 +35,7 @@ function createService(
   return { service, calls };
 }
 
-describe("pull request resolution and creation", () => {
+describe("pull request resolution, creation, and updates", () => {
   test("an explicit pull request ID short-circuits without looking up the branch or fetching", async (t) => {
     const { service, calls } = createService(t);
 
@@ -204,6 +204,31 @@ describe("pull request resolution and creation", () => {
     });
 
     assert.equal(calls.length, 1);
+  });
+
+  test("updates only the pull request description", async (t) => {
+    const updated = pullRequest({ description: "Updated description" });
+    const { service, calls } = createService(t, [{ json: updated }]);
+
+    assert.deepEqual(await service.update(42, { description: "Updated description" }), updated);
+    assert.deepEqual(
+      calls.map(({ method, url, body }) => ({ method, url, body: JSON.parse(body) })),
+      [
+        {
+          method: "PATCH",
+          url: `${repositoryUrl}/pullRequests/42?api-version=7.1`,
+          body: { description: "Updated description" },
+        },
+      ],
+    );
+  });
+
+  test("sends an explicitly empty description so an existing description can be cleared", async (t) => {
+    const updated = pullRequest({ description: "" });
+    const { service, calls } = createService(t, [{ json: updated }]);
+
+    assert.deepEqual(await service.update(42, { description: "" }), updated);
+    assert.deepEqual(JSON.parse(calls[0].body), { description: "" });
   });
 
   test("creates from explicit source and target branches while normalizing only plain refs", async (t) => {

@@ -69,6 +69,7 @@ test("--help prints the documented actions and options", () => {
   assert.equal(result.stdout, "");
   assert.equal(firstLine(result.stderr), usageFirstLine);
   assert.ok(result.stderr.includes("       pr.sh show [--pr <id>] [--json]"));
+  assert.ok(result.stderr.includes('       pr.sh update --description "..." [--pr <id>]'));
   assert.ok(
     result.stderr.includes(
       '       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]',
@@ -80,6 +81,7 @@ test("--help prints the documented actions and options", () => {
     result.stderr,
     /  show\s+Shows details for the pull request matching the current branch,/,
   );
+  assert.match(result.stderr, /  update\s+Replaces the pull request's description\./);
   assert.match(result.stderr, /  reply\s+Posts a reply comment to an existing thread\./);
   assert.match(result.stderr, /  edit\s+Edits an existing comment in a thread\./);
   assert.match(result.stderr, /  delete\s+Deletes an existing comment from a thread\./);
@@ -87,6 +89,10 @@ test("--help prints the documented actions and options", () => {
   assert.match(result.stderr, /  --thread <id>\s+Required for reply\/edit\/delete\/resolve\./);
   assert.match(result.stderr, /  --comment <id>\s+Required for edit\/delete\./);
   assert.match(result.stderr, /  --message <text>\s+Required for comment\/reply\/edit\./);
+  assert.match(
+    result.stderr,
+    /For `update`, the replacement description \(required, but may be empty\)\./,
+  );
   assert.match(result.stderr, /For `show`, print the raw pull request data as JSON/);
   assert.match(result.stderr, /  -h, --help\s+Show this help\./);
   assert.match(result.stderr, /\nRequires:\n/);
@@ -97,6 +103,31 @@ test("an unknown action reports the action before usage", () => {
 
   assertUsageError(result, 'Error: unknown action "mystery"');
   assert.match(result.stderr, /\nActions:\n/);
+});
+
+test("update requires an explicit description value but accepts deliberate clearing", () => {
+  const missingDescription = runCli("update");
+  assertUsageError(missingDescription, 'Error: --description is required for "update"');
+
+  const bareDescription = runCli("update", "--description");
+  assertUsageError(
+    bareDescription,
+    'Error: --description requires an explicit value (use --description "" to clear)',
+  );
+
+  for (const args of [
+    ["update", "--description", ""],
+    ["update", "--description="],
+    ["update", "--description", "-"],
+  ]) {
+    const emptyDescription = runCli(...args);
+    assert.equal(emptyDescription.status, 1);
+    assert.equal(emptyDescription.stdout, "");
+    assert.equal(
+      emptyDescription.stderr,
+      "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
+    );
+  }
 });
 
 test("reply validates a missing thread before a missing message", () => {

@@ -21,8 +21,13 @@ export interface CreatePullRequestOptions {
   draft: boolean;
 }
 
+export interface UpdatePullRequestOptions {
+  description: string;
+}
+
 export interface PullRequestService {
   create(options: CreatePullRequestOptions): Promise<PullRequest>;
+  update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest>;
   get(prId: number): Promise<PullRequest>;
   findForCurrentBranch(): Promise<PullRequest>;
   resolve(requestedPrId: number | undefined): Promise<PullRequest>;
@@ -96,6 +101,15 @@ export function createPullRequestService({
     });
   }
 
+  /** Updates the selected pull request's description, including an explicitly empty description. */
+  async function update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest> {
+    const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
+    return azure.request<PullRequest>(url, {
+      method: "PATCH",
+      body: { description: options.description },
+    });
+  }
+
   /** Fetches a pull request by ID, including its description and other PR-level metadata. */
   async function get(prId: number): Promise<PullRequest> {
     const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
@@ -137,5 +151,5 @@ export function createPullRequestService({
     ].join("\n");
   }
 
-  return { create, get, findForCurrentBranch, resolve, resolveId, format };
+  return { create, update, get, findForCurrentBranch, resolve, resolveId, format };
 }
