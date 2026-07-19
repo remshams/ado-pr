@@ -1,0 +1,32 @@
+---
+name: azure-pr
+description: "Manage Azure DevOps pull requests and review comments with pr.sh: create PRs; list PR comment threads and inspect review feedback; post, reply to, edit, delete, and resolve comments; and run batch operations. Use whenever the user asks to open an Azure DevOps PR, list or review PR comments, respond to PR feedback, or post code-review findings."
+---
+
+# Azure DevOps PR tooling
+
+Use `pr.sh` (can be found in one of projects in the "~/coding" folder) for Azure DevOps pull-request and review-comment operations. Run it from the root of the target Azure Repos checkout so it can discover the repository, current branch, and active pull request.
+
+Treat the tool's current CLI help as the source of truth for actions, options, validation, authentication, batch schemas, and output. Do not duplicate that reference in this skill. Use `pr.sh --help`; if authentication is not configured yet, run the adjacent `pr.ts` entrypoint with `--help` instead.
+
+Try to combine as many requests as possible into e.g. batch requests to avoid frequent authentication calls (e.g. if the user is using the 1password integration)
+
+## Disclose AI authorship
+
+Every PR comment whose content is written or rewritten by an agent must disclose the AI authorship and the actual model used. This applies to:
+
+- New threads created with `comment`.
+- Replies created with `reply`.
+- Comment content replaced with `edit`.
+- Every batch operation containing a `message` (`comment`, `reply`, or `edit`).
+
+Append the disclosure on its own lines after the comment content:
+
+```text
+---
+🤖 Written by an AI agent (<actual model name>).
+```
+
+Replace `<actual model name>` with the model currently running. When editing a comment, ensure the resulting content contains one current disclosure rather than dropping it or adding duplicates. Never post or edit agent-authored comment text without the disclosure.
+
+Operations that do not write comment content, such as `delete` and `resolve`, do not require a disclosure.
