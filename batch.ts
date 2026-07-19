@@ -1,26 +1,85 @@
-import {
-  actionRequiresComment,
-  actionRequiresMessage,
-  actionRequiresThread,
-  isPositiveInteger,
-  toCommentLocation,
-} from "./operation-types.ts";
+import { isPositiveInteger, toCommentLocation } from "./operation-types.ts";
 import type { ThreadService } from "./threads.ts";
 
-interface BatchOperation {
-  action: "comment" | "reply" | "edit" | "delete" | "resolve";
+type BatchCommand =
+  | "comment.create"
+  | "comment.reply"
+  | "comment.edit"
+  | "comment.delete"
+  | "comment.resolve";
+
+interface BatchOperationBase {
+  command: BatchCommand;
   pr?: number;
-  thread?: number;
-  comment?: number;
-  message?: string;
+}
+
+interface BatchCreateOperation extends BatchOperationBase {
+  command: "comment.create";
+  message: string;
   file?: string;
   line?: number;
   endLine?: number;
 }
 
-const BATCH_ACTIONS: BatchOperation["action"][] = ["comment", "reply", "edit", "delete", "resolve"];
+interface BatchReplyOperation extends BatchOperationBase {
+  command: "comment.reply";
+  thread: number;
+  message: string;
+}
 
-/** Validates and normalizes a single element of a `batch` action's JSON operations array. */
+interface BatchEditOperation extends BatchOperationBase {
+  command: "comment.edit";
+  thread: number;
+  comment: number;
+  message: string;
+}
+
+interface BatchDeleteOperation extends BatchOperationBase {
+  command: "comment.delete";
+  thread: number;
+  comment: number;
+}
+
+interface BatchResolveOperation extends BatchOperationBase {
+  command: "comment.resolve";
+  thread: number;
+}
+
+type BatchOperation =
+  | BatchCreateOperation
+  | BatchReplyOperation
+  | BatchEditOperation
+  | BatchDeleteOperation
+  | BatchResolveOperation;
+
+const BATCH_COMMANDS: BatchCommand[] = [
+  "comment.create",
+  "comment.reply",
+  "comment.edit",
+  "comment.delete",
+  "comment.resolve",
+];
+
+const BATCH_FIELDS_BY_COMMAND: Record<BatchCommand, readonly string[]> = {
+  "comment.create": ["command", "pr", "message", "file", "line", "endLine"],
+  "comment.reply": ["command", "pr", "thread", "message"],
+  "comment.edit": ["command", "pr", "thread", "comment", "message"],
+  "comment.delete": ["command", "pr", "thread", "comment"],
+  "comment.resolve": ["command", "pr", "thread"],
+};
+
+const BATCH_FIELDS = new Set([
+  "command",
+  "pr",
+  "thread",
+  "comment",
+  "message",
+  "file",
+  "line",
+  "endLine",
+]);
+
+/** Validates and normalizes one element of a `comment batch` command's JSON operations array. */
 function parseBatchOperation(raw: unknown, index: number): BatchOperation {
   const label = `Batch operation ${index + 1}`;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -28,11 +87,21 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
   }
   const op = raw as Record<string, unknown>;
 
-  const action = op.action;
-  if (typeof action !== "string" || !BATCH_ACTIONS.includes(action as BatchOperation["action"])) {
+  const command = op.command;
+  if (typeof command !== "string" || !BATCH_COMMANDS.includes(command as BatchCommand)) {
     throw new Error(
-      `${label} has an invalid "action" (must be one of: ${BATCH_ACTIONS.join(", ")}).`,
+      `${label} has an invalid "command" (must be one of: ${BATCH_COMMANDS.join(", ")}).`,
     );
+  }
+  const batchCommand = command as BatchCommand;
+  const allowedFields = BATCH_FIELDS_BY_COMMAND[batchCommand];
+  for (const field of Object.keys(op)) {
+    if (!BATCH_FIELDS.has(field)) {
+      throw new Error(`${label} ("${batchCommand}") has an unknown field "${field}".`);
+    }
+    if (!allowedFields.includes(field)) {
+      throw new Error(`${label} ("${batchCommand}") has an irrelevant field "${field}".`);
+    }
   }
 
   function positiveIntField(field: string): number | undefined {
@@ -46,51 +115,91 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
     return value;
   }
 
+  function requiredPositiveIntField(field: string): number {
+    const value = positiveIntField(field);
+    if (value === undefined) {
+      throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
+    }
+    return value;
+  }
+
+  function requiredMessage(): string {
+    const value = op.message;
+    if (value === undefined || value === "") {
+      throw new Error(`${label} ("${batchCommand}") requires a "message".`);
+    }
+    if (typeof value !== "string") {
+      throw new Error(`${label} has an invalid "message" (must be a string).`);
+    }
+    return value;
+  }
+
+  function optionalFile(): string | undefined {
+    const value = op.file;
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`${label} has an invalid "file" (must be a non-empty string).`);
+    }
+    return value;
+  }
+
   const pr = positiveIntField("pr");
-  const thread = positiveIntField("thread");
-  const comment = positiveIntField("comment");
-  const line = positiveIntField("line");
-  const endLine = positiveIntField("endLine");
-  const message = typeof op.message === "string" ? op.message : undefined;
-  const file = typeof op.file === "string" ? op.file : undefined;
-
-  if (actionRequiresThread(action) && !thread) {
-    throw new Error(`${label} ("${action}") requires a "thread".`);
+  switch (batchCommand) {
+    case "comment.create": {
+      const message = requiredMessage();
+      const file = optionalFile();
+      const line = positiveIntField("line");
+      const endLine = positiveIntField("endLine");
+      if (line !== undefined && file === undefined) {
+        throw new Error(`${label} ("${batchCommand}") has "line" but no "file".`);
+      }
+      if (endLine !== undefined && line === undefined) {
+        throw new Error(`${label} ("${batchCommand}") has "endLine" but no "line".`);
+      }
+      if (endLine !== undefined && line !== undefined && endLine < line) {
+        throw new Error(`${label} ("${batchCommand}") has "endLine" < "line".`);
+      }
+      return { command: batchCommand, pr, message, file, line, endLine };
+    }
+    case "comment.reply":
+      return {
+        command: batchCommand,
+        pr,
+        thread: requiredPositiveIntField("thread"),
+        message: requiredMessage(),
+      };
+    case "comment.edit":
+      return {
+        command: batchCommand,
+        pr,
+        thread: requiredPositiveIntField("thread"),
+        comment: requiredPositiveIntField("comment"),
+        message: requiredMessage(),
+      };
+    case "comment.delete":
+      return {
+        command: batchCommand,
+        pr,
+        thread: requiredPositiveIntField("thread"),
+        comment: requiredPositiveIntField("comment"),
+      };
+    case "comment.resolve":
+      return {
+        command: batchCommand,
+        pr,
+        thread: requiredPositiveIntField("thread"),
+      };
   }
-  if (actionRequiresComment(action) && !comment) {
-    throw new Error(`${label} ("${action}") requires a "comment".`);
-  }
-  if (actionRequiresMessage(action) && !message) {
-    throw new Error(`${label} ("${action}") requires a "message".`);
-  }
-  if (line !== undefined && !file) {
-    throw new Error(`${label} ("${action}") has "line" but no "file".`);
-  }
-  if (endLine !== undefined && line === undefined) {
-    throw new Error(`${label} ("${action}") has "endLine" but no "line".`);
-  }
-  if (endLine !== undefined && line !== undefined && endLine < line) {
-    throw new Error(`${label} ("${action}") has "endLine" < "line".`);
-  }
-
-  return {
-    action: action as BatchOperation["action"],
-    pr,
-    thread,
-    comment,
-    message,
-    file,
-    line,
-    endLine,
-  };
 }
 
-/** Reads and JSON-parses the full contents of stdin. Used by the `batch` action. */
+/** Reads and JSON-parses the full contents of stdin. Used by the `comment batch` command. */
 async function readStdinJson(): Promise<unknown> {
   if (process.stdin.isTTY) {
     throw new Error(
-      "batch reads its operations from stdin, but none was piped/redirected in " +
-        "(stdin is a terminal). Use e.g. `pr.sh batch < operations.json`.",
+      "comment batch reads its operations from stdin, but none was piped/redirected in " +
+        "(stdin is a terminal). Use e.g. `pr.sh comment batch < operations.json`.",
     );
   }
 
@@ -101,7 +210,7 @@ async function readStdinJson(): Promise<unknown> {
   const raw = Buffer.concat(chunks).toString("utf8").trim();
   if (!raw) {
     throw new Error(
-      "No batch operations provided on stdin. Pipe/redirect a JSON array of operations in, e.g. `pr.sh batch < operations.json`.",
+      "No batch operations provided on stdin. Pipe/redirect a JSON array of operations in, e.g. `pr.sh comment batch < operations.json`.",
     );
   }
   try {
@@ -118,27 +227,27 @@ async function executeBatchOperation(
   op: BatchOperation,
 ): Promise<string> {
   const prId = op.pr ?? defaultPrId;
-  switch (op.action) {
-    case "comment": {
+  switch (op.command) {
+    case "comment.create": {
       const location = toCommentLocation(op);
-      const thread = await threads.comment(prId, op.message!, location);
+      const thread = await threads.comment(prId, op.message, location);
       const url = threads.webUrl(prId, thread.id);
       return `posted new comment thread ${thread.id} on PR #${prId} (${url})`;
     }
-    case "reply": {
-      await threads.reply(prId, op.thread!, op.message!);
+    case "comment.reply": {
+      await threads.reply(prId, op.thread, op.message);
       return `posted reply to thread ${op.thread} on PR #${prId}`;
     }
-    case "edit": {
-      await threads.edit(prId, op.thread!, op.comment!, op.message!);
+    case "comment.edit": {
+      await threads.edit(prId, op.thread, op.comment, op.message);
       return `edited comment ${op.comment} in thread ${op.thread} on PR #${prId}`;
     }
-    case "delete": {
-      await threads.delete(prId, op.thread!, op.comment!);
+    case "comment.delete": {
+      await threads.delete(prId, op.thread, op.comment);
       return `deleted comment ${op.comment} from thread ${op.thread} on PR #${prId}`;
     }
-    case "resolve": {
-      await threads.resolve(prId, op.thread!);
+    case "comment.resolve": {
+      await threads.resolve(prId, op.thread);
       return `marked thread ${op.thread} on PR #${prId} as resolved`;
     }
   }
@@ -160,7 +269,7 @@ export function createBatchRunner({ threads }: { threads: ThreadService }): {
 
     let hadFailure = false;
     for (const [index, op] of operations.entries()) {
-      const label = `[${index + 1}/${operations.length}] ${op.action}`;
+      const label = `[${index + 1}/${operations.length}] ${op.command}`;
       try {
         const result = await executeBatchOperation(threads, defaultPrId, op);
         console.log(`${label}: ${result}`);

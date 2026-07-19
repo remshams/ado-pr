@@ -226,7 +226,7 @@ test("runPr rejects non-finite response delays before serializing fixtures", (t)
 });
 
 test("runPr rejects unexpected requests and preserves their call record", (t) => {
-  const result = runPr(t, ["list", "--pr", "7"], { cwd: createRepo(t) });
+  const result = runPr(t, ["comment", "list", "--pr", "7"], { cwd: createRepo(t) });
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unexpected fetch request: GET /);
@@ -242,7 +242,7 @@ test("runPr makes unused preload responses fail the subprocess", (t) => {
 });
 
 test("runPr records a request when the application fails", (t) => {
-  const result = runPr(t, ["list", "--pr", "8"], {
+  const result = runPr(t, ["comment", "list", "--pr", "8"], {
     cwd: createRepo(t),
     responses: [{ status: 503, statusText: "Service Unavailable", body: "test outage" }],
   });
@@ -261,7 +261,7 @@ test("runPr isolates ambient secrets and NODE_OPTIONS while enforcing the fake P
   process.env[secretName] = "must-not-leak";
   process.env.NODE_OPTIONS = "--definitely-not-a-real-node-option";
 
-  const result = runPr(t, ["list", "--pr", "9", "--json"], {
+  const result = runPr(t, ["comment", "list", "--pr", "9", "--json"], {
     cwd: createRepo(t),
     responses: [{ json: { value: [] } }],
     env: {
@@ -285,7 +285,7 @@ test("runPr isolates ambient secrets and NODE_OPTIONS while enforcing the fake P
 test("runPr reports a bounded subprocess timeout", (t) => {
   assert.throws(
     () =>
-      runPr(t, ["list", "--pr", "10"], {
+      runPr(t, ["comment", "list", "--pr", "10"], {
         cwd: createRepo(t),
         responses: [{ delayMs: 2_000, json: { value: [] } }],
         timeout: 250,

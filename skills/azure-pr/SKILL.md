@@ -9,16 +9,16 @@ Use `pr.sh` (can be found in one of projects in the "~/coding" folder) for Azure
 
 Treat the tool's current CLI help as the source of truth for actions, options, validation, authentication, batch schemas, and output. Do not duplicate that reference in this skill. Use `pr.sh --help`; if authentication is not configured yet, run the adjacent `pr.ts` entrypoint with `--help` instead.
 
-Try to combine as many requests as possible into e.g. batch requests to avoid frequent authentication calls (e.g. if the user is using the 1password integration)
+Try to combine as many requests as possible with `pr.sh comment batch` to avoid frequent authentication calls (for example, when the user is using the 1Password integration). Batch input uses qualified `command` values such as `comment.create`, `comment.reply`, and `comment.edit`; consult `--help` for the current schema.
 
 ## Disclose AI authorship
 
 Every PR comment whose content is written or rewritten by an agent must disclose the AI authorship and the actual model used. This applies to:
 
-- New threads created with `comment`.
-- Replies created with `reply`.
-- Comment content replaced with `edit`.
-- Every batch operation containing a `message` (`comment`, `reply`, or `edit`).
+- New threads created with `pr.sh comment create`.
+- Replies created with `pr.sh comment reply`.
+- Comment content replaced with `pr.sh comment edit`.
+- Every `pr.sh comment batch` operation containing a `message` (`comment.create`, `comment.reply`, or `comment.edit`).
 
 Append the disclosure on its own lines after the comment content:
 
@@ -29,4 +29,4 @@ Append the disclosure on its own lines after the comment content:
 
 Replace `<actual model name>` with the model currently running. When editing a comment, ensure the resulting content contains one current disclosure rather than dropping it or adding duplicates. Never post or edit agent-authored comment text without the disclosure.
 
-Operations that do not write comment content, such as `delete` and `resolve`, do not require a disclosure.
+Operations that do not write comment content, such as `pr.sh comment delete`, `pr.sh comment resolve`, `comment.delete`, and `comment.resolve`, do not require a disclosure.

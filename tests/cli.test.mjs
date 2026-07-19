@@ -6,8 +6,9 @@ import { spawnTestProcess } from "./test-helpers.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
-const usageFirstLine =
-  "Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]";
+const usageFirstLine = "Usage: pr.sh pr show [--pr <id>] [--json]";
+const missingPatError =
+  "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n";
 const childEnvAllowlist = new Set([
   "HOME",
   "PATH",
@@ -33,7 +34,7 @@ function runCliWithEnv(envOverrides, ...args) {
   assert.equal(env.NODE_OPTIONS, undefined);
   assert.equal(env.AZURE_DEVOPS_PAT, undefined);
 
-  const result = spawnTestProcess(
+  return spawnTestProcess(
     process.execPath,
     ["--experimental-strip-types", "--disable-warning=ExperimentalWarning", cliPath, ...args],
     {
@@ -43,8 +44,6 @@ function runCliWithEnv(envOverrides, ...args) {
       env: { ...env, ...envOverrides },
     },
   );
-
-  return result;
 }
 
 function runCli(...args) {
@@ -62,157 +61,326 @@ function assertUsageError(result, expectedError) {
   assert.ok(result.stderr.startsWith(`${expectedError}\n\n${usageFirstLine}\n`));
 }
 
-test("--help prints the documented actions and options", () => {
-  const result = runCli("--help");
+function assertParsedBeforePat(...args) {
+  const result = runCli(...args);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, missingPatError);
+}
 
+function assertSuccessfulHelp(result) {
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "");
   assert.equal(firstLine(result.stderr), usageFirstLine);
-  assert.ok(result.stderr.includes("       pr.sh show [--pr <id>] [--json]"));
-  assert.ok(
-    result.stderr.includes('       pr.sh update [--description "..."] [--draft] [--pr <id>]'),
-  );
-  assert.ok(
-    result.stderr.includes(
-      '       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]',
-    ),
-  );
-  assert.ok(result.stderr.includes("       pr.sh delete --thread <id> --comment <id> [--pr <id>]"));
-  assert.match(result.stderr, /\nActions:\n/);
-  assert.match(
-    result.stderr,
-    /  show\s+Shows details for the pull request matching the current branch,/,
-  );
-  assert.match(
-    result.stderr,
-    /  update\s+Updates the pull request's description and\/or marks it as a draft\./,
-  );
-  assert.match(result.stderr, /  reply\s+Posts a reply comment to an existing thread\./);
-  assert.match(result.stderr, /  edit\s+Edits an existing comment in a thread\./);
-  assert.match(result.stderr, /  delete\s+Deletes an existing comment from a thread\./);
-  assert.match(result.stderr, /\nOptions:\n/);
-  assert.match(result.stderr, /  --thread <id>\s+Required for reply\/edit\/delete\/resolve\./);
-  assert.match(result.stderr, /  --comment <id>\s+Required for edit\/delete\./);
-  assert.match(result.stderr, /  --message <text>\s+Required for comment\/reply\/edit\./);
-  assert.match(
-    result.stderr,
-    /For `update`, the replacement description \(may be empty to clear it\)\./,
-  );
-  assert.match(result.stderr, /For `update`,\s+marks the existing pull request as a draft\./);
-  assert.match(result.stderr, /For `show`, print the raw pull request data as JSON/);
-  assert.match(result.stderr, /  -h, --help\s+Show this help\./);
-  assert.match(result.stderr, /\nRequires:\n/);
-});
+}
 
-test("an unknown action reports the action before usage", () => {
-  const result = runCli("mystery");
+test("bare --help and -h document every resource-first command and the batch contract", () => {
+  const result = runCli("--help");
 
-  assertUsageError(result, 'Error: unknown action "mystery"');
-  assert.match(result.stderr, /\nActions:\n/);
-});
-
-test("update requires a change and accepts draft or an explicit description value", () => {
-  const missingChange = runCli("update");
-  assertUsageError(missingChange, 'Error: --description or --draft is required for "update"');
-
-  const bareDescription = runCli("update", "--description");
-  assertUsageError(
-    bareDescription,
-    'Error: --description requires an explicit value (use --description "" to clear)',
-  );
-
-  for (const args of [
-    ["update", "--description", ""],
-    ["update", "--description="],
-    ["update", "--description", "-"],
-    ["update", "--draft"],
+  assertSuccessfulHelp(result);
+  for (const command of [
+    "pr show",
+    "pr create",
+    "pr edit",
+    "comment list",
+    "comment create",
+    "comment reply",
+    "comment edit",
+    "comment delete",
+    "comment resolve",
+    "comment batch",
   ]) {
-    const emptyDescription = runCli(...args);
-    assert.equal(emptyDescription.status, 1);
-    assert.equal(emptyDescription.stdout, "");
-    assert.equal(
-      emptyDescription.stderr,
-      "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
-    );
+    assert.match(result.stderr, new RegExp(`pr\\.sh ${command.replace(" ", " ")}`));
+  }
+  assert.match(result.stderr, /--draft \| --no-draft/);
+  assert.match(result.stderr, /  --no-draft\s+Mark an existing PR as ready/);
+  assert.match(result.stderr, /  -h, --help\s+Show this help\./);
+
+  for (const shape of [
+    '{"command":"comment.create","message":"...","pr"?:n,"file"?:"...","line"?:n,"endLine"?:n}',
+    '{"command":"comment.reply","thread":n,"message":"...","pr"?:n}',
+    '{"command":"comment.edit","thread":n,"comment":n,"message":"...","pr"?:n}',
+    '{"command":"comment.delete","thread":n,"comment":n,"pr"?:n}',
+    '{"command":"comment.resolve","thread":n,"pr"?:n}',
+  ]) {
+    assert.ok(result.stderr.includes(shape));
+  }
+  assert.match(result.stderr, /Per-operation "pr" overrides the command's --pr\/default PR/);
+  assert.match(
+    result.stderr,
+    /Unknown fields and\s+fields irrelevant to the selected command are invalid\./,
+  );
+  assert.match(result.stderr, /Operations execute sequentially in array\s+order\./);
+  assert.match(result.stderr, /A failed operation is reported and later operations still run/);
+  assert.match(result.stderr, /process exits nonzero if any operation failed\./);
+
+  assertSuccessfulHelp(runCli("-h"));
+});
+
+test("qualified command help succeeds after route and supplied-option validation", () => {
+  for (const [resource, command] of [
+    ["pr", "show"],
+    ["pr", "create"],
+    ["pr", "edit"],
+    ["comment", "list"],
+    ["comment", "create"],
+    ["comment", "reply"],
+    ["comment", "edit"],
+    ["comment", "delete"],
+    ["comment", "resolve"],
+    ["comment", "batch"],
+  ]) {
+    assertSuccessfulHelp(runCli(resource, command, "--help"));
+  }
+  assertSuccessfulHelp(runCli("pr", "show", "--pr", "42", "-h"));
+});
+
+test("help does not mask malformed command-like invocations", () => {
+  const cases = [
+    [["pr", "--help"], 'Error: a command is required for resource "pr"'],
+    [["mystery", "show", "--help"], 'Error: unknown resource "mystery"'],
+    [["pr", "mystery", "--help"], 'Error: unknown command "mystery" for resource "pr"'],
+    [["pr", "show", "extra", "--help"], 'Error: unexpected positional argument "extra"'],
+    [["pr", "show", "--json", "--json", "--help"], "Error: --json may only be passed once"],
+    [["pr", "show", "--help", "-h"], "Error: -h may only be passed once"],
+    [["pr", "show", "--title", "x", "--help"], 'Error: --title is not valid for "pr show"'],
+    [["pr", "show", "--bogus", "--help"], 'Error: unknown option "--bogus"'],
+    [
+      ["pr", "show", "--pr", "0", "--help"],
+      'Error: invalid --pr "0" (pass it once, as a single positive integer)',
+    ],
+    [
+      ["pr", "edit", "--draft", "--no-draft", "--help"],
+      "Error: --draft and --no-draft cannot be used together",
+    ],
+    [["comment", "create", "--line", "2", "--help"], "Error: --line requires --file"],
+  ];
+
+  for (const [args, expected] of cases) {
+    assertUsageError(runCli(...args), expected);
   }
 });
 
-test("reply validates a missing thread before a missing message", () => {
-  const missingBoth = runCli("reply");
-  assertUsageError(missingBoth, 'Error: --thread is required for "reply"');
-
-  const missingMessage = runCli("reply", "--thread", "7");
-  assertUsageError(missingMessage, 'Error: --message is required for "reply"');
+test("no command is a usage error instead of defaulting to comment list", () => {
+  assertUsageError(runCli(), "Error: a resource and command are required");
+  assertUsageError(runCli("comment"), 'Error: a command is required for resource "comment"');
+  assertUsageError(runCli("pr"), 'Error: a command is required for resource "pr"');
 });
 
-test("edit requires a thread, comment, and message in order", () => {
-  const missingAll = runCli("edit");
-  assertUsageError(missingAll, 'Error: --thread is required for "edit"');
-
-  const missingComment = runCli("edit", "--thread", "7");
-  assertUsageError(missingComment, 'Error: --comment is required for "edit"');
-
-  const missingMessage = runCli("edit", "--thread", "7", "--comment", "8");
-  assertUsageError(missingMessage, 'Error: --message is required for "edit"');
-});
-
-test("delete requires a thread and comment, but not a message", () => {
-  const missingBoth = runCli("delete");
-  assertUsageError(missingBoth, 'Error: --thread is required for "delete"');
-
-  const missingComment = runCli("delete", "--thread", "7");
-  assertUsageError(missingComment, 'Error: --comment is required for "delete"');
-
-  const valid = runCli("delete", "--thread", "7", "--comment", "8");
-  assert.equal(valid.status, 1);
-  assert.equal(valid.stdout, "");
-  assert.equal(
-    valid.stderr,
-    "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
+test("unknown resources, commands, and extra positional arguments are rejected", () => {
+  assertUsageError(runCli("mystery", "show"), 'Error: unknown resource "mystery"');
+  assertUsageError(runCli("pr", "mystery"), 'Error: unknown command "mystery" for resource "pr"');
+  assertUsageError(
+    runCli("comment", "list", "extra"),
+    'Error: unexpected positional argument "extra"',
   );
 });
 
-test("comment IDs must be positive integers", () => {
-  const result = runCli("delete", "--thread", "7", "--comment", "0");
+test("legacy flat action aliases remain rejected even when combined with help", () => {
+  for (const action of [
+    "list",
+    "show",
+    "update",
+    "create",
+    "reply",
+    "edit",
+    "delete",
+    "resolve",
+    "batch",
+  ]) {
+    assertUsageError(runCli(action), `Error: unknown resource "${action}"`);
+    assertUsageError(runCli(action, "--help"), `Error: unknown resource "${action}"`);
+  }
 
   assertUsageError(
-    result,
-    'Error: invalid --comment "0" (pass it once, as a single positive integer)',
+    runCli("comment", "--help"),
+    'Error: a command is required for resource "comment"',
+  );
+  for (const help of [undefined, "--help"]) {
+    const args = ["comment", "--message", "old", ...(help ? [help] : [])];
+    assertUsageError(runCli(...args), 'Error: a command is required for resource "comment"');
+  }
+});
+
+test("unknown flags and invalid boolean values are rejected", () => {
+  assertUsageError(runCli("pr", "show", "--bogus"), 'Error: unknown option "--bogus"');
+  assertUsageError(runCli("pr", "show", "-x"), 'Error: unknown option "-x"');
+  assertUsageError(runCli("pr", "show", "--json=true"), "Error: --json does not take a value");
+});
+
+test("each command rejects options belonging to other commands", () => {
+  const cases = [
+    [["pr", "show", "--title", "x"], 'Error: --title is not valid for "pr show"'],
+    [["pr", "create", "--title", "x", "--pr", "1"], 'Error: --pr is not valid for "pr create"'],
+    [["pr", "edit", "--draft", "--json"], 'Error: --json is not valid for "pr edit"'],
+    [["comment", "list", "--message", "x"], 'Error: --message is not valid for "comment list"'],
+    [
+      ["comment", "create", "--message", "x", "--json"],
+      'Error: --json is not valid for "comment create"',
+    ],
+    [
+      ["comment", "reply", "--thread", "1", "--message", "x", "--comment", "2"],
+      'Error: --comment is not valid for "comment reply"',
+    ],
+    [
+      ["comment", "edit", "--thread", "1", "--comment", "2", "--message", "x", "--file", "a.ts"],
+      'Error: --file is not valid for "comment edit"',
+    ],
+    [
+      ["comment", "delete", "--thread", "1", "--comment", "2", "--message", "x"],
+      'Error: --message is not valid for "comment delete"',
+    ],
+    [
+      ["comment", "resolve", "--thread", "1", "--comment", "2"],
+      'Error: --comment is not valid for "comment resolve"',
+    ],
+    [["comment", "batch", "--json"], 'Error: --json is not valid for "comment batch"'],
+  ];
+
+  for (const [args, expected] of cases) {
+    assertUsageError(runCli(...args), expected);
+  }
+});
+
+test("required command options are validated in dependency order", () => {
+  assertUsageError(runCli("pr", "create"), 'Error: --title is required for "pr create"');
+  assertUsageError(
+    runCli("comment", "create"),
+    'Error: --message is required for "comment create"',
+  );
+
+  assertUsageError(runCli("comment", "reply"), 'Error: --thread is required for "comment reply"');
+  assertUsageError(
+    runCli("comment", "reply", "--thread", "7"),
+    'Error: --message is required for "comment reply"',
+  );
+
+  assertUsageError(runCli("comment", "edit"), 'Error: --thread is required for "comment edit"');
+  assertUsageError(
+    runCli("comment", "edit", "--thread", "7"),
+    'Error: --comment is required for "comment edit"',
+  );
+  assertUsageError(
+    runCli("comment", "edit", "--thread", "7", "--comment", "8"),
+    'Error: --message is required for "comment edit"',
+  );
+
+  assertUsageError(
+    runCli("comment", "delete", "--thread", "7"),
+    'Error: --comment is required for "comment delete"',
+  );
+  assertUsageError(
+    runCli("comment", "resolve"),
+    'Error: --thread is required for "comment resolve"',
   );
 });
 
-test("a repeated string flag is rejected", () => {
-  const result = runCli("comment", "--message", "first", "--message", "second");
-
+test("pr edit requires an explicit change and supports setting or clearing draft", () => {
   assertUsageError(
-    result,
-    'Error: invalid --message "first,second" (pass it once, as a single string)',
+    runCli("pr", "edit"),
+    'Error: --description, --draft, or --no-draft is required for "pr edit"',
   );
+  assertUsageError(
+    runCli("pr", "edit", "--description"),
+    "Error: --description requires an explicit value",
+  );
+  assertUsageError(
+    runCli("pr", "edit", "--draft", "--no-draft"),
+    "Error: --draft and --no-draft cannot be used together",
+  );
+  assertUsageError(
+    runCli("pr", "create", "--title", "x", "--no-draft"),
+    'Error: --no-draft is not valid for "pr create"',
+  );
+
+  for (const args of [
+    ["pr", "edit", "--description", ""],
+    ["pr", "edit", "--description="],
+    ["pr", "edit", "--description", "-"],
+    ["pr", "edit", "--draft"],
+    ["pr", "edit", "--no-draft"],
+  ]) {
+    assertParsedBeforePat(...args);
+  }
 });
 
-test("a non-positive integer flag is rejected", () => {
-  const result = runCli("resolve", "--thread", "0");
-
+test("positive integer flags and duplicate flags are rejected", () => {
   assertUsageError(
-    result,
+    runCli("comment", "resolve", "--thread", "0"),
     'Error: invalid --thread "0" (pass it once, as a single positive integer)',
   );
+  assertUsageError(
+    runCli("comment", "delete", "--thread", "7", "--comment", "1.5"),
+    'Error: invalid --comment "1.5" (pass it once, as a single positive integer)',
+  );
+  assertUsageError(
+    runCli("pr", "show", "--pr", "abc"),
+    'Error: invalid --pr "abc" (pass it once, as a single positive integer)',
+  );
+  assertUsageError(
+    runCli("comment", "create", "--message", "first", "--message", "second"),
+    "Error: --message may only be passed once",
+  );
+  assertUsageError(
+    runCli("comment", "list", "--json", "--json"),
+    "Error: --json may only be passed once",
+  );
 });
 
-test("a valid command fails cleanly when AZURE_DEVOPS_PAT is absent", () => {
-  const result = runCli("resolve", "--thread", "7");
-
-  assert.equal(result.status, 1);
-  assert.equal(result.stdout, "");
-  assert.equal(
-    result.stderr,
-    "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
+test("comment create preserves file line-range validation", () => {
+  assertUsageError(
+    runCli("comment", "create", "--message", "x", "--file", ""),
+    "Error: --file must not be empty",
   );
+  assertUsageError(
+    runCli("comment", "create", "--message", "x", "--line", "2"),
+    "Error: --line requires --file",
+  );
+  assertUsageError(
+    runCli("comment", "create", "--message", "x", "--file", "a.ts", "--end-line", "3"),
+    "Error: --end-line requires --line",
+  );
+  assertUsageError(
+    runCli(
+      "comment",
+      "create",
+      "--message",
+      "x",
+      "--file",
+      "a.ts",
+      "--line",
+      "5",
+      "--end-line",
+      "3",
+    ),
+    "Error: --end-line must be >= --line",
+  );
+  assertUsageError(
+    runCli("comment", "create", "--message", "x", "--file", "a.ts", "--line", "-1"),
+    'Error: invalid --line "-1" (pass it once, as a single positive integer)',
+  );
+});
+
+test("valid resource-first commands reach PAT validation", () => {
+  for (const args of [
+    ["pr", "show"],
+    ["pr", "create", "--title", "New PR"],
+    ["comment", "list"],
+    ["comment", "create", "--message", "Note"],
+    ["comment", "reply", "--thread", "7", "--message", "Reply"],
+    ["comment", "edit", "--thread", "7", "--comment", "8", "--message", "Edit"],
+    ["comment", "delete", "--thread", "7", "--comment", "8"],
+    ["comment", "resolve", "--thread", "7"],
+    ["comment", "batch"],
+  ]) {
+    assertParsedBeforePat(...args);
+  }
 });
 
 test("an unresolved op reference explains that an Environment mount needs a literal PAT", () => {
   const result = runCliWithEnv(
     { AZURE_DEVOPS_PAT: "op://Private/Azure DevOps/PAT" },
+    "comment",
     "resolve",
     "--thread",
     "7",
