@@ -118,7 +118,8 @@ Options:
 Requires:
   - Being run from within a git checkout whose origin remote points at Azure Repos (so the
     current branch/remote can be read).
-  - AZURE_DEVOPS_PAT exported by the caller or set in .env (literal PAT or op:// reference).
+  - AZURE_DEVOPS_PAT exported by the caller or set in .env. Regular .env files accept a literal
+    PAT or op:// reference; a 1Password Environment may instead mount a literal PAT at that path.
 `);
   process.exit(message ? 1 : 0);
 }
@@ -255,6 +256,12 @@ export function getPat(): string {
   if (!pat) {
     console.error(
       "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.",
+    );
+    process.exit(1);
+  }
+  if (pat.startsWith("op://")) {
+    console.error(
+      "Error: AZURE_DEVOPS_PAT is still an op:// reference. pr.sh resolves references from regular .env files, but a 1Password Environment mount must contain the literal PAT.",
     );
     process.exit(1);
   }

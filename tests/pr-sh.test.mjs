@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -122,6 +123,30 @@ launcherTest(
     assert.equal(existsSync(fixture.shellMarkerPath), false);
   },
 );
+
+launcherTest("loads a literal PAT from a 1Password Environment-style named pipe", (t) => {
+  const fixture = createFixture(t);
+  execFileSync("mkfifo", [fixture.envPath]);
+
+  const writer = spawn(
+    process.execPath,
+    [
+      "-e",
+      `require("node:fs").writeFileSync(${JSON.stringify(fixture.envPath)}, "AZURE_DEVOPS_PAT=mounted-literal-pat\\nADO_PR_ENV_MARKER=loaded-from-mount\\n")`,
+    ],
+    { stdio: "ignore" },
+  );
+  t.after(() => writer.kill());
+
+  const result = runLauncher(fixture, ["list"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readCapture(fixture), {
+    pat: "mounted-literal-pat",
+    marker: "loaded-from-mount",
+    args: ["list"],
+  });
+});
 
 launcherTest("resolves a quoted dotenv op reference through the 1Password CLI", (t) => {
   const fixture = createFixture(t, 'export AZURE_DEVOPS_PAT="op://Private/Azure/PAT"\r\n');

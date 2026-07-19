@@ -28,7 +28,7 @@ function minimalChildEnv() {
   );
 }
 
-function runCli(...args) {
+function runCliWithEnv(envOverrides, ...args) {
   const env = minimalChildEnv();
   assert.equal(env.NODE_OPTIONS, undefined);
   assert.equal(env.AZURE_DEVOPS_PAT, undefined);
@@ -40,11 +40,15 @@ function runCli(...args) {
       cwd: projectRoot,
       description: `pr.ts ${JSON.stringify(args)}`,
       encoding: "utf8",
-      env,
+      env: { ...env, ...envOverrides },
     },
   );
 
   return result;
+}
+
+function runCli(...args) {
+  return runCliWithEnv({}, ...args);
 }
 
 function firstLine(output) {
@@ -159,5 +163,21 @@ test("a valid command fails cleanly when AZURE_DEVOPS_PAT is absent", () => {
   assert.equal(
     result.stderr,
     "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
+  );
+});
+
+test("an unresolved op reference explains that an Environment mount needs a literal PAT", () => {
+  const result = runCliWithEnv(
+    { AZURE_DEVOPS_PAT: "op://Private/Azure DevOps/PAT" },
+    "resolve",
+    "--thread",
+    "7",
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Error: AZURE_DEVOPS_PAT is still an op:// reference. pr.sh resolves references from regular .env files, but a 1Password Environment mount must contain the literal PAT.\n",
   );
 });
