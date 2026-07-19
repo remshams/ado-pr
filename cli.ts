@@ -9,6 +9,7 @@ import {
 
 export type Action =
   | "list"
+  | "show"
   | "reply"
   | "resolve"
   | "create"
@@ -41,6 +42,7 @@ function printUsageAndExit(message?: string): never {
     console.error(`Error: ${message}\n`);
   }
   console.error(`Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
+       pr.sh show [--pr <id>] [--json]
        pr.sh create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
        pr.sh comment --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
        pr.sh reply --thread <id> --message "..." [--pr <id>]
@@ -53,6 +55,9 @@ Actions:
   list                     Lists comment threads for the pull request matching the current
                            branch (both resolved and unresolved, unless narrowed below). This is
                            the default action.
+  show                     Shows details for the pull request matching the current branch,
+                           including its description, status, draft state, and source/target
+                           branches. Use --json to print the raw pull request data.
   create                   Creates a new pull request from the current branch (or --source, if
                            given). Prints the new PR's ID and web URL.
   comment                  Posts a new, top-level comment thread on the pull request - either
@@ -113,6 +118,8 @@ Options:
                            ones already marked fixed/closed/won't-fix.
   --json                   For \`list\`, print the raw thread data as JSON instead of a
                            human-readable summary. Any --exclude-* filters are applied first.
+                           For \`show\`, print the raw pull request data as JSON instead of the
+                           human-readable PR details.
   -h, --help               Show this help.
 
 Requires:
@@ -155,6 +162,7 @@ function parseStringFlag(argv: minimist.ParsedArgs, flag: string): string | unde
 
 const ACTIONS: Action[] = [
   "list",
+  "show",
   "reply",
   "resolve",
   "create",

@@ -68,6 +68,7 @@ test("--help prints the documented actions and options", () => {
   assert.equal(result.status, 0);
   assert.equal(result.stdout, "");
   assert.equal(firstLine(result.stderr), usageFirstLine);
+  assert.ok(result.stderr.includes("       pr.sh show [--pr <id>] [--json]"));
   assert.ok(
     result.stderr.includes(
       '       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]',
@@ -75,6 +76,10 @@ test("--help prints the documented actions and options", () => {
   );
   assert.ok(result.stderr.includes("       pr.sh delete --thread <id> --comment <id> [--pr <id>]"));
   assert.match(result.stderr, /\nActions:\n/);
+  assert.match(
+    result.stderr,
+    /  show\s+Shows details for the pull request matching the current branch,/,
+  );
   assert.match(result.stderr, /  reply\s+Posts a reply comment to an existing thread\./);
   assert.match(result.stderr, /  edit\s+Edits an existing comment in a thread\./);
   assert.match(result.stderr, /  delete\s+Deletes an existing comment from a thread\./);
@@ -82,6 +87,7 @@ test("--help prints the documented actions and options", () => {
   assert.match(result.stderr, /  --thread <id>\s+Required for reply\/edit\/delete\/resolve\./);
   assert.match(result.stderr, /  --comment <id>\s+Required for edit\/delete\./);
   assert.match(result.stderr, /  --message <text>\s+Required for comment\/reply\/edit\./);
+  assert.match(result.stderr, /For `show`, print the raw pull request data as JSON/);
   assert.match(result.stderr, /  -h, --help\s+Show this help\./);
   assert.match(result.stderr, /\nRequires:\n/);
 });

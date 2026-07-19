@@ -75,6 +75,102 @@ test("create dispatches directly without resolving an existing pull request", (t
   assert.equal(result.stdout, `Created PR #101: Dispatch coverage\n${webBase}/101\n`);
 });
 
+test("show fetches an explicit PR and prints human-readable details", (t) => {
+  const cwd = createRepo(t);
+  const pr = {
+    pullRequestId: 42,
+    title: "Account validation",
+    description: "Validate accounts before saving.",
+    status: "active",
+    isDraft: true,
+    sourceRefName: "refs/heads/feature/account-validation",
+    targetRefName: "refs/heads/main",
+  };
+  const result = runPr(t, ["show", "--pr", "42"], {
+    cwd,
+    responses: [{ json: pr }],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(request), [
+    {
+      url: `${apiBase}/pullRequests/42?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+  ]);
+  assert.equal(
+    result.stdout,
+    "PR #42: Account validation\n" +
+      "Status: active\n" +
+      "Draft: yes\n" +
+      "Source: feature/account-validation\n" +
+      "Target: main\n" +
+      `URL: ${webBase}/42\n` +
+      "Description:\n" +
+      "Validate accounts before saving.\n",
+  );
+});
+
+test("show prints an explicit PR as JSON", (t) => {
+  const cwd = createRepo(t);
+  const pr = {
+    pullRequestId: 42,
+    title: "JSON details",
+    description: "Machine readable",
+    status: "active",
+    isDraft: false,
+    sourceRefName: "refs/heads/feature/json",
+    targetRefName: "refs/heads/main",
+  };
+  const result = runPr(t, ["show", "--pr", "42", "--json"], {
+    cwd,
+    responses: [{ json: pr }],
+  });
+
+  assertSucceeded(result);
+  assert.equal(result.stdout, `${JSON.stringify(pr, null, 2)}\n`);
+});
+
+test("show hydrates the active PR found for the current branch", (t) => {
+  const cwd = createRepo(t, "feature/branch-details");
+  const candidate = {
+    pullRequestId: 73,
+    title: "Branch details",
+    description: "Truncated collection description",
+    sourceRefName: "refs/heads/feature/branch-details",
+  };
+  const pr = {
+    ...candidate,
+    description: "Found from the current branch with the full description.",
+    status: "active",
+    isDraft: false,
+    targetRefName: "refs/heads/main",
+  };
+  const result = runPr(t, ["show", "--json"], {
+    cwd,
+    responses: [{ json: { value: [candidate] } }, { json: pr }],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(request), [
+    {
+      url:
+        `${apiBase}/pullrequests?` +
+        "searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fbranch-details&" +
+        "searchCriteria.status=active&api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/73?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+  ]);
+  assert.equal(result.stdout, `${JSON.stringify(pr, null, 2)}\n`);
+});
+
 test("list uses an explicit PR and prints the filtered response as JSON", (t) => {
   const cwd = createRepo(t);
   const threads = [

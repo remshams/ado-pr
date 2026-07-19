@@ -1,4 +1,4 @@
-import { API_VERSION, reposBaseUrl } from "./azure.ts";
+import { API_VERSION, pullRequestApiUrl, pullRequestWebUrl, reposBaseUrl } from "./azure.ts";
 import type { AzureRequester } from "./azure.ts";
 import { getCurrentBranch as defaultGetCurrentBranch } from "./lib.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
@@ -6,7 +6,11 @@ import type { AzureDevOpsRepoContext } from "./lib.ts";
 export interface PullRequest {
   pullRequestId: number;
   title: string;
+  description?: string;
+  status?: string;
+  isDraft?: boolean;
   sourceRefName: string;
+  targetRefName?: string;
 }
 
 export interface CreatePullRequestOptions {
@@ -19,7 +23,11 @@ export interface CreatePullRequestOptions {
 
 export interface PullRequestService {
   create(options: CreatePullRequestOptions): Promise<PullRequest>;
+  get(prId: number): Promise<PullRequest>;
+  findForCurrentBranch(): Promise<PullRequest>;
+  resolve(requestedPrId: number | undefined): Promise<PullRequest>;
   resolveId(requestedPrId: number | undefined): Promise<number>;
+  format(pr: PullRequest): string;
 }
 
 /** Turns a plain branch name into a full ref, leaving an already-qualified ref untouched. */
@@ -47,7 +55,7 @@ export function createPullRequestService({
     return data.defaultBranch;
   }
 
-  async function findPullRequestForCurrentBranch(): Promise<PullRequest> {
+  async function findForCurrentBranch(): Promise<PullRequest> {
     const branch = await getCurrentBranch();
     const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(toFullRef(branch))}&searchCriteria.status=active&api-version=${API_VERSION}`;
     const data = await azure.request<{ value: PullRequest[] }>(url);
@@ -88,13 +96,46 @@ export function createPullRequestService({
     });
   }
 
+  /** Fetches a pull request by ID, including its description and other PR-level metadata. */
+  async function get(prId: number): Promise<PullRequest> {
+    const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
+    return azure.request<PullRequest>(url);
+  }
+
+  /** Resolves and fully fetches either an explicitly selected PR or the active PR for the branch. */
+  async function resolve(requestedPrId: number | undefined): Promise<PullRequest> {
+    if (requestedPrId) {
+      return get(requestedPrId);
+    }
+    const candidate = await findForCurrentBranch();
+    // Azure truncates descriptions in pull-request collection responses, so hydrate the selected PR.
+    return get(candidate.pullRequestId);
+  }
+
   async function resolveId(requestedPrId: number | undefined): Promise<number> {
     if (requestedPrId) {
       return requestedPrId;
     }
-    const pr = await findPullRequestForCurrentBranch();
+    const pr = await findForCurrentBranch();
     return pr.pullRequestId;
   }
 
-  return { create, resolveId };
+  function formatRef(ref: string | undefined): string {
+    return ref?.replace(/^refs\/heads\//, "") ?? "unknown";
+  }
+
+  function format(pr: PullRequest): string {
+    return [
+      `PR #${pr.pullRequestId}: ${pr.title}`,
+      `Status: ${pr.status ?? "unknown"}`,
+      `Draft: ${pr.isDraft === undefined ? "unknown" : pr.isDraft ? "yes" : "no"}`,
+      `Source: ${formatRef(pr.sourceRefName)}`,
+      `Target: ${formatRef(pr.targetRefName)}`,
+      `URL: ${pullRequestWebUrl(ctx, pr.pullRequestId)}`,
+      "Description:",
+      pr.description?.length ? pr.description : "(empty)",
+    ].join("\n");
+  }
+
+  return { create, get, findForCurrentBranch, resolve, resolveId, format };
 }

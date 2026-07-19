@@ -1,10 +1,10 @@
 /**
- * Creates Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves PR comments,
- * for the pull request associated with the current branch of a git checkout whose origin remote
+ * Creates and inspects Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves
+ * PR comments for the pull request associated with the current branch of a git checkout whose origin remote
  * points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
- * is enough for `list`, "Read & Write" is needed for comment-changing actions and `batch`).
+ * is enough for `show` and `list`, "Read & Write" is needed for comment-changing actions and `batch`).
  * Run this via pr.sh, which accepts an exported PAT or loads one from .env. Literal values use
  * Node's native dotenv support, including 1Password Environment mounts; op:// references in
  * regular files are resolved just-in-time through 1Password CLI and are never written to disk by
@@ -35,6 +35,12 @@ async function main(): Promise<void> {
     const pr = await pullRequests.create(options);
     console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
     console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
+    return;
+  }
+
+  if (options.action === "show") {
+    const pr = await pullRequests.resolve(options.pr);
+    console.log(options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr));
     return;
   }
 

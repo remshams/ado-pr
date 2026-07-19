@@ -43,6 +43,37 @@ describe("pull request resolution and creation", () => {
     assert.deepEqual(calls, []);
   });
 
+  test("fetches full pull request details for an explicit ID", async (t) => {
+    const expected = pullRequest({
+      description: "Review the account validation changes.",
+      status: "active",
+      isDraft: true,
+      targetRefName: "refs/heads/main",
+    });
+    const { service, calls } = createService(t, [{ json: expected }]);
+
+    assert.deepEqual(await service.get(42), expected);
+    assert.deepEqual(
+      calls.map(({ method, url, body }) => ({ method, url, body })),
+      [
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42?api-version=7.1`,
+          body: null,
+        },
+      ],
+    );
+  });
+
+  test("resolves an explicit ID to full pull request details", async (t) => {
+    const expected = pullRequest({ pullRequestId: 123, description: "Explicit PR" });
+    const { service, calls } = createService(t, [{ json: expected }]);
+
+    assert.deepEqual(await service.resolve(123), expected);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, `${repositoryUrl}/pullRequests/123?api-version=7.1`);
+  });
+
   test("uses the current branch and URL-encodes its full source ref", async (t) => {
     const { service, calls } = createService(
       t,
@@ -59,6 +90,79 @@ describe("pull request resolution and creation", () => {
       `${repositoryUrl}/pullrequests?searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fa%2Bb&searchCriteria.status=active&api-version=7.1`,
     );
     assert.equal(calls[0].body, null);
+  });
+
+  test("hydrates branch search results so the full description is returned", async (t) => {
+    const candidate = pullRequest({
+      pullRequestId: 74,
+      description: "Truncated collection description",
+    });
+    const expected = pullRequest({
+      pullRequestId: 74,
+      description: "Full description ".repeat(30),
+      status: "active",
+      isDraft: false,
+      targetRefName: "refs/heads/main",
+    });
+    const { service, calls } = createService(
+      t,
+      [{ json: { value: [candidate] } }, { json: expected }],
+      async () => "feature/show-details",
+    );
+
+    assert.deepEqual(await service.resolve(undefined), expected);
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullrequests?searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fshow-details&searchCriteria.status=active&api-version=7.1`,
+        },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/74?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("formats human-readable pull request details and strips branch ref prefixes", (t) => {
+    const { service } = createService(t);
+
+    assert.equal(
+      service.format(
+        pullRequest({
+          description: "Line one\n\nLine two",
+          status: "active",
+          isDraft: true,
+          targetRefName: "refs/heads/main",
+        }),
+      ),
+      "PR #42: Test pull request\n" +
+        "Status: active\n" +
+        "Draft: yes\n" +
+        "Source: feature/test\n" +
+        "Target: main\n" +
+        "URL: https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42\n" +
+        "Description:\n" +
+        "Line one\n\nLine two",
+    );
+  });
+
+  test("formats missing metadata and an empty description explicitly", (t) => {
+    const { service } = createService(t);
+
+    assert.equal(
+      service.format(pullRequest({ description: "" })),
+      "PR #42: Test pull request\n" +
+        "Status: unknown\n" +
+        "Draft: unknown\n" +
+        "Source: feature/test\n" +
+        "Target: unknown\n" +
+        "URL: https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42\n" +
+        "Description:\n" +
+        "(empty)",
+    );
   });
 
   test("reports when the current branch has no active pull request", async (t) => {
