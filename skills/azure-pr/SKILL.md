@@ -1,6 +1,6 @@
 ---
 name: azure-pr
-description: "Manage Azure DevOps pull requests and review comments with pr.sh: create and inspect PRs; read and update PR descriptions; list PR comment threads and inspect review feedback; post, reply to, edit, delete, and resolve comments; and run batch operations. Use whenever the user asks to open or inspect an Azure DevOps PR, read or update its description, list or review PR comments, respond to PR feedback, or post code-review findings."
+description: "Manage Azure DevOps pull requests and review comments with pr.sh: create and inspect PRs; read and update PR descriptions; mark PRs as drafts; list PR comment threads and inspect review feedback; post, reply to, edit, delete, and resolve comments; and run batch operations. Use whenever the user asks to open or inspect an Azure DevOps PR, read or update its description, set it to draft, list or review PR comments, respond to PR feedback, or post code-review findings."
 ---
 
 # Azure DevOps PR tooling
