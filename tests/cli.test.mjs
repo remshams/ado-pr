@@ -69,7 +69,9 @@ test("--help prints the documented actions and options", () => {
   assert.equal(result.stdout, "");
   assert.equal(firstLine(result.stderr), usageFirstLine);
   assert.ok(result.stderr.includes("       pr.sh show [--pr <id>] [--json]"));
-  assert.ok(result.stderr.includes('       pr.sh update --description "..." [--pr <id>]'));
+  assert.ok(
+    result.stderr.includes('       pr.sh update [--description "..."] [--draft] [--pr <id>]'),
+  );
   assert.ok(
     result.stderr.includes(
       '       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]',
@@ -81,7 +83,10 @@ test("--help prints the documented actions and options", () => {
     result.stderr,
     /  show\s+Shows details for the pull request matching the current branch,/,
   );
-  assert.match(result.stderr, /  update\s+Replaces the pull request's description\./);
+  assert.match(
+    result.stderr,
+    /  update\s+Updates the pull request's description and\/or marks it as a draft\./,
+  );
   assert.match(result.stderr, /  reply\s+Posts a reply comment to an existing thread\./);
   assert.match(result.stderr, /  edit\s+Edits an existing comment in a thread\./);
   assert.match(result.stderr, /  delete\s+Deletes an existing comment from a thread\./);
@@ -91,8 +96,9 @@ test("--help prints the documented actions and options", () => {
   assert.match(result.stderr, /  --message <text>\s+Required for comment\/reply\/edit\./);
   assert.match(
     result.stderr,
-    /For `update`, the replacement description \(required, but may be empty\)\./,
+    /For `update`, the replacement description \(may be empty to clear it\)\./,
   );
+  assert.match(result.stderr, /For `update`,\s+marks the existing pull request as a draft\./);
   assert.match(result.stderr, /For `show`, print the raw pull request data as JSON/);
   assert.match(result.stderr, /  -h, --help\s+Show this help\./);
   assert.match(result.stderr, /\nRequires:\n/);
@@ -105,9 +111,9 @@ test("an unknown action reports the action before usage", () => {
   assert.match(result.stderr, /\nActions:\n/);
 });
 
-test("update requires an explicit description value but accepts deliberate clearing", () => {
-  const missingDescription = runCli("update");
-  assertUsageError(missingDescription, 'Error: --description is required for "update"');
+test("update requires a change and accepts draft or an explicit description value", () => {
+  const missingChange = runCli("update");
+  assertUsageError(missingChange, 'Error: --description or --draft is required for "update"');
 
   const bareDescription = runCli("update", "--description");
   assertUsageError(
@@ -119,6 +125,7 @@ test("update requires an explicit description value but accepts deliberate clear
     ["update", "--description", ""],
     ["update", "--description="],
     ["update", "--description", "-"],
+    ["update", "--draft"],
   ]) {
     const emptyDescription = runCli(...args);
     assert.equal(emptyDescription.status, 1);

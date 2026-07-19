@@ -1,5 +1,5 @@
 /**
- * Creates, inspects, and updates descriptions on Azure DevOps pull requests, and
+ * Creates, inspects, and updates descriptions/draft state on Azure DevOps pull requests, and
  * lists/creates/replies-to/edits/deletes/resolves PR comments for the pull request associated with
  * the current branch of a git checkout whose origin remote
  * points at Azure Repos.
@@ -50,8 +50,11 @@ async function main(): Promise<void> {
 
   switch (options.action) {
     case "update": {
-      const pr = await pullRequests.update(prId, { description: options.description! });
-      console.log(`Updated description for PR #${pr.pullRequestId}.`);
+      const pr = await pullRequests.update(prId, {
+        description: options.description,
+        draft: options.draft ? true : undefined,
+      });
+      console.log(`Updated PR #${pr.pullRequestId}.`);
       console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
       return;
     }

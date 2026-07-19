@@ -44,7 +44,7 @@ function printUsageAndExit(message?: string): never {
   }
   console.error(`Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
        pr.sh show [--pr <id>] [--json]
-       pr.sh update --description "..." [--pr <id>]
+       pr.sh update [--description "..."] [--draft] [--pr <id>]
        pr.sh create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
        pr.sh comment --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
        pr.sh reply --thread <id> --message "..." [--pr <id>]
@@ -60,8 +60,8 @@ Actions:
   show                     Shows details for the pull request matching the current branch,
                            including its description, status, draft state, and source/target
                            branches. Use --json to print the raw pull request data.
-  update                   Replaces the pull request's description. An empty description clears
-                           the existing value.
+  update                   Updates the pull request's description and/or marks it as a draft. An
+                           empty description clears the existing value.
   create                   Creates a new pull request from the current branch (or --source, if
                            given). Prints the new PR's ID and web URL.
   comment                  Posts a new, top-level comment thread on the pull request - either
@@ -102,12 +102,13 @@ Options:
   --message <text>         Required for comment/reply/edit. The comment text to post or replace.
   --title <text>           Required for \`create\`. The pull request's title.
   --description <text>     For \`create\`, the pull request's description (defaults to empty).
-                           For \`update\`, the replacement description (required, but may be empty).
+                           For \`update\`, the replacement description (may be empty to clear it).
   --source <branch>        For \`create\`. The branch to create the pull request from. Defaults to
                            the current branch. Must already exist on the remote.
   --target <branch>        For \`create\`. The branch to merge into. Defaults to the repository's
                            default branch.
-  --draft                  For \`create\`. Creates the pull request as a draft.
+  --draft                  For \`create\`, creates the pull request as a draft. For \`update\`,
+                           marks the existing pull request as a draft.
   --file <path>            For \`comment\`. Anchors the new thread to a file (repo-relative path),
                            instead of leaving it as a general PR-level comment.
   --line <n>               For \`comment\`. Anchors the new thread to a specific line in --file
@@ -241,8 +242,8 @@ export function parseArgs(): Options {
   if (action === "create" && !title) {
     printUsageAndExit(`--title is required for "create"`);
   }
-  if (action === "update" && description === undefined) {
-    printUsageAndExit(`--description is required for "update"`);
+  if (action === "update" && description === undefined && !argv.draft) {
+    printUsageAndExit(`--description or --draft is required for "update"`);
   }
   if (action === "update" && hasBareStringFlag(args, "description")) {
     printUsageAndExit(`--description requires an explicit value (use --description "" to clear)`);

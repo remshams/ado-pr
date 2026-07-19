@@ -231,6 +231,37 @@ describe("pull request resolution, creation, and updates", () => {
     assert.deepEqual(JSON.parse(calls[0].body), { description: "" });
   });
 
+  test("marks a pull request as draft without sending description", async (t) => {
+    const updated = pullRequest({ isDraft: true });
+    const { service, calls } = createService(t, [{ json: updated }]);
+
+    assert.deepEqual(await service.update(42, { draft: true }), updated);
+    assert.deepEqual(JSON.parse(calls[0].body), { isDraft: true });
+  });
+
+  test("updates description and draft state in one request", async (t) => {
+    const updated = pullRequest({ description: "Work in progress", isDraft: true });
+    const { service, calls } = createService(t, [{ json: updated }]);
+
+    assert.deepEqual(
+      await service.update(42, { description: "Work in progress", draft: true }),
+      updated,
+    );
+    assert.deepEqual(JSON.parse(calls[0].body), {
+      description: "Work in progress",
+      isDraft: true,
+    });
+  });
+
+  test("rejects an update without fields before making a request", async (t) => {
+    const { service, calls } = createService(t);
+
+    await assert.rejects(service.update(42, {}), {
+      message: "At least one pull request field is required for an update.",
+    });
+    assert.deepEqual(calls, []);
+  });
+
   test("creates from explicit source and target branches while normalizing only plain refs", async (t) => {
     const created = pullRequest({ pullRequestId: 88 });
     const { service, calls } = createService(t, [{ json: created }]);

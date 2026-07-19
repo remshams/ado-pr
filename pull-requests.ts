@@ -22,7 +22,8 @@ export interface CreatePullRequestOptions {
 }
 
 export interface UpdatePullRequestOptions {
-  description: string;
+  description?: string;
+  draft?: boolean;
 }
 
 export interface PullRequestService {
@@ -101,13 +102,18 @@ export function createPullRequestService({
     });
   }
 
-  /** Updates the selected pull request's description, including an explicitly empty description. */
+  /** Updates only the explicitly supplied pull request fields. */
   async function update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest> {
+    const body = {
+      ...(options.description !== undefined ? { description: options.description } : {}),
+      ...(options.draft !== undefined ? { isDraft: options.draft } : {}),
+    };
+    if (Object.keys(body).length === 0) {
+      throw new Error("At least one pull request field is required for an update.");
+    }
+
     const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
-    return azure.request<PullRequest>(url, {
-      method: "PATCH",
-      body: { description: options.description },
-    });
+    return azure.request<PullRequest>(url, { method: "PATCH", body });
   }
 
   /** Fetches a pull request by ID, including its description and other PR-level metadata. */
