@@ -1,284 +1,448 @@
 import minimist from "minimist";
 
-import {
-  actionRequiresComment,
-  actionRequiresMessage,
-  actionRequiresThread,
-  isPositiveInteger,
-} from "./operation-types.ts";
+import { isPositiveInteger, type CliOptions } from "./operation-types.ts";
 
-export type Action =
-  | "list"
-  | "show"
-  | "update"
-  | "reply"
-  | "resolve"
-  | "create"
-  | "comment"
-  | "edit"
-  | "delete"
-  | "batch";
+const STRING_FLAGS = [
+  "pr",
+  "thread",
+  "comment",
+  "message",
+  "title",
+  "description",
+  "source",
+  "target",
+  "file",
+  "line",
+  "end-line",
+] as const;
+const BOOLEAN_FLAGS = ["help", "json", "exclude-own", "exclude-resolved", "draft"] as const;
+const KNOWN_FLAGS = new Set<string>([...STRING_FLAGS, ...BOOLEAN_FLAGS, "no-draft"]);
+const STRING_FLAG_SET = new Set<string>(STRING_FLAGS);
+const BOOLEAN_FLAG_SET = new Set<string>([...BOOLEAN_FLAGS, "no-draft"]);
 
-export interface Options {
-  action: Action;
-  pr?: number;
-  thread?: number;
-  comment?: number;
-  message?: string;
-  json: boolean;
-  excludeOwn: boolean;
-  excludeResolved: boolean;
-  title?: string;
-  description?: string;
-  sourceBranch?: string;
-  targetBranch?: string;
-  draft: boolean;
-  file?: string;
-  line?: number;
-  endLine?: number;
+const ROUTE_FLAGS: Record<string, ReadonlySet<string>> = {
+  "pr show": new Set(["pr", "json"]),
+  "pr create": new Set(["title", "description", "source", "target", "draft"]),
+  "pr edit": new Set(["pr", "description", "draft", "no-draft"]),
+  "comment list": new Set(["pr", "json", "exclude-own", "exclude-resolved"]),
+  "comment create": new Set(["pr", "message", "file", "line", "end-line"]),
+  "comment reply": new Set(["pr", "thread", "message"]),
+  "comment edit": new Set(["pr", "thread", "comment", "message"]),
+  "comment delete": new Set(["pr", "thread", "comment"]),
+  "comment resolve": new Set(["pr", "thread"]),
+  "comment batch": new Set(["pr"]),
+};
+
+interface FlagOccurrence {
+  name: string;
+  display: string;
+  value?: string;
+  hasExplicitValue: boolean;
+  hasInlineValue: boolean;
 }
 
 function printUsageAndExit(message?: string): never {
   if (message) {
     console.error(`Error: ${message}\n`);
   }
-  console.error(`Usage: pr.sh [list] [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
-       pr.sh show [--pr <id>] [--json]
-       pr.sh update [--description "..."] [--draft] [--pr <id>]
-       pr.sh create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
-       pr.sh comment --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
-       pr.sh reply --thread <id> --message "..." [--pr <id>]
-       pr.sh edit --thread <id> --comment <id> --message "..." [--pr <id>]
-       pr.sh delete --thread <id> --comment <id> [--pr <id>]
-       pr.sh resolve --thread <id> [--pr <id>]
-       pr.sh batch [--pr <id>] < operations.json
+  console.error(`Usage: pr.sh pr show [--pr <id>] [--json]
+       pr.sh pr create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
+       pr.sh pr edit [--description "..."] [--draft | --no-draft] [--pr <id>]
+       pr.sh comment list [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
+       pr.sh comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
+       pr.sh comment reply --thread <id> --message "..." [--pr <id>]
+       pr.sh comment edit --thread <id> --comment <id> --message "..." [--pr <id>]
+       pr.sh comment delete --thread <id> --comment <id> [--pr <id>]
+       pr.sh comment resolve --thread <id> [--pr <id>]
+       pr.sh comment batch [--pr <id>] < operations.json
 
-Actions:
-  list                     Lists comment threads for the pull request matching the current
-                           branch (both resolved and unresolved, unless narrowed below). This is
-                           the default action.
-  show                     Shows details for the pull request matching the current branch,
-                           including its description, status, draft state, and source/target
-                           branches. Use --json to print the raw pull request data.
-  update                   Updates the pull request's description and/or marks it as a draft. An
-                           empty description clears the existing value.
-  create                   Creates a new pull request from the current branch (or --source, if
-                           given). Prints the new PR's ID and web URL.
-  comment                  Posts a new, top-level comment thread on the pull request - either
-                           general, or anchored to a file (optionally a specific line/range).
-                           Use \`reply\` instead to respond within an existing thread.
-  reply                    Posts a reply comment to an existing thread.
-  edit                     Edits an existing comment in a thread.
-  delete                   Deletes an existing comment from a thread.
-  resolve                  Marks an existing thread as resolved. This always sets the thread's
-                           status to Azure DevOps' "fixed" state (not "closed"/"won't fix" -
-                           there's currently no flag to choose those instead).
-  batch                    Runs several comment/reply/edit/delete/resolve operations from a single
-                           invocation (a JSON array of operations, read from stdin). Useful for
-                           applying multiple comment changes at once - only needs approving/
-                           authenticating one command instead of one per operation, and shares
-                           file-anchoring lookups across comments on the same PR instead of
-                           repeating them per comment. Each array element is an object shaped like
-                           one of:
-                             {"action": "comment", "message": "...", "file"?: "...", "line"?: n, "endLine"?: n}
-                             {"action": "reply", "thread": n, "message": "..."}
-                             {"action": "edit", "thread": n, "comment": n, "message": "..."}
-                             {"action": "delete", "thread": n, "comment": n}
-                             {"action": "resolve", "thread": n}
-                           Every operation may set its own "pr" to override --pr/the auto-detected
-                           PR for just that operation. Operations run in order; a failure is
-                           reported inline and does not stop the remaining operations, but the
-                           process exits non-zero if any operation failed.
+Commands:
+  pr show                  Show pull request details. Use --json for raw data.
+  pr create                Create a pull request from the current branch or --source.
+  pr edit                  Change a pull request description and/or draft state.
+  comment list             List comment threads, optionally filtering or printing JSON.
+  comment create           Create a general or file-anchored comment thread.
+  comment reply            Reply to an existing thread.
+  comment edit             Edit an existing comment.
+  comment delete           Delete an existing comment.
+  comment resolve          Mark an existing thread as resolved.
+  comment batch            Run comment operations from a JSON array read from stdin.
+
+Batch input:
+  Each array element must have exactly one of these shapes (fields marked ? are optional):
+    {"command":"comment.create","message":"...","pr"?:n,"file"?:"...","line"?:n,"endLine"?:n}
+    {"command":"comment.reply","thread":n,"message":"...","pr"?:n}
+    {"command":"comment.edit","thread":n,"comment":n,"message":"...","pr"?:n}
+    {"command":"comment.delete","thread":n,"comment":n,"pr"?:n}
+    {"command":"comment.resolve","thread":n,"pr"?:n}
+  Per-operation "pr" overrides the command's --pr/default PR for that operation. Unknown fields and
+  fields irrelevant to the selected command are invalid. Operations execute sequentially in array
+  order. A failed operation is reported and later operations still run; after all operations finish,
+  the process exits nonzero if any operation failed.
 
 Options:
-  --pr <id>                Pull request ID to use, instead of auto-detecting it from the active
-                           pull request(s) for the current branch. Required if more than one
-                           active pull request matches the current branch. Not used by \`create\`.
-                           For \`batch\`, this is the default for operations that don't set their
-                           own "pr".
-  --thread <id>            Required for reply/edit/delete/resolve. The thread ID, as shown by
-                           \`list\`.
-  --comment <id>           Required for edit/delete. The comment ID, as shown by \`list\`.
-  --message <text>         Required for comment/reply/edit. The comment text to post or replace.
-  --title <text>           Required for \`create\`. The pull request's title.
-  --description <text>     For \`create\`, the pull request's description (defaults to empty).
-                           For \`update\`, the replacement description (may be empty to clear it).
-  --source <branch>        For \`create\`. The branch to create the pull request from. Defaults to
-                           the current branch. Must already exist on the remote.
-  --target <branch>        For \`create\`. The branch to merge into. Defaults to the repository's
-                           default branch.
-  --draft                  For \`create\`, creates the pull request as a draft. For \`update\`,
-                           marks the existing pull request as a draft.
-  --file <path>            For \`comment\`. Anchors the new thread to a file (repo-relative path),
-                           instead of leaving it as a general PR-level comment.
-  --line <n>               For \`comment\`. Anchors the new thread to a specific line in --file
-                           (on the current/right-hand side of the diff). Requires --file.
-  --end-line <n>           For \`comment\`. Extends the anchored line into a range, ending at this
-                           line (inclusive). Requires --line.
-  --exclude-own            For \`list\`: drops threads where you (the identity behind
-                           AZURE_DEVOPS_PAT) are the only commenter, i.e. keeps only threads that
-                           have at least one comment from someone else. Threads with replies from
-                           others are shown in full, including your own comments in them, for
-                           context.
-  --exclude-resolved       For \`list\`: only show threads that are still active/pending, hiding
-                           ones already marked fixed/closed/won't-fix.
-  --json                   For \`list\`, print the raw thread data as JSON instead of a
-                           human-readable summary. Any --exclude-* filters are applied first.
-                           For \`show\`, print the raw pull request data as JSON instead of the
-                           human-readable PR details.
+  --pr <id>                Use a specific pull request instead of the current branch's active PR.
+  --title <text>           Pull request title (required for \`pr create\`).
+  --description <text>     Pull request description. Pass an explicit empty string to clear it.
+  --source <branch>        Source branch for \`pr create\` (defaults to the current branch).
+  --target <branch>        Target branch for \`pr create\` (defaults to the repository default).
+  --draft                  Create a draft PR or mark an existing PR as draft.
+  --no-draft               Mark an existing PR as ready; valid only for \`pr edit\`.
+  --thread <id>            Thread ID for reply/edit/delete/resolve.
+  --comment <id>           Comment ID for edit/delete.
+  --message <text>         Comment text for create/reply/edit.
+  --file <path>            Anchor a new comment thread to a repository-relative file.
+  --line <n>               Anchor to a line in --file. Requires --file.
+  --end-line <n>           End an anchored range. Requires --line and must be >= --line.
+  --exclude-own            Hide threads where the current identity is the only commenter.
+  --exclude-resolved       Hide resolved threads.
+  --json                   Print raw JSON for \`pr show\` or \`comment list\`.
   -h, --help               Show this help.
 
 Requires:
-  - Being run from within a git checkout whose origin remote points at Azure Repos (so the
-    current branch/remote can be read).
-  - AZURE_DEVOPS_PAT exported by the caller or set in .env. Regular .env files accept a literal
-    PAT or op:// reference; a 1Password Environment may instead mount a literal PAT at that path.
+  - A git checkout whose origin remote points at Azure Repos.
+  - AZURE_DEVOPS_PAT exported by the caller or set in .env.
 `);
   process.exit(message ? 1 : 0);
 }
 
-function stringArg(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+function looksLikeOption(token: string): boolean {
+  return token.startsWith("--") || /^-[A-Za-z]/.test(token);
+}
+
+function scanFlags(args: string[]): FlagOccurrence[] {
+  const occurrences: FlagOccurrence[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--") {
+      break;
+    }
+    if (token === "-h") {
+      occurrences.push({
+        name: "help",
+        display: "-h",
+        hasExplicitValue: false,
+        hasInlineValue: false,
+      });
+      continue;
+    }
+    if (!token.startsWith("--")) {
+      if (token.startsWith("-") && token !== "-") {
+        occurrences.push({
+          name: token,
+          display: token,
+          hasExplicitValue: false,
+          hasInlineValue: false,
+        });
+      }
+      continue;
+    }
+
+    const equalsIndex = token.indexOf("=");
+    const name = token.slice(2, equalsIndex === -1 ? undefined : equalsIndex);
+    const isStringFlag = STRING_FLAG_SET.has(name);
+    let value = equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
+
+    if (
+      isStringFlag &&
+      equalsIndex === -1 &&
+      args[index + 1] !== undefined &&
+      !looksLikeOption(args[index + 1])
+    ) {
+      value = args[index + 1];
+      index += 1;
+    }
+
+    occurrences.push({
+      name,
+      display: `--${name}`,
+      value,
+      hasExplicitValue: value !== undefined,
+      hasInlineValue: equalsIndex !== -1,
+    });
+  }
+
+  return occurrences;
+}
+
+function validateKnownFlags(occurrences: FlagOccurrence[]): void {
+  for (const occurrence of occurrences) {
+    if (!KNOWN_FLAGS.has(occurrence.name)) {
+      printUsageAndExit(`unknown option "${occurrence.display}"`);
+    }
+    if (BOOLEAN_FLAG_SET.has(occurrence.name) && occurrence.hasInlineValue) {
+      printUsageAndExit(`${occurrence.display} does not take a value`);
+    }
+  }
+}
+
+function validateRouteFlags(
+  route: string,
+  allowed: ReadonlySet<string>,
+  occurrences: FlagOccurrence[],
+): Map<string, FlagOccurrence> {
+  const byName = new Map<string, FlagOccurrence>();
+  for (const occurrence of occurrences) {
+    if (!allowed.has(occurrence.name)) {
+      printUsageAndExit(`${occurrence.display} is not valid for "${route}"`);
+    }
+    if (byName.has(occurrence.name)) {
+      printUsageAndExit(`${occurrence.display} may only be passed once`);
+    }
+    byName.set(occurrence.name, occurrence);
+  }
+  return byName;
+}
+
+function parseStringFlag(
+  occurrences: Map<string, FlagOccurrence>,
+  flag: string,
+): string | undefined {
+  const occurrence = occurrences.get(flag);
+  if (!occurrence) {
+    return undefined;
+  }
+  if (!occurrence.hasExplicitValue) {
+    printUsageAndExit(`--${flag} requires an explicit value`);
+  }
+  return occurrence.value;
+}
+
+function parseRequiredStringFlag(
+  occurrences: Map<string, FlagOccurrence>,
+  flag: string,
+  route: string,
+): string {
+  const value = parseStringFlag(occurrences, flag);
+  if (!value) {
+    printUsageAndExit(`--${flag} is required for "${route}"`);
+  }
+  return value;
 }
 
 function parsePositiveIntFlag(
-  argv: minimist.ParsedArgs,
+  occurrences: Map<string, FlagOccurrence>,
   flag: "pr" | "thread" | "comment" | "line" | "end-line",
 ): number | undefined {
-  if (argv[flag] === undefined) {
+  const raw = parseStringFlag(occurrences, flag);
+  if (raw === undefined) {
     return undefined;
   }
-  const raw = stringArg(argv[flag]);
-  const value = raw ? Number(raw) : NaN;
+  const value = Number(raw);
   if (!isPositiveInteger(value)) {
-    printUsageAndExit(
-      `invalid --${flag} "${argv[flag]}" (pass it once, as a single positive integer)`,
-    );
+    printUsageAndExit(`invalid --${flag} "${raw}" (pass it once, as a single positive integer)`);
   }
   return value;
 }
 
-function parseStringFlag(argv: minimist.ParsedArgs, flag: string): string | undefined {
-  const value = stringArg(argv[flag]);
-  if (argv[flag] !== undefined && value === undefined) {
-    printUsageAndExit(`invalid --${flag} "${argv[flag]}" (pass it once, as a single string)`);
+function parseRequiredPositiveIntFlag(
+  occurrences: Map<string, FlagOccurrence>,
+  flag: "thread" | "comment",
+  route: string,
+): number {
+  const value = parsePositiveIntFlag(occurrences, flag);
+  if (value === undefined) {
+    printUsageAndExit(`--${flag} is required for "${route}"`);
   }
   return value;
 }
 
-function hasBareStringFlag(args: string[], flag: string): boolean {
-  const token = `--${flag}`;
-  return args.some((arg, index) => {
-    const next = args[index + 1];
-    return arg === token && (next === undefined || (next !== "-" && next.startsWith("-")));
-  });
+function validateHelpOptions(route: string, occurrences: Map<string, FlagOccurrence>): void {
+  const positiveIntegerFlags = ["pr", "thread", "comment", "line", "end-line"] as const;
+  for (const flag of positiveIntegerFlags) {
+    if (occurrences.has(flag)) {
+      parsePositiveIntFlag(occurrences, flag);
+    }
+  }
+  for (const flag of ["message", "title", "description", "source", "target", "file"] as const) {
+    if (occurrences.has(flag)) {
+      parseStringFlag(occurrences, flag);
+    }
+  }
+
+  const requireNonEmptyIfPresent = (flag: "message" | "title"): void => {
+    if (occurrences.has(flag) && !parseStringFlag(occurrences, flag)) {
+      printUsageAndExit(`--${flag} is required for "${route}"`);
+    }
+  };
+
+  if (route === "pr create") {
+    requireNonEmptyIfPresent("title");
+  }
+  if (route === "pr edit" && occurrences.has("draft") && occurrences.has("no-draft")) {
+    printUsageAndExit(`--draft and --no-draft cannot be used together`);
+  }
+  if (route === "comment create") {
+    requireNonEmptyIfPresent("message");
+    const file = parseStringFlag(occurrences, "file");
+    const line = parsePositiveIntFlag(occurrences, "line");
+    const endLine = parsePositiveIntFlag(occurrences, "end-line");
+    if (file === "") {
+      printUsageAndExit(`--file must not be empty`);
+    }
+    if (line !== undefined && file === undefined) {
+      printUsageAndExit(`--line requires --file`);
+    }
+    if (endLine !== undefined && line === undefined) {
+      printUsageAndExit(`--end-line requires --line`);
+    }
+    if (endLine !== undefined && line !== undefined && endLine < line) {
+      printUsageAndExit(`--end-line must be >= --line`);
+    }
+  }
+  if (route === "comment reply" || route === "comment edit") {
+    requireNonEmptyIfPresent("message");
+  }
 }
 
-const ACTIONS: Action[] = [
-  "list",
-  "show",
-  "update",
-  "reply",
-  "resolve",
-  "create",
-  "comment",
-  "edit",
-  "delete",
-  "batch",
-];
-
-export function parseArgs(): Options {
+export function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
-  const argv = minimist(args, {
-    string: [
-      "pr",
-      "thread",
-      "comment",
-      "message",
-      "title",
-      "description",
-      "source",
-      "target",
-      "file",
-      "line",
-      "end-line",
-    ],
-    boolean: ["help", "json", "exclude-own", "exclude-resolved", "draft"],
-    alias: { h: "help" },
-  });
+  const scanned = scanFlags(args);
+  validateKnownFlags(scanned);
 
-  if (argv.help) {
+  if (args.length === 1 && scanned[0]?.name === "help") {
     printUsageAndExit();
   }
 
-  const positional = argv._[0] as string | undefined;
-  const action: Action = (positional as Action | undefined) ?? "list";
-  if (positional && !ACTIONS.includes(action)) {
-    printUsageAndExit(`unknown action "${positional}"`);
+  const argv = minimist(args, {
+    string: [...STRING_FLAGS],
+    boolean: [...BOOLEAN_FLAGS],
+    alias: { h: "help" },
+  });
+  const positional = argv._.map(String);
+  const resource = positional[0];
+  const command = positional[1];
+
+  if (!resource) {
+    printUsageAndExit("a resource and command are required");
+  }
+  if (resource !== "pr" && resource !== "comment") {
+    printUsageAndExit(`unknown resource "${resource}"`);
+  }
+  if (!command) {
+    printUsageAndExit(`a command is required for resource "${resource}"`);
+  }
+  if (positional.length > 2) {
+    printUsageAndExit(`unexpected positional argument "${positional[2]}"`);
   }
 
-  const pr = parsePositiveIntFlag(argv, "pr");
-  const thread = parsePositiveIntFlag(argv, "thread");
-  const comment = parsePositiveIntFlag(argv, "comment");
-  const line = parsePositiveIntFlag(argv, "line");
-  const endLine = parsePositiveIntFlag(argv, "end-line");
+  const route = `${resource} ${command}`;
+  const allowed = ROUTE_FLAGS[route];
+  if (!allowed) {
+    printUsageAndExit(`unknown command "${command}" for resource "${resource}"`);
+  }
+  const occurrences = validateRouteFlags(route, new Set([...allowed, "help"]), scanned);
+  if (occurrences.has("help")) {
+    validateHelpOptions(route, occurrences);
+    printUsageAndExit();
+  }
+  const pr = parsePositiveIntFlag(occurrences, "pr");
 
-  const message = parseStringFlag(argv, "message");
-  const title = parseStringFlag(argv, "title");
-  const description = parseStringFlag(argv, "description");
-  const sourceBranch = parseStringFlag(argv, "source");
-  const targetBranch = parseStringFlag(argv, "target");
-  const file = parseStringFlag(argv, "file");
+  if (resource === "pr") {
+    switch (command) {
+      case "show":
+        return { resource, command, pr, json: occurrences.has("json") };
+      case "create": {
+        const title = parseRequiredStringFlag(occurrences, "title", route);
+        const description = parseStringFlag(occurrences, "description");
+        const sourceBranch = parseStringFlag(occurrences, "source");
+        const targetBranch = parseStringFlag(occurrences, "target");
+        return {
+          resource,
+          command,
+          title,
+          description,
+          sourceBranch,
+          targetBranch,
+          draft: occurrences.has("draft"),
+        };
+      }
+      case "edit": {
+        const description = parseStringFlag(occurrences, "description");
+        const setDraft = occurrences.has("draft");
+        const clearDraft = occurrences.has("no-draft");
+        if (setDraft && clearDraft) {
+          printUsageAndExit(`--draft and --no-draft cannot be used together`);
+        }
+        const draft = setDraft ? true : clearDraft ? false : undefined;
+        if (description !== undefined) {
+          return { resource, command, pr, description, draft };
+        }
+        if (draft !== undefined) {
+          return { resource, command, pr, draft };
+        }
+        printUsageAndExit(`--description, --draft, or --no-draft is required for "${route}"`);
+      }
+    }
+  }
 
-  if (actionRequiresThread(action) && !thread) {
-    printUsageAndExit(`--thread is required for "${action}"`);
-  }
-  if (actionRequiresComment(action) && !comment) {
-    printUsageAndExit(`--comment is required for "${action}"`);
-  }
-  if (actionRequiresMessage(action) && !message) {
-    printUsageAndExit(`--message is required for "${action}"`);
-  }
-  if (action === "create" && !title) {
-    printUsageAndExit(`--title is required for "create"`);
-  }
-  if (action === "update" && description === undefined && !argv.draft) {
-    printUsageAndExit(`--description or --draft is required for "update"`);
-  }
-  if (action === "update" && hasBareStringFlag(args, "description")) {
-    printUsageAndExit(`--description requires an explicit value (use --description "" to clear)`);
-  }
-  if (action !== "comment" && (line || endLine)) {
-    printUsageAndExit(`--line/--end-line are only valid for "comment"`);
-  }
-  if (line && !file) {
-    printUsageAndExit(`--line requires --file`);
-  }
-  if (endLine && !line) {
-    printUsageAndExit(`--end-line requires --line`);
-  }
-  if (endLine && line && endLine < line) {
-    printUsageAndExit(`--end-line must be >= --line`);
+  switch (command) {
+    case "list":
+      return {
+        resource: "comment",
+        command,
+        pr,
+        json: occurrences.has("json"),
+        excludeOwn: occurrences.has("exclude-own"),
+        excludeResolved: occurrences.has("exclude-resolved"),
+      };
+    case "create": {
+      const message = parseRequiredStringFlag(occurrences, "message", route);
+      const file = parseStringFlag(occurrences, "file");
+      const line = parsePositiveIntFlag(occurrences, "line");
+      const endLine = parsePositiveIntFlag(occurrences, "end-line");
+      if (file === "") {
+        printUsageAndExit(`--file must not be empty`);
+      }
+      if (line !== undefined && file === undefined) {
+        printUsageAndExit(`--line requires --file`);
+      }
+      if (endLine !== undefined && line === undefined) {
+        printUsageAndExit(`--end-line requires --line`);
+      }
+      if (endLine !== undefined && line !== undefined && endLine < line) {
+        printUsageAndExit(`--end-line must be >= --line`);
+      }
+      return { resource: "comment", command, pr, message, file, line, endLine };
+    }
+    case "reply":
+      return {
+        resource: "comment",
+        command,
+        pr,
+        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
+        message: parseRequiredStringFlag(occurrences, "message", route),
+      };
+    case "edit":
+      return {
+        resource: "comment",
+        command,
+        pr,
+        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
+        comment: parseRequiredPositiveIntFlag(occurrences, "comment", route),
+        message: parseRequiredStringFlag(occurrences, "message", route),
+      };
+    case "delete":
+      return {
+        resource: "comment",
+        command,
+        pr,
+        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
+        comment: parseRequiredPositiveIntFlag(occurrences, "comment", route),
+      };
+    case "resolve":
+      return {
+        resource: "comment",
+        command,
+        pr,
+        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
+      };
+    case "batch":
+      return { resource: "comment", command, pr };
   }
 
-  return {
-    action,
-    pr,
-    thread,
-    comment,
-    message,
-    json: !!argv.json,
-    excludeOwn: !!argv["exclude-own"],
-    excludeResolved: !!argv["exclude-resolved"],
-    title,
-    description,
-    sourceBranch,
-    targetBranch,
-    draft: !!argv.draft,
-    file,
-    line,
-    endLine,
-  };
+  return printUsageAndExit(`unknown command "${command}" for resource "comment"`);
 }
 
 export function getPat(): string {

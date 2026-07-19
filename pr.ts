@@ -1,16 +1,11 @@
 /**
- * Creates, inspects, and updates descriptions/draft state on Azure DevOps pull requests, and
- * lists/creates/replies-to/edits/deletes/resolves PR comments for the pull request associated with
- * the current branch of a git checkout whose origin remote
- * points at Azure Repos.
+ * Creates, inspects, and edits Azure DevOps pull requests, and manages their comment threads from a
+ * git checkout whose origin remote points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
- * is enough for `show` and `list`; "Read & Write" is needed for `create`, `update`, comment-changing
- * actions, and `batch`).
- * Run this via pr.sh, which accepts an exported PAT or loads one from .env. Literal values use
- * Node's native dotenv support, including 1Password Environment mounts; op:// references in
- * regular files are resolved just-in-time through 1Password CLI and are never written to disk by
- * the launcher.
+ * is enough for `pr show` and `comment list`; "Read & Write" is needed for `pr create`, `pr edit`,
+ * comment-changing commands, and `comment batch`). Run this via pr.sh, which accepts an exported
+ * PAT or loads one from .env.
  */
 import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
 import { createBatchRunner } from "./batch.ts";
@@ -32,32 +27,35 @@ async function main(): Promise<void> {
   const threads = createThreadService({ azure, ctx, fileAnchors });
   const batch = createBatchRunner({ threads });
 
-  // "create" makes a brand-new PR, so there's no existing PR ID to resolve yet.
-  if (options.action === "create") {
-    const pr = await pullRequests.create(options);
-    console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
-    console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
-    return;
-  }
-
-  if (options.action === "show") {
-    const pr = await pullRequests.resolve(options.pr);
-    console.log(options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr));
-    return;
+  if (options.resource === "pr") {
+    switch (options.command) {
+      case "create": {
+        const pr = await pullRequests.create(options);
+        console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
+        console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
+        return;
+      }
+      case "show": {
+        const pr = await pullRequests.resolve(options.pr);
+        console.log(options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr));
+        return;
+      }
+      case "edit": {
+        const prId = await pullRequests.resolveId(options.pr);
+        const pr = await pullRequests.update(prId, {
+          description: options.description,
+          draft: options.draft,
+        });
+        console.log(`Updated PR #${pr.pullRequestId}.`);
+        console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
+        return;
+      }
+    }
   }
 
   const prId = await pullRequests.resolveId(options.pr);
 
-  switch (options.action) {
-    case "update": {
-      const pr = await pullRequests.update(prId, {
-        description: options.description,
-        draft: options.draft ? true : undefined,
-      });
-      console.log(`Updated PR #${pr.pullRequestId}.`);
-      console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
-      return;
-    }
+  switch (options.command) {
     case "list": {
       const commentThreads = await threads.list(prId, options);
 
@@ -75,32 +73,32 @@ async function main(): Promise<void> {
       console.log(threads.formatSummary(commentThreads, prId));
       return;
     }
-    case "comment": {
+    case "create": {
       const location = toCommentLocation(options);
-      const thread = await threads.comment(prId, options.message!, location);
+      const thread = await threads.comment(prId, options.message, location);
       console.log(`Posted new comment thread ${thread.id} on PR #${prId}.`);
       console.log(threads.webUrl(prId, thread.id));
       return;
     }
     case "reply": {
-      await threads.reply(prId, options.thread!, options.message!);
+      await threads.reply(prId, options.thread, options.message);
       console.log(`Posted reply to thread ${options.thread} on PR #${prId}.`);
       return;
     }
     case "edit": {
-      await threads.edit(prId, options.thread!, options.comment!, options.message!);
+      await threads.edit(prId, options.thread, options.comment, options.message);
       console.log(`Edited comment ${options.comment} in thread ${options.thread} on PR #${prId}.`);
       return;
     }
     case "delete": {
-      await threads.delete(prId, options.thread!, options.comment!);
+      await threads.delete(prId, options.thread, options.comment);
       console.log(
         `Deleted comment ${options.comment} from thread ${options.thread} on PR #${prId}.`,
       );
       return;
     }
     case "resolve": {
-      await threads.resolve(prId, options.thread!);
+      await threads.resolve(prId, options.thread);
       console.log(`Marked thread ${options.thread} on PR #${prId} as resolved.`);
       return;
     }

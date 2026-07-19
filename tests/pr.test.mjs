@@ -33,6 +33,7 @@ test("create dispatches directly without resolving an existing pull request", (t
   const result = runPr(
     t,
     [
+      "pr",
       "create",
       "--title",
       "Dispatch coverage",
@@ -86,7 +87,7 @@ test("show fetches an explicit PR and prints human-readable details", (t) => {
     sourceRefName: "refs/heads/feature/account-validation",
     targetRefName: "refs/heads/main",
   };
-  const result = runPr(t, ["show", "--pr", "42"], {
+  const result = runPr(t, ["pr", "show", "--pr", "42"], {
     cwd,
     responses: [{ json: pr }],
   });
@@ -123,7 +124,7 @@ test("show prints an explicit PR as JSON", (t) => {
     sourceRefName: "refs/heads/feature/json",
     targetRefName: "refs/heads/main",
   };
-  const result = runPr(t, ["show", "--pr", "42", "--json"], {
+  const result = runPr(t, ["pr", "show", "--pr", "42", "--json"], {
     cwd,
     responses: [{ json: pr }],
   });
@@ -147,7 +148,7 @@ test("show hydrates the active PR found for the current branch", (t) => {
     isDraft: false,
     targetRefName: "refs/heads/main",
   };
-  const result = runPr(t, ["show", "--json"], {
+  const result = runPr(t, ["pr", "show", "--json"], {
     cwd,
     responses: [{ json: { value: [candidate] } }, { json: pr }],
   });
@@ -171,11 +172,11 @@ test("show hydrates the active PR found for the current branch", (t) => {
   assert.equal(result.stdout, `${JSON.stringify(pr, null, 2)}\n`);
 });
 
-test("update replaces the description for an explicit PR without fetching it first", (t) => {
+test("pr edit replaces the description for an explicit PR without fetching it first", (t) => {
   const cwd = createRepo(t);
   const result = runPr(
     t,
-    ["update", "--pr", "42", "--description", "Updated from the command line"],
+    ["pr", "edit", "--pr", "42", "--description", "Updated from the command line"],
     {
       cwd,
       responses: [
@@ -202,9 +203,9 @@ test("update replaces the description for an explicit PR without fetching it fir
   assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
 });
 
-test("update marks an explicit PR as draft without fetching it first", (t) => {
+test("pr edit marks an explicit PR as draft without fetching it first", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["update", "--pr", "42", "--draft"], {
+  const result = runPr(t, ["pr", "edit", "--pr", "42", "--draft"], {
     cwd,
     responses: [
       {
@@ -229,11 +230,38 @@ test("update marks an explicit PR as draft without fetching it first", (t) => {
   assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
 });
 
-test("update combines description and draft changes in one request", (t) => {
+test("pr edit clears draft state with --no-draft", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(t, ["pr", "edit", "--pr", "42", "--no-draft"], {
+    cwd,
+    responses: [
+      {
+        json: {
+          pullRequestId: 42,
+          title: "Ready PR",
+          isDraft: false,
+          sourceRefName: "refs/heads/feature/dispatch",
+        },
+      },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url: `${apiBase}/pullRequests/42?api-version=7.1`,
+      method: "PATCH",
+      body: { isDraft: false },
+    },
+  ]);
+  assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
+});
+
+test("pr edit combines description and draft changes in one request", (t) => {
   const cwd = createRepo(t);
   const result = runPr(
     t,
-    ["update", "--pr", "42", "--description", "Work in progress", "--draft"],
+    ["pr", "edit", "--pr", "42", "--description", "Work in progress", "--draft"],
     {
       cwd,
       responses: [
@@ -261,9 +289,9 @@ test("update combines description and draft changes in one request", (t) => {
   assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
 });
 
-test("update resolves the branch PR and can clear its description", (t) => {
+test("pr edit resolves the branch PR and can clear its description", (t) => {
   const cwd = createRepo(t, "feature/clear-description");
-  const result = runPr(t, ["update", "--description", ""], {
+  const result = runPr(t, ["pr", "edit", "--description", ""], {
     cwd,
     responses: [
       {
@@ -316,7 +344,7 @@ test("list uses an explicit PR and prints the filtered response as JSON", (t) =>
       comments: [{ id: 1, content: "Review this", author: { displayName: "Ada" } }],
     },
   ];
-  const result = runPr(t, ["list", "--pr", "42", "--json"], {
+  const result = runPr(t, ["comment", "list", "--pr", "42", "--json"], {
     cwd,
     responses: [{ json: { value: threads } }],
   });
@@ -341,29 +369,33 @@ test("list forwards exclude flags, fetches the profile after threads, and prints
     status: "active",
     comments: [{ id: 3, content: "Keep this", author: reviewer }],
   };
-  const result = runPr(t, ["list", "--pr", "42", "--json", "--exclude-own", "--exclude-resolved"], {
-    cwd,
-    responses: [
-      {
-        json: {
-          value: [
-            {
-              id: 11,
-              status: "active",
-              comments: [{ id: 1, content: "My note", author: currentUser }],
-            },
-            {
-              id: 12,
-              status: "fixed",
-              comments: [{ id: 2, content: "Already resolved", author: reviewer }],
-            },
-            survivor,
-          ],
+  const result = runPr(
+    t,
+    ["comment", "list", "--pr", "42", "--json", "--exclude-own", "--exclude-resolved"],
+    {
+      cwd,
+      responses: [
+        {
+          json: {
+            value: [
+              {
+                id: 11,
+                status: "active",
+                comments: [{ id: 1, content: "My note", author: currentUser }],
+              },
+              {
+                id: 12,
+                status: "fixed",
+                comments: [{ id: 2, content: "Already resolved", author: reviewer }],
+              },
+              survivor,
+            ],
+          },
         },
-      },
-      { json: { id: currentUser.id } },
-    ],
-  });
+        { json: { id: currentUser.id } },
+      ],
+    },
+  );
 
   assertSucceeded(result);
   assert.deepEqual(result.calls.map(request), [
@@ -383,7 +415,7 @@ test("list forwards exclude flags, fetches the profile after threads, and prints
 
 test("list auto-resolves the branch PR before fetching threads and handles an empty text result", (t) => {
   const cwd = createRepo(t, "feature/dispatch-order");
-  const result = runPr(t, ["list"], {
+  const result = runPr(t, ["comment", "list"], {
     cwd,
     responses: [
       {
@@ -422,7 +454,7 @@ test("list auto-resolves the branch PR before fetching threads and handles an em
 
 test("list prints representative nonempty text output", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["list", "--pr", "42"], {
+  const result = runPr(t, ["comment", "list", "--pr", "42"], {
     cwd,
     responses: [
       {
@@ -468,7 +500,7 @@ test("list prints representative nonempty text output", (t) => {
 
 test("comment dispatches a general top-level thread", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["comment", "--pr", "42", "--message", "General note"], {
+  const result = runPr(t, ["comment", "create", "--pr", "42", "--message", "General note"], {
     cwd,
     responses: [{ json: { id: 31, comments: [] } }],
   });
@@ -496,6 +528,7 @@ test("comment resolves and dispatches an anchored top-level thread", (t) => {
     t,
     [
       "comment",
+      "create",
       "--pr",
       "42",
       "--message",
@@ -562,10 +595,14 @@ test("comment resolves and dispatches an anchored top-level thread", (t) => {
 
 test("reply dispatches to the selected thread", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["reply", "--pr", "42", "--thread", "8", "--message", "Reply text"], {
-    cwd,
-    responses: [{ json: { id: 2 } }],
-  });
+  const result = runPr(
+    t,
+    ["comment", "reply", "--pr", "42", "--thread", "8", "--message", "Reply text"],
+    {
+      cwd,
+      responses: [{ json: { id: 2 } }],
+    },
+  );
 
   assertSucceeded(result);
   assert.deepEqual(result.calls.map(request), [
@@ -582,7 +619,18 @@ test("edit dispatches a comment content update and prints success", (t) => {
   const cwd = createRepo(t);
   const result = runPr(
     t,
-    ["edit", "--pr", "42", "--thread", "8", "--comment", "3", "--message", "Revised text"],
+    [
+      "comment",
+      "edit",
+      "--pr",
+      "42",
+      "--thread",
+      "8",
+      "--comment",
+      "3",
+      "--message",
+      "Revised text",
+    ],
     {
       cwd,
       responses: [{ json: { id: 3, content: "Revised text" } }],
@@ -602,7 +650,7 @@ test("edit dispatches a comment content update and prints success", (t) => {
 
 test("delete dispatches a bodyless comment deletion and prints success", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["delete", "--pr", "42", "--thread", "8", "--comment", "3"], {
+  const result = runPr(t, ["comment", "delete", "--pr", "42", "--thread", "8", "--comment", "3"], {
     cwd,
     responses: [{ body: "" }],
   });
@@ -620,7 +668,7 @@ test("delete dispatches a bodyless comment deletion and prints success", (t) => 
 
 test("resolve dispatches a fixed status update to the selected thread", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["resolve", "--pr", "42", "--thread", "9"], {
+  const result = runPr(t, ["comment", "resolve", "--pr", "42", "--thread", "9"], {
     cwd,
     responses: [{ json: { id: 9, status: "fixed" } }],
   });
@@ -639,13 +687,13 @@ test("resolve dispatches a fixed status update to the selected thread", (t) => {
 test("batch reads stdin and dispatches operations in order with per-operation PR overrides", (t) => {
   const cwd = createRepo(t);
   const operations = [
-    { action: "comment", message: "Batch note" },
-    { action: "reply", pr: 77, thread: 8, message: "Batch reply" },
-    { action: "edit", thread: 9, comment: 3, message: "Batch edit" },
-    { action: "delete", thread: 10, comment: 4 },
-    { action: "resolve", thread: 11 },
+    { command: "comment.create", message: "Batch note" },
+    { command: "comment.reply", pr: 77, thread: 8, message: "Batch reply" },
+    { command: "comment.edit", thread: 9, comment: 3, message: "Batch edit" },
+    { command: "comment.delete", thread: 10, comment: 4 },
+    { command: "comment.resolve", thread: 11 },
   ];
-  const result = runPr(t, ["batch", "--pr", "42"], {
+  const result = runPr(t, ["comment", "batch", "--pr", "42"], {
     cwd,
     stdin: JSON.stringify(operations),
     responses: [
@@ -690,17 +738,17 @@ test("batch reads stdin and dispatches operations in order with per-operation PR
   ]);
   assert.equal(
     result.stdout,
-    `[1/5] comment: posted new comment thread 51 on PR #42 (${webBase}/42?discussionId=51)\n` +
-      `[2/5] reply: posted reply to thread 8 on PR #77\n` +
-      `[3/5] edit: edited comment 3 in thread 9 on PR #42\n` +
-      `[4/5] delete: deleted comment 4 from thread 10 on PR #42\n` +
-      `[5/5] resolve: marked thread 11 on PR #42 as resolved\n`,
+    `[1/5] comment.create: posted new comment thread 51 on PR #42 (${webBase}/42?discussionId=51)\n` +
+      `[2/5] comment.reply: posted reply to thread 8 on PR #77\n` +
+      `[3/5] comment.edit: edited comment 3 in thread 9 on PR #42\n` +
+      `[4/5] comment.delete: deleted comment 4 from thread 10 on PR #42\n` +
+      `[5/5] comment.resolve: marked thread 11 on PR #42 as resolved\n`,
   );
 });
 
 test("a top-level Azure error is printed and exits nonzero", (t) => {
   const cwd = createRepo(t);
-  const result = runPr(t, ["list", "--pr", "42"], {
+  const result = runPr(t, ["comment", "list", "--pr", "42"], {
     cwd,
     responses: [
       {
