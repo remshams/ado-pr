@@ -5,10 +5,9 @@
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
  * is enough for `list`, "Read & Write" is needed for comment-changing actions and `batch`).
- * Run this via pr.sh, which loads it from .env (see .env.tpl). If the 1Password CLI (`op`) is
- * installed, .env is loaded via `op run` so an op:// 1Password reference works too (resolved
- * just-in-time, never written to disk); otherwise .env is loaded directly, which requires
- * AZURE_DEVOPS_PAT to be a literal secret.
+ * Run this via pr.sh, which accepts an exported PAT or loads one from .env. Literal values use
+ * Node's native dotenv support; op:// references are resolved just-in-time through 1Password CLI
+ * and are never written to disk by the launcher.
  */
 import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
 import { createBatchRunner } from "./batch.ts";

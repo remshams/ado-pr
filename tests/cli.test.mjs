@@ -120,7 +120,7 @@ test("delete requires a thread and comment, but not a message", () => {
   assert.equal(valid.stdout, "");
   assert.equal(
     valid.stderr,
-    "Error: AZURE_DEVOPS_PAT is not set. Run this via pr.sh, which injects it from 1Password.\n",
+    "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
   );
 });
 
@@ -158,6 +158,6 @@ test("a valid command fails cleanly when AZURE_DEVOPS_PAT is absent", () => {
   assert.equal(result.stdout, "");
   assert.equal(
     result.stderr,
-    "Error: AZURE_DEVOPS_PAT is not set. Run this via pr.sh, which injects it from 1Password.\n",
+    "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n",
   );
 });

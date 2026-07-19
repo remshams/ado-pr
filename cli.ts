@@ -118,7 +118,7 @@ Options:
 Requires:
   - Being run from within a git checkout whose origin remote points at Azure Repos (so the
     current branch/remote can be read).
-  - AZURE_DEVOPS_PAT set in the environment (pr.sh loads this from .env - see .env.tpl).
+  - AZURE_DEVOPS_PAT exported by the caller or set in .env (literal PAT or op:// reference).
 `);
   process.exit(message ? 1 : 0);
 }
@@ -254,7 +254,7 @@ export function getPat(): string {
   const pat = process.env.AZURE_DEVOPS_PAT;
   if (!pat) {
     console.error(
-      "Error: AZURE_DEVOPS_PAT is not set. Run this via pr.sh, which injects it from 1Password.",
+      "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.",
     );
     process.exit(1);
   }
