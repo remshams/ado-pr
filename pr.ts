@@ -16,6 +16,10 @@ import { toCommentLocation } from "./operation-types.ts";
 import { createPullRequestService } from "./pull-requests.ts";
 import { createThreadService } from "./threads.ts";
 
+function assertNever(value: never): never {
+  throw new Error(`Unhandled command: ${JSON.stringify(value)}`);
+}
+
 async function main(): Promise<void> {
   const options = parseArgs();
   const pat = getPat();
@@ -107,6 +111,8 @@ async function main(): Promise<void> {
       return;
     }
   }
+
+  return assertNever(options);
 }
 
 main().catch((error) => {
