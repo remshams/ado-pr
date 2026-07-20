@@ -1,83 +1,17 @@
+import {
+  BATCH_COMMANDS,
+  BATCH_FIELD_DEFINITIONS,
+  BATCH_FIELD_NAMES,
+  getBatchFields,
+  getCommandValidationRules,
+  isBatchCommand,
+  type BatchFieldName,
+  type BatchOperation,
+} from "./command-registry.ts";
 import { isPositiveInteger, toCommentLocation } from "./operation-types.ts";
 import type { ThreadService } from "./threads.ts";
 
-type BatchCommand =
-  | "comment.create"
-  | "comment.reply"
-  | "comment.edit"
-  | "comment.delete"
-  | "comment.resolve";
-
-interface BatchOperationBase {
-  command: BatchCommand;
-  pr?: number;
-}
-
-interface BatchCreateOperation extends BatchOperationBase {
-  command: "comment.create";
-  message: string;
-  file?: string;
-  line?: number;
-  endLine?: number;
-}
-
-interface BatchReplyOperation extends BatchOperationBase {
-  command: "comment.reply";
-  thread: number;
-  message: string;
-}
-
-interface BatchEditOperation extends BatchOperationBase {
-  command: "comment.edit";
-  thread: number;
-  comment: number;
-  message: string;
-}
-
-interface BatchDeleteOperation extends BatchOperationBase {
-  command: "comment.delete";
-  thread: number;
-  comment: number;
-}
-
-interface BatchResolveOperation extends BatchOperationBase {
-  command: "comment.resolve";
-  thread: number;
-}
-
-type BatchOperation =
-  | BatchCreateOperation
-  | BatchReplyOperation
-  | BatchEditOperation
-  | BatchDeleteOperation
-  | BatchResolveOperation;
-
-const BATCH_COMMANDS: BatchCommand[] = [
-  "comment.create",
-  "comment.reply",
-  "comment.edit",
-  "comment.delete",
-  "comment.resolve",
-];
-
-const BATCH_FIELDS_BY_COMMAND: Record<BatchCommand, readonly string[]> = {
-  "comment.create": ["command", "pr", "message", "file", "line", "endLine"],
-  "comment.reply": ["command", "pr", "thread", "message"],
-  "comment.edit": ["command", "pr", "thread", "comment", "message"],
-  "comment.delete": ["command", "pr", "thread", "comment"],
-  "comment.resolve": ["command", "pr", "thread"],
-};
-
-const BATCH_FIELDS = new Set([
-  "command",
-  "pr",
-  "thread",
-  "comment",
-  "message",
-  "file",
-  "line",
-  "endLine",
-]);
+const BATCH_FIELDS = new Set<string>(BATCH_FIELD_NAMES);
 
 /** Validates and normalizes one element of a `comment batch` command's JSON operations array. */
 function parseBatchOperation(raw: unknown, index: number): BatchOperation {
@@ -88,110 +22,78 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
   const op = raw as Record<string, unknown>;
 
   const command = op.command;
-  if (typeof command !== "string" || !BATCH_COMMANDS.includes(command as BatchCommand)) {
+  if (typeof command !== "string" || !isBatchCommand(command)) {
     throw new Error(
       `${label} has an invalid "command" (must be one of: ${BATCH_COMMANDS.join(", ")}).`,
     );
   }
-  const batchCommand = command as BatchCommand;
-  const allowedFields = BATCH_FIELDS_BY_COMMAND[batchCommand];
+  const batchCommand = command;
+  const allowedFields = getBatchFields(batchCommand);
   for (const field of Object.keys(op)) {
     if (!BATCH_FIELDS.has(field)) {
       throw new Error(`${label} ("${batchCommand}") has an unknown field "${field}".`);
     }
-    if (!allowedFields.includes(field)) {
+    if (!allowedFields.includes(field as BatchFieldName)) {
       throw new Error(`${label} ("${batchCommand}") has an irrelevant field "${field}".`);
     }
   }
 
-  function positiveIntField(field: string): number | undefined {
+  const normalized: Record<string, unknown> = { command: batchCommand };
+  for (const field of BATCH_FIELD_NAMES) {
+    if (field === "command" || !allowedFields.includes(field)) {
+      continue;
+    }
+
     const value = op[field];
+    const definition = BATCH_FIELD_DEFINITIONS[field];
     if (value === undefined) {
-      return undefined;
-    }
-    if (!isPositiveInteger(value)) {
-      throw new Error(`${label} has an invalid "${field}" (must be a positive integer).`);
-    }
-    return value;
-  }
-
-  function requiredPositiveIntField(field: string): number {
-    const value = positiveIntField(field);
-    if (value === undefined) {
-      throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
-    }
-    return value;
-  }
-
-  function requiredMessage(): string {
-    const value = op.message;
-    if (value === undefined || value === "") {
-      throw new Error(`${label} ("${batchCommand}") requires a "message".`);
-    }
-    if (typeof value !== "string") {
-      throw new Error(`${label} has an invalid "message" (must be a string).`);
-    }
-    return value;
-  }
-
-  function optionalFile(): string | undefined {
-    const value = op.file;
-    if (value === undefined) {
-      return undefined;
-    }
-    if (typeof value !== "string" || value.length === 0) {
-      throw new Error(`${label} has an invalid "file" (must be a non-empty string).`);
-    }
-    return value;
-  }
-
-  const pr = positiveIntField("pr");
-  switch (batchCommand) {
-    case "comment.create": {
-      const message = requiredMessage();
-      const file = optionalFile();
-      const line = positiveIntField("line");
-      const endLine = positiveIntField("endLine");
-      if (line !== undefined && file === undefined) {
-        throw new Error(`${label} ("${batchCommand}") has "line" but no "file".`);
+      if (definition.required) {
+        throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
       }
-      if (endLine !== undefined && line === undefined) {
-        throw new Error(`${label} ("${batchCommand}") has "endLine" but no "line".`);
-      }
-      if (endLine !== undefined && line !== undefined && endLine < line) {
-        throw new Error(`${label} ("${batchCommand}") has "endLine" < "line".`);
-      }
-      return { command: batchCommand, pr, message, file, line, endLine };
+      continue;
     }
-    case "comment.reply":
-      return {
-        command: batchCommand,
-        pr,
-        thread: requiredPositiveIntField("thread"),
-        message: requiredMessage(),
-      };
-    case "comment.edit":
-      return {
-        command: batchCommand,
-        pr,
-        thread: requiredPositiveIntField("thread"),
-        comment: requiredPositiveIntField("comment"),
-        message: requiredMessage(),
-      };
-    case "comment.delete":
-      return {
-        command: batchCommand,
-        pr,
-        thread: requiredPositiveIntField("thread"),
-        comment: requiredPositiveIntField("comment"),
-      };
-    case "comment.resolve":
-      return {
-        command: batchCommand,
-        pr,
-        thread: requiredPositiveIntField("thread"),
-      };
+
+    switch (definition.kind) {
+      case "positiveInteger":
+        if (!isPositiveInteger(value)) {
+          throw new Error(`${label} has an invalid "${field}" (must be a positive integer).`);
+        }
+        normalized[field] = value;
+        break;
+      case "message":
+        if (value === "" && definition.required) {
+          throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
+        }
+        if (typeof value !== "string") {
+          throw new Error(`${label} has an invalid "${field}" (must be a string).`);
+        }
+        normalized[field] = value;
+        break;
+      case "file":
+        if (typeof value !== "string" || value.length === 0) {
+          throw new Error(`${label} has an invalid "${field}" (must be a non-empty string).`);
+        }
+        normalized[field] = value;
+        break;
+    }
   }
+
+  if (getCommandValidationRules(batchCommand).includes("commentLocation")) {
+    const file = normalized.file as string | undefined;
+    const line = normalized.line as number | undefined;
+    const endLine = normalized.endLine as number | undefined;
+    if (line !== undefined && file === undefined) {
+      throw new Error(`${label} ("${batchCommand}") has "line" but no "file".`);
+    }
+    if (endLine !== undefined && line === undefined) {
+      throw new Error(`${label} ("${batchCommand}") has "endLine" but no "line".`);
+    }
+    if (endLine !== undefined && endLine < line!) {
+      throw new Error(`${label} ("${batchCommand}") has "endLine" < "line".`);
+    }
+  }
+
+  return normalized as unknown as BatchOperation;
 }
 
 /** Reads and JSON-parses the full contents of stdin. Used by the `comment batch` command. */
