@@ -1,37 +1,26 @@
 import minimist from "minimist";
 
+import {
+  BOOLEAN_FLAG_NAMES,
+  COMMAND_REGISTRY,
+  FLAG_DEFINITIONS,
+  STRING_FLAG_NAMES,
+  formatHelp,
+  getCommandId,
+  isResourceName,
+  type CommandId,
+  type CommandValidationRule,
+  type FlagName,
+  type ParsedCommandFlags,
+  type PositiveIntegerFlagName,
+  type StringFlagName,
+  type TextFlagName,
+} from "./command-registry.ts";
 import { isPositiveInteger, type CliOptions } from "./operation-types.ts";
 
-const STRING_FLAGS = [
-  "pr",
-  "thread",
-  "comment",
-  "message",
-  "title",
-  "description",
-  "source",
-  "target",
-  "file",
-  "line",
-  "end-line",
-] as const;
-const BOOLEAN_FLAGS = ["help", "json", "exclude-own", "exclude-resolved", "draft"] as const;
-const KNOWN_FLAGS = new Set<string>([...STRING_FLAGS, ...BOOLEAN_FLAGS, "no-draft"]);
-const STRING_FLAG_SET = new Set<string>(STRING_FLAGS);
-const BOOLEAN_FLAG_SET = new Set<string>([...BOOLEAN_FLAGS, "no-draft"]);
-
-const ROUTE_FLAGS: Record<string, ReadonlySet<string>> = {
-  "pr show": new Set(["pr", "json"]),
-  "pr create": new Set(["title", "description", "source", "target", "draft"]),
-  "pr edit": new Set(["pr", "description", "draft", "no-draft"]),
-  "comment list": new Set(["pr", "json", "exclude-own", "exclude-resolved"]),
-  "comment create": new Set(["pr", "message", "file", "line", "end-line"]),
-  "comment reply": new Set(["pr", "thread", "message"]),
-  "comment edit": new Set(["pr", "thread", "comment", "message"]),
-  "comment delete": new Set(["pr", "thread", "comment"]),
-  "comment resolve": new Set(["pr", "thread"]),
-  "comment batch": new Set(["pr"]),
-};
+const KNOWN_FLAGS = new Set<string>(Object.keys(FLAG_DEFINITIONS));
+const STRING_FLAG_SET = new Set<string>(STRING_FLAG_NAMES);
+const BOOLEAN_FLAG_SET = new Set<string>(BOOLEAN_FLAG_NAMES);
 
 interface FlagOccurrence {
   name: string;
@@ -45,64 +34,7 @@ function printUsageAndExit(message?: string): never {
   if (message) {
     console.error(`Error: ${message}\n`);
   }
-  console.error(`Usage: pr.sh pr show [--pr <id>] [--json]
-       pr.sh pr create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]
-       pr.sh pr edit [--description "..."] [--draft | --no-draft] [--pr <id>]
-       pr.sh comment list [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]
-       pr.sh comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]
-       pr.sh comment reply --thread <id> --message "..." [--pr <id>]
-       pr.sh comment edit --thread <id> --comment <id> --message "..." [--pr <id>]
-       pr.sh comment delete --thread <id> --comment <id> [--pr <id>]
-       pr.sh comment resolve --thread <id> [--pr <id>]
-       pr.sh comment batch [--pr <id>] < operations.json
-
-Commands:
-  pr show                  Show pull request details. Use --json for raw data.
-  pr create                Create a pull request from the current branch or --source.
-  pr edit                  Change a pull request description and/or draft state.
-  comment list             List comment threads, optionally filtering or printing JSON.
-  comment create           Create a general or file-anchored comment thread.
-  comment reply            Reply to an existing thread.
-  comment edit             Edit an existing comment.
-  comment delete           Delete an existing comment.
-  comment resolve          Mark an existing thread as resolved.
-  comment batch            Run comment operations from a JSON array read from stdin.
-
-Batch input:
-  Each array element must have exactly one of these shapes (fields marked ? are optional):
-    {"command":"comment.create","message":"...","pr"?:n,"file"?:"...","line"?:n,"endLine"?:n}
-    {"command":"comment.reply","thread":n,"message":"...","pr"?:n}
-    {"command":"comment.edit","thread":n,"comment":n,"message":"...","pr"?:n}
-    {"command":"comment.delete","thread":n,"comment":n,"pr"?:n}
-    {"command":"comment.resolve","thread":n,"pr"?:n}
-  Per-operation "pr" overrides the command's --pr/default PR for that operation. Unknown fields and
-  fields irrelevant to the selected command are invalid. Operations execute sequentially in array
-  order. A failed operation is reported and later operations still run; after all operations finish,
-  the process exits nonzero if any operation failed.
-
-Options:
-  --pr <id>                Use a specific pull request instead of the current branch's active PR.
-  --title <text>           Pull request title (required for \`pr create\`).
-  --description <text>     Pull request description. Pass an explicit empty string to clear it.
-  --source <branch>        Source branch for \`pr create\` (defaults to the current branch).
-  --target <branch>        Target branch for \`pr create\` (defaults to the repository default).
-  --draft                  Create a draft PR or mark an existing PR as draft.
-  --no-draft               Mark an existing PR as ready; valid only for \`pr edit\`.
-  --thread <id>            Thread ID for reply/edit/delete/resolve.
-  --comment <id>           Comment ID for edit/delete.
-  --message <text>         Comment text for create/reply/edit.
-  --file <path>            Anchor a new comment thread to a repository-relative file.
-  --line <n>               Anchor to a line in --file. Requires --file.
-  --end-line <n>           End an anchored range. Requires --line and must be >= --line.
-  --exclude-own            Hide threads where the current identity is the only commenter.
-  --exclude-resolved       Hide resolved threads.
-  --json                   Print raw JSON for \`pr show\` or \`comment list\`.
-  -h, --help               Show this help.
-
-Requires:
-  - A git checkout whose origin remote points at Azure Repos.
-  - AZURE_DEVOPS_PAT exported by the caller or set in .env.
-`);
+  console.error(formatHelp());
   process.exit(message ? 1 : 0);
 }
 
@@ -197,7 +129,7 @@ function validateRouteFlags(
 
 function parseStringFlag(
   occurrences: Map<string, FlagOccurrence>,
-  flag: string,
+  flag: StringFlagName,
 ): string | undefined {
   const occurrence = occurrences.get(flag);
   if (!occurrence) {
@@ -209,21 +141,9 @@ function parseStringFlag(
   return occurrence.value;
 }
 
-function parseRequiredStringFlag(
-  occurrences: Map<string, FlagOccurrence>,
-  flag: string,
-  route: string,
-): string {
-  const value = parseStringFlag(occurrences, flag);
-  if (!value) {
-    printUsageAndExit(`--${flag} is required for "${route}"`);
-  }
-  return value;
-}
-
 function parsePositiveIntFlag(
   occurrences: Map<string, FlagOccurrence>,
-  flag: "pr" | "thread" | "comment" | "line" | "end-line",
+  flag: PositiveIntegerFlagName,
 ): number | undefined {
   const raw = parseStringFlag(occurrences, flag);
   if (raw === undefined) {
@@ -236,48 +156,69 @@ function parsePositiveIntFlag(
   return value;
 }
 
-function parseRequiredPositiveIntFlag(
-  occurrences: Map<string, FlagOccurrence>,
-  flag: "thread" | "comment",
+function parseCommandFlags<Id extends CommandId>(
+  commandId: Id,
   route: string,
-): number {
-  const value = parsePositiveIntFlag(occurrences, flag);
-  if (value === undefined) {
-    printUsageAndExit(`--${flag} is required for "${route}"`);
-  }
-  return value;
-}
+  occurrences: Map<string, FlagOccurrence>,
+  enforceRequired: true,
+): ParsedCommandFlags<Id>;
+function parseCommandFlags<Id extends CommandId>(
+  commandId: Id,
+  route: string,
+  occurrences: Map<string, FlagOccurrence>,
+  enforceRequired: false,
+): void;
+function parseCommandFlags<Id extends CommandId>(
+  commandId: Id,
+  route: string,
+  occurrences: Map<string, FlagOccurrence>,
+  enforceRequired: boolean,
+): ParsedCommandFlags<Id> | void {
+  const definition = COMMAND_REGISTRY[commandId];
+  const values: Partial<Record<FlagName, string | number | boolean>> = {};
+  const requiredFlags = new Set<FlagName>(
+    "requiredFlags" in definition ? definition.requiredFlags : [],
+  );
 
-function validateHelpOptions(route: string, occurrences: Map<string, FlagOccurrence>): void {
-  const positiveIntegerFlags = ["pr", "thread", "comment", "line", "end-line"] as const;
-  for (const flag of positiveIntegerFlags) {
-    if (occurrences.has(flag)) {
-      parsePositiveIntFlag(occurrences, flag);
+  for (const flag of definition.flags) {
+    const kind = FLAG_DEFINITIONS[flag].kind;
+    if (kind === "boolean") {
+      values[flag] = occurrences.has(flag);
+    } else if (kind === "positiveInteger") {
+      values[flag] = parsePositiveIntFlag(occurrences, flag as PositiveIntegerFlagName);
+    } else {
+      values[flag] = parseStringFlag(occurrences, flag as TextFlagName);
     }
-  }
-  for (const flag of ["message", "title", "description", "source", "target", "file"] as const) {
-    if (occurrences.has(flag)) {
-      parseStringFlag(occurrences, flag);
-    }
-  }
 
-  const requireNonEmptyIfPresent = (flag: "message" | "title"): void => {
-    if (occurrences.has(flag) && !parseStringFlag(occurrences, flag)) {
+    if (enforceRequired && requiredFlags.has(flag) && !values[flag]) {
       printUsageAndExit(`--${flag} is required for "${route}"`);
     }
-  };
+  }
 
-  if (route === "pr create") {
-    requireNonEmptyIfPresent("title");
+  if (!enforceRequired) {
+    for (const flag of requiredFlags) {
+      if (occurrences.has(flag) && !values[flag]) {
+        printUsageAndExit(`--${flag} is required for "${route}"`);
+      }
+    }
   }
-  if (route === "pr edit" && occurrences.has("draft") && occurrences.has("no-draft")) {
-    printUsageAndExit(`--draft and --no-draft cannot be used together`);
+
+  const validationRules: readonly CommandValidationRule[] | undefined =
+    "validationRules" in definition ? definition.validationRules : undefined;
+  if (validationRules?.includes("draftState")) {
+    const setDraft = values.draft === true;
+    const clearDraft = values["no-draft"] === true;
+    if (setDraft && clearDraft) {
+      printUsageAndExit(`--draft and --no-draft cannot be used together`);
+    }
+    if (enforceRequired && values.description === undefined && !setDraft && !clearDraft) {
+      printUsageAndExit(`--description, --draft, or --no-draft is required for "${route}"`);
+    }
   }
-  if (route === "comment create") {
-    requireNonEmptyIfPresent("message");
-    const file = parseStringFlag(occurrences, "file");
-    const line = parsePositiveIntFlag(occurrences, "line");
-    const endLine = parsePositiveIntFlag(occurrences, "end-line");
+  if (validationRules?.includes("commentLocation")) {
+    const file = values.file as string | undefined;
+    const line = values.line as number | undefined;
+    const endLine = values["end-line"] as number | undefined;
     if (file === "") {
       printUsageAndExit(`--file must not be empty`);
     }
@@ -291,9 +232,108 @@ function validateHelpOptions(route: string, occurrences: Map<string, FlagOccurre
       printUsageAndExit(`--end-line must be >= --line`);
     }
   }
-  if (route === "comment reply" || route === "comment edit") {
-    requireNonEmptyIfPresent("message");
+
+  if (enforceRequired) {
+    return values as ParsedCommandFlags<Id>;
   }
+}
+
+type CliOptionsFor<Id extends CommandId> = Id extends `${infer Resource}.${infer Command}`
+  ? Extract<CliOptions, { resource: Resource; command: Command }>
+  : never;
+type CommandOptionBuilders = {
+  [Id in CommandId]: (values: ParsedCommandFlags<Id>) => CliOptionsFor<Id>;
+};
+
+const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
+  "pr.show": (values) => ({
+    resource: "pr",
+    command: "show",
+    pr: values.pr,
+    json: values.json,
+  }),
+  "pr.create": (values) => ({
+    resource: "pr",
+    command: "create",
+    title: values.title,
+    description: values.description,
+    sourceBranch: values.source,
+    targetBranch: values.target,
+    draft: values.draft,
+  }),
+  "pr.edit": (values) => {
+    const draft = values.draft ? true : values["no-draft"] ? false : undefined;
+    if (values.description !== undefined) {
+      return {
+        resource: "pr",
+        command: "edit",
+        pr: values.pr,
+        description: values.description,
+        draft,
+      };
+    }
+    if (draft === undefined) {
+      throw new Error("Registered pr.edit validation did not produce an update.");
+    }
+    return { resource: "pr", command: "edit", pr: values.pr, draft };
+  },
+  "comment.list": (values) => ({
+    resource: "comment",
+    command: "list",
+    pr: values.pr,
+    json: values.json,
+    excludeOwn: values["exclude-own"],
+    excludeResolved: values["exclude-resolved"],
+  }),
+  "comment.create": (values) => ({
+    resource: "comment",
+    command: "create",
+    pr: values.pr,
+    message: values.message,
+    file: values.file,
+    line: values.line,
+    endLine: values["end-line"],
+  }),
+  "comment.reply": (values) => ({
+    resource: "comment",
+    command: "reply",
+    pr: values.pr,
+    thread: values.thread,
+    message: values.message,
+  }),
+  "comment.edit": (values) => ({
+    resource: "comment",
+    command: "edit",
+    pr: values.pr,
+    thread: values.thread,
+    comment: values.comment,
+    message: values.message,
+  }),
+  "comment.delete": (values) => ({
+    resource: "comment",
+    command: "delete",
+    pr: values.pr,
+    thread: values.thread,
+    comment: values.comment,
+  }),
+  "comment.resolve": (values) => ({
+    resource: "comment",
+    command: "resolve",
+    pr: values.pr,
+    thread: values.thread,
+  }),
+  "comment.batch": (values) => ({
+    resource: "comment",
+    command: "batch",
+    pr: values.pr,
+  }),
+};
+
+function buildCliOptions<Id extends CommandId>(
+  commandId: Id,
+  values: ParsedCommandFlags<Id>,
+): CliOptionsFor<Id> {
+  return COMMAND_OPTION_BUILDERS[commandId](values);
 }
 
 export function parseArgs(): CliOptions {
@@ -306,8 +346,8 @@ export function parseArgs(): CliOptions {
   }
 
   const argv = minimist(args, {
-    string: [...STRING_FLAGS],
-    boolean: [...BOOLEAN_FLAGS],
+    string: [...STRING_FLAG_NAMES],
+    boolean: [...BOOLEAN_FLAG_NAMES],
     alias: { h: "help" },
   });
   const positional = argv._.map(String);
@@ -317,7 +357,7 @@ export function parseArgs(): CliOptions {
   if (!resource) {
     printUsageAndExit("a resource and command are required");
   }
-  if (resource !== "pr" && resource !== "comment") {
+  if (!isResourceName(resource)) {
     printUsageAndExit(`unknown resource "${resource}"`);
   }
   if (!command) {
@@ -328,121 +368,18 @@ export function parseArgs(): CliOptions {
   }
 
   const route = `${resource} ${command}`;
-  const allowed = ROUTE_FLAGS[route];
-  if (!allowed) {
+  const commandId = getCommandId(resource, command);
+  if (!commandId) {
     printUsageAndExit(`unknown command "${command}" for resource "${resource}"`);
   }
-  const occurrences = validateRouteFlags(route, new Set([...allowed, "help"]), scanned);
+  const definition = COMMAND_REGISTRY[commandId];
+  const occurrences = validateRouteFlags(route, new Set([...definition.flags, "help"]), scanned);
   if (occurrences.has("help")) {
-    validateHelpOptions(route, occurrences);
+    parseCommandFlags(commandId, route, occurrences, false);
     printUsageAndExit();
   }
-  const pr = parsePositiveIntFlag(occurrences, "pr");
-
-  if (resource === "pr") {
-    switch (command) {
-      case "show":
-        return { resource, command, pr, json: occurrences.has("json") };
-      case "create": {
-        const title = parseRequiredStringFlag(occurrences, "title", route);
-        const description = parseStringFlag(occurrences, "description");
-        const sourceBranch = parseStringFlag(occurrences, "source");
-        const targetBranch = parseStringFlag(occurrences, "target");
-        return {
-          resource,
-          command,
-          title,
-          description,
-          sourceBranch,
-          targetBranch,
-          draft: occurrences.has("draft"),
-        };
-      }
-      case "edit": {
-        const description = parseStringFlag(occurrences, "description");
-        const setDraft = occurrences.has("draft");
-        const clearDraft = occurrences.has("no-draft");
-        if (setDraft && clearDraft) {
-          printUsageAndExit(`--draft and --no-draft cannot be used together`);
-        }
-        const draft = setDraft ? true : clearDraft ? false : undefined;
-        if (description !== undefined) {
-          return { resource, command, pr, description, draft };
-        }
-        if (draft !== undefined) {
-          return { resource, command, pr, draft };
-        }
-        printUsageAndExit(`--description, --draft, or --no-draft is required for "${route}"`);
-      }
-    }
-  }
-
-  switch (command) {
-    case "list":
-      return {
-        resource: "comment",
-        command,
-        pr,
-        json: occurrences.has("json"),
-        excludeOwn: occurrences.has("exclude-own"),
-        excludeResolved: occurrences.has("exclude-resolved"),
-      };
-    case "create": {
-      const message = parseRequiredStringFlag(occurrences, "message", route);
-      const file = parseStringFlag(occurrences, "file");
-      const line = parsePositiveIntFlag(occurrences, "line");
-      const endLine = parsePositiveIntFlag(occurrences, "end-line");
-      if (file === "") {
-        printUsageAndExit(`--file must not be empty`);
-      }
-      if (line !== undefined && file === undefined) {
-        printUsageAndExit(`--line requires --file`);
-      }
-      if (endLine !== undefined && line === undefined) {
-        printUsageAndExit(`--end-line requires --line`);
-      }
-      if (endLine !== undefined && line !== undefined && endLine < line) {
-        printUsageAndExit(`--end-line must be >= --line`);
-      }
-      return { resource: "comment", command, pr, message, file, line, endLine };
-    }
-    case "reply":
-      return {
-        resource: "comment",
-        command,
-        pr,
-        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
-        message: parseRequiredStringFlag(occurrences, "message", route),
-      };
-    case "edit":
-      return {
-        resource: "comment",
-        command,
-        pr,
-        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
-        comment: parseRequiredPositiveIntFlag(occurrences, "comment", route),
-        message: parseRequiredStringFlag(occurrences, "message", route),
-      };
-    case "delete":
-      return {
-        resource: "comment",
-        command,
-        pr,
-        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
-        comment: parseRequiredPositiveIntFlag(occurrences, "comment", route),
-      };
-    case "resolve":
-      return {
-        resource: "comment",
-        command,
-        pr,
-        thread: parseRequiredPositiveIntFlag(occurrences, "thread", route),
-      };
-    case "batch":
-      return { resource: "comment", command, pr };
-  }
-
-  return printUsageAndExit(`unknown command "${command}" for resource "comment"`);
+  const values = parseCommandFlags(commandId, route, occurrences, true);
+  return buildCliOptions(commandId, values);
 }
 
 export function getPat(): string {

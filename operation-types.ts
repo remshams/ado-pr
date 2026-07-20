@@ -1,3 +1,5 @@
+import type { CommandId } from "./command-registry.ts";
+
 export interface CommentLocation {
   file: string;
   line?: number;
@@ -8,7 +10,7 @@ interface PullRequestTarget {
   pr?: number;
 }
 
-export type CliOptions =
+type CliOptionsShape =
   | (PullRequestTarget & {
       resource: "pr";
       command: "show";
@@ -82,20 +84,25 @@ export type CliOptions =
       command: "batch";
     });
 
+type CommandIdFor<Option> = Option extends {
+  resource: infer Resource extends string;
+  command: infer Command extends string;
+}
+  ? `${Resource}.${Command}`
+  : never;
+type CliOptionCommandId = CommandIdFor<CliOptionsShape>;
+type Assert<T extends true> = T;
+type RegistryMatchesCliOptions = Assert<
+  [CommandId] extends [CliOptionCommandId]
+    ? [CliOptionCommandId] extends [CommandId]
+      ? true
+      : false
+    : false
+>;
+export type CliOptions = RegistryMatchesCliOptions extends true ? CliOptionsShape : never;
+
 export function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
-}
-
-export function actionRequiresThread(action: string): boolean {
-  return action === "reply" || action === "resolve" || action === "edit" || action === "delete";
-}
-
-export function actionRequiresComment(action: string): boolean {
-  return action === "edit" || action === "delete";
-}
-
-export function actionRequiresMessage(action: string): boolean {
-  return action === "create" || action === "reply" || action === "edit";
 }
 
 /** Builds an optional file-anchor location from CLI options or a batch operation. */
