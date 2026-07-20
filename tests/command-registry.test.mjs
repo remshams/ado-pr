@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  BATCH_COMMANDS,
+  BATCH_FIELD_DEFINITIONS,
+  COMMAND_IDS,
+  COMMAND_REGISTRY,
+  FLAG_DEFINITIONS,
+  formatHelp,
+  getBatchFields,
+  getCommandDefinition,
+} from "../command-registry.ts";
+
+test("registry keys, routes, and command-local schemas stay coherent", () => {
+  for (const id of COMMAND_IDS) {
+    const definition = COMMAND_REGISTRY[id];
+    assert.equal(id, `${definition.resource}.${definition.command}`);
+    assert.equal(getCommandDefinition(definition.resource, definition.command), definition);
+
+    for (const flag of definition.flags) {
+      assert.ok(Object.hasOwn(FLAG_DEFINITIONS, flag), `${id} references unknown flag ${flag}`);
+    }
+    for (const required of definition.requiredFlags ?? []) {
+      assert.ok(definition.flags.includes(required), `${id} requires disallowed flag ${required}`);
+    }
+  }
+});
+
+test("batch schemas contain only registered fields and identify their command", () => {
+  for (const command of BATCH_COMMANDS) {
+    const fields = getBatchFields(command);
+    assert.equal(fields[0], "command");
+    assert.equal(new Set(fields).size, fields.length, `${command} contains duplicate batch fields`);
+    for (const field of fields) {
+      assert.ok(
+        Object.hasOwn(BATCH_FIELD_DEFINITIONS, field),
+        `${command} references unknown batch field ${field}`,
+      );
+    }
+  }
+});
+
+test("help is generated from every registered command and batch schema", () => {
+  const help = formatHelp();
+  for (const id of COMMAND_IDS) {
+    const definition = COMMAND_REGISTRY[id];
+    assert.ok(help.includes(`pr.sh ${definition.usage}`));
+    assert.ok(help.includes(definition.summary));
+  }
+  for (const command of BATCH_COMMANDS) {
+    assert.ok(help.includes(`\"command\":\"${command}\"`));
+  }
+});
