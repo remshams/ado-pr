@@ -1,11 +1,11 @@
 ---
 name: azure-pr
-description: "Manage Azure DevOps pull requests and review comments with pr.sh: create and inspect PRs; read and update PR descriptions; mark PRs as drafts; list PR comment threads and inspect review feedback; post, reply to, edit, delete, and resolve comments; and run batch operations. Use whenever the user asks to open or inspect an Azure DevOps PR, read or update its description, set it to draft, list or review PR comments, respond to PR feedback, or post code-review findings."
+description: "Manage Azure DevOps pull requests and review comments with pr.sh: list, create, and inspect PRs; read and update PR descriptions; mark PRs as drafts; list PR comment threads and inspect review feedback; post, reply to, edit, delete, and resolve comments; and run batch operations. Use whenever the user asks to list their active Azure DevOps PRs, open or inspect a PR, read or update its description, set it to draft, list or review PR comments, respond to PR feedback, or post code-review findings."
 ---
 
 # Azure DevOps PR tooling
 
-Use `pr.sh` (can be found in one of projects in the "~/coding" folder) for Azure DevOps pull-request and review-comment operations. Run it from the root of the target Azure Repos checkout so it can discover the repository, current branch, and active pull request.
+Use `pr.sh` (can be found in one of projects in the "~/coding" folder) for Azure DevOps pull-request and review-comment operations. Run it from the root of the target Azure Repos checkout so it can discover the repository, current branch, and active pull request. Use `pr.sh pr list` to list active pull requests created by the authenticated PAT owner in that repository; add `--json` for raw data.
 
 Treat the tool's current CLI help as the source of truth for actions, options, validation, authentication, batch schemas, and output. Do not duplicate that reference in this skill. Use `pr.sh --help`; if authentication is not configured yet, run the adjacent `pr.ts` entrypoint with `--help` instead.
 
