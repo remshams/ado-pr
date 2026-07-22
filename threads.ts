@@ -1,4 +1,10 @@
-import { API_VERSION, pullRequestApiUrl, pullRequestWebUrl, type AzureRequester } from "./azure.ts";
+import {
+  API_VERSION,
+  getAuthenticatedUserId,
+  pullRequestApiUrl,
+  pullRequestWebUrl,
+  type AzureRequester,
+} from "./azure.ts";
 import type {
   CommentThreadContext,
   FileAnchorService,
@@ -95,13 +101,6 @@ export function createThreadService({
     return data.value;
   }
 
-  /** Looks up the Azure identity id associated with the PAT, only when excludeOwn needs it. */
-  async function getCurrentUserId(): Promise<string> {
-    const url = `https://vssps.dev.azure.com/${encodeURIComponent(ctx.organization)}/_apis/profile/profiles/me?api-version=${API_VERSION}`;
-    const data = await azure.request<{ id: string }>(url);
-    return data.id;
-  }
-
   /** Fetches threads for a PR and applies the requested exclude filters. */
   async function list(
     prId: number,
@@ -113,7 +112,7 @@ export function createThreadService({
       result = result.filter(isUnresolvedThread);
     }
     if (options.excludeOwn) {
-      const currentUserId = await getCurrentUserId();
+      const currentUserId = await getAuthenticatedUserId(azure, ctx.organization);
       result = result.filter((thread) => hasCommentFromSomeoneElse(thread, currentUserId));
     }
 

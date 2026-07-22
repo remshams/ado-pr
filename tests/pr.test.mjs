@@ -360,7 +360,7 @@ test("list uses an explicit PR and prints the filtered response as JSON", (t) =>
   assert.equal(result.stdout, `${JSON.stringify(threads, null, 2)}\n`);
 });
 
-test("list forwards exclude flags, fetches the profile after threads, and prints only threads surviving both filters", (t) => {
+test("list forwards exclude flags, fetches connection data after threads, and prints only threads surviving both filters", (t) => {
   const cwd = createRepo(t);
   const currentUser = { id: "me", displayName: "Current User" };
   const reviewer = { id: "reviewer", displayName: "Reviewer" };
@@ -392,7 +392,7 @@ test("list forwards exclude flags, fetches the profile after threads, and prints
             ],
           },
         },
-        { json: { id: currentUser.id } },
+        { json: { authenticatedUser: { id: currentUser.id } } },
       ],
     },
   );
@@ -405,7 +405,9 @@ test("list forwards exclude flags, fetches the profile after threads, and prints
       body: null,
     },
     {
-      url: "https://vssps.dev.azure.com/acme/_apis/profile/profiles/me?api-version=7.1",
+      url:
+        "https://dev.azure.com/acme/_apis/connectionData?" +
+        "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
       method: "GET",
       body: null,
     },

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createAzureRequester,
+  getAuthenticatedUserId,
   orgProjectUrl,
   pullRequestApiUrl,
   pullRequestWebUrl,
@@ -103,6 +104,25 @@ test("Azure requester reports the method, URL, status, status text, and response
       return true;
     },
   );
+});
+
+test("authenticated-user lookup requests connection data and returns its identity id", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [
+    { json: { authenticatedUser: { id: "identity/id +?#" } } },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  assert.equal(await getAuthenticatedUserId(azure, "org/name +&"), "identity/id +?#");
+  assert.deepEqual(calls, [
+    {
+      url:
+        "https://dev.azure.com/org%2Fname%20%2B%26/_apis/connectionData?" +
+        "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
+      method: "GET",
+      headers: { authorization: expectedAuthorization },
+      body: null,
+    },
+  ]);
 });
 
 test("URL builders encode each context component and preserve API path syntax exactly", () => {

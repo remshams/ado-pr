@@ -142,7 +142,7 @@ test.describe("threads", () => {
           ],
         },
       },
-      { json: { id: "me" } },
+      { json: { authenticatedUser: { id: "me" } } },
     ]);
 
     const result = await threads.list(prId, {
@@ -158,7 +158,9 @@ test.describe("threads", () => {
         body: null,
       },
       {
-        url: "https://vssps.dev.azure.com/my%20org/_apis/profile/profiles/me?api-version=7.1",
+        url:
+          "https://dev.azure.com/my%20org/_apis/connectionData?" +
+          "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
         method: "GET",
         body: null,
       },
@@ -184,7 +186,7 @@ test.describe("threads", () => {
           ],
         },
       },
-      { json: { id: "me" } },
+      { json: { authenticatedUser: { id: "me" } } },
     ]);
 
     const result = await threads.list(prId, {
@@ -200,7 +202,9 @@ test.describe("threads", () => {
         body: null,
       },
       {
-        url: "https://vssps.dev.azure.com/my%20org/_apis/profile/profiles/me?api-version=7.1",
+        url:
+          "https://dev.azure.com/my%20org/_apis/connectionData?" +
+          "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
         method: "GET",
         body: null,
       },

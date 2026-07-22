@@ -1,6 +1,7 @@
 import type { AzureDevOpsRepoContext } from "./lib.ts";
 
 export const API_VERSION = "7.1";
+const CONNECTION_DATA_API_VERSION = "7.1-preview.1";
 
 function authHeader(pat: string): string {
   return `Basic ${Buffer.from(`:${pat}`).toString("base64")}`;
@@ -24,6 +25,16 @@ export type AzureRequestOptions = AzureJsonRequestOptions | AzureNoContentReques
 export interface AzureRequester {
   request(url: string, options: AzureNoContentRequestOptions): Promise<void>;
   request<T>(url: string, options?: AzureJsonRequestOptions): Promise<T>;
+}
+
+/** Gets the identity id authenticated by the PAT from the PAT-compatible connection endpoint. */
+export async function getAuthenticatedUserId(
+  azure: AzureRequester,
+  organization: string,
+): Promise<string> {
+  const url = `https://dev.azure.com/${encodeURIComponent(organization)}/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=${CONNECTION_DATA_API_VERSION}`;
+  const data = await azure.request<{ authenticatedUser: { id: string } }>(url);
+  return data.authenticatedUser.id;
 }
 
 /** Creates an authenticated Azure requester around an explicitly owned fetch implementation. */
