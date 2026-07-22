@@ -86,7 +86,7 @@ export const FLAG_DEFINITIONS = {
   json: {
     kind: "boolean",
     usage: "--json",
-    description: "Print raw JSON for `pr show` or `comment list`.",
+    description: "Print raw JSON for `pr list`, `pr show`, or `comment list`.",
   },
   help: {
     kind: "boolean",
@@ -178,6 +178,13 @@ function defineCommandRegistry<const Registry extends Record<string, CommandDefi
  * derived from this registry.
  */
 export const COMMAND_REGISTRY = defineCommandRegistry({
+  "pr.list": {
+    resource: "pr",
+    command: "list",
+    usage: "pr list [--json]",
+    summary: "List active pull requests created by the authenticated identity.",
+    flags: ["json"],
+  },
   "pr.show": {
     resource: "pr",
     command: "show",

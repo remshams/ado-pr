@@ -11,6 +11,11 @@ interface PullRequestTarget {
 }
 
 type CliOptionsShape =
+  | {
+      resource: "pr";
+      command: "list";
+      json: boolean;
+    }
   | (PullRequestTarget & {
       resource: "pr";
       command: "show";

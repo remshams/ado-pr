@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Creates Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves PR comments,
-# for the pull request associated with the current branch of a git checkout whose origin remote
-# points at Azure Repos (see pr.ts for the actions/options). This tool is fully self-contained
+# Creates and lists Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves
+# PR comments, from a git checkout whose origin remote points at Azure Repos (see pr.ts for the
+# actions/options). This tool is fully self-contained
 # (its own package.json/node_modules live alongside this script), so it works against any such
 # checkout/worktree without needing anything installed or copied there - just cd into the target
 # worktree and run this.

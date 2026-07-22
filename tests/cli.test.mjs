@@ -6,7 +6,7 @@ import { spawnTestProcess } from "./test-helpers.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
-const usageFirstLine = "Usage: pr.sh pr show [--pr <id>] [--json]";
+const usageFirstLine = "Usage: pr.sh pr list [--json]";
 const missingPatError =
   "Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n";
 const childEnvAllowlist = new Set([
@@ -79,6 +79,7 @@ test("bare --help and -h document every resource-first command and the batch con
 
   assertSuccessfulHelp(result);
   for (const command of [
+    "pr list",
     "pr show",
     "pr create",
     "pr edit",
@@ -119,6 +120,7 @@ test("bare --help and -h document every resource-first command and the batch con
 
 test("qualified command help succeeds after route and supplied-option validation", () => {
   for (const [resource, command] of [
+    ["pr", "list"],
     ["pr", "show"],
     ["pr", "create"],
     ["pr", "edit"],
@@ -210,6 +212,7 @@ test("unknown flags and invalid boolean values are rejected", () => {
 
 test("each command rejects options belonging to other commands", () => {
   const cases = [
+    [["pr", "list", "--pr", "1"], 'Error: --pr is not valid for "pr list"'],
     [["pr", "show", "--title", "x"], 'Error: --title is not valid for "pr show"'],
     [["pr", "create", "--title", "x", "--pr", "1"], 'Error: --pr is not valid for "pr create"'],
     [["pr", "edit", "--draft", "--json"], 'Error: --json is not valid for "pr edit"'],
@@ -322,6 +325,10 @@ test("positive integer flags and duplicate flags are rejected", () => {
     "Error: --message may only be passed once",
   );
   assertUsageError(
+    runCli("pr", "list", "--json", "--json"),
+    "Error: --json may only be passed once",
+  );
+  assertUsageError(
     runCli("comment", "list", "--json", "--json"),
     "Error: --json may only be passed once",
   );
@@ -363,6 +370,8 @@ test("comment create preserves file line-range validation", () => {
 
 test("valid resource-first commands reach PAT validation", () => {
   for (const args of [
+    ["pr", "list"],
+    ["pr", "list", "--json"],
     ["pr", "show"],
     ["pr", "create", "--title", "New PR"],
     ["comment", "list"],

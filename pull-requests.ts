@@ -1,4 +1,10 @@
-import { API_VERSION, pullRequestApiUrl, pullRequestWebUrl, reposBaseUrl } from "./azure.ts";
+import {
+  API_VERSION,
+  getAuthenticatedUserId,
+  pullRequestApiUrl,
+  pullRequestWebUrl,
+  reposBaseUrl,
+} from "./azure.ts";
 import type { AzureRequester } from "./azure.ts";
 import { getCurrentBranch as defaultGetCurrentBranch } from "./lib.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
@@ -27,6 +33,7 @@ export interface UpdatePullRequestOptions {
 }
 
 export interface PullRequestService {
+  list(): Promise<PullRequest[]>;
   create(options: CreatePullRequestOptions): Promise<PullRequest>;
   update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest>;
   get(prId: number): Promise<PullRequest>;
@@ -34,6 +41,7 @@ export interface PullRequestService {
   resolve(requestedPrId: number | undefined): Promise<PullRequest>;
   resolveId(requestedPrId: number | undefined): Promise<number>;
   format(pr: PullRequest): string;
+  formatListItem(pr: PullRequest): string;
 }
 
 /** Turns a plain branch name into a full ref, leaving an already-qualified ref untouched. */
@@ -50,6 +58,13 @@ export function createPullRequestService({
   ctx: AzureDevOpsRepoContext;
   getCurrentBranch?: () => Promise<string>;
 }): PullRequestService {
+  async function list(): Promise<PullRequest[]> {
+    const currentUserId = await getAuthenticatedUserId(azure, ctx.organization);
+    const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.creatorId=${encodeURIComponent(currentUserId)}&searchCriteria.status=active&api-version=${API_VERSION}`;
+    const data = await azure.request<{ value: PullRequest[] }>(url);
+    return data.value;
+  }
+
   async function getDefaultBranch(): Promise<string> {
     const url = `${reposBaseUrl(ctx)}?api-version=${API_VERSION}`;
     const data = await azure.request<{ defaultBranch?: string }>(url);
@@ -157,5 +172,13 @@ export function createPullRequestService({
     ].join("\n");
   }
 
-  return { create, update, get, findForCurrentBranch, resolve, resolveId, format };
+  function formatListItem(pr: PullRequest): string {
+    return [
+      `- PR #${pr.pullRequestId}: ${pr.title}${pr.isDraft ? " [draft]" : ""}`,
+      `  ${formatRef(pr.sourceRefName)} -> ${formatRef(pr.targetRefName)}`,
+      `  ${pullRequestWebUrl(ctx, pr.pullRequestId)}`,
+    ].join("\n");
+  }
+
+  return { list, create, update, get, findForCurrentBranch, resolve, resolveId, format, formatListItem };
 }

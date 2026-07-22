@@ -246,6 +246,11 @@ type CommandOptionBuilders = {
 };
 
 const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
+  "pr.list": (values) => ({
+    resource: "pr",
+    command: "list",
+    json: values.json,
+  }),
   "pr.show": (values) => ({
     resource: "pr",
     command: "show",

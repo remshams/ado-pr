@@ -35,7 +35,40 @@ function createService(
   return { service, calls };
 }
 
-describe("pull request resolution, creation, and updates", () => {
+describe("pull request listing, resolution, creation, and updates", () => {
+  test("lists the current identity's active repository pull requests in response order", async (t) => {
+    const expected = [
+      pullRequest({ pullRequestId: 91, title: "Second by ID" }),
+      pullRequest({ pullRequestId: 12, title: "First by ID" }),
+    ];
+    const { service, calls } = createService(t, [
+      { json: { authenticatedUser: { id: "creator/id +?#" } } },
+      { json: { count: expected.length, value: expected } },
+    ]);
+
+    assert.deepEqual(await service.list(), expected);
+    assert.deepEqual(
+      calls.map(({ method, url, body }) => ({ method, url, body })),
+      [
+        {
+          method: "GET",
+          url:
+            "https://dev.azure.com/test-org/_apis/connectionData?" +
+            "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
+          body: null,
+        },
+        {
+          method: "GET",
+          url:
+            `${repositoryUrl}/pullrequests?` +
+            "searchCriteria.creatorId=creator%2Fid%20%2B%3F%23&" +
+            "searchCriteria.status=active&api-version=7.1",
+          body: null,
+        },
+      ],
+    );
+  });
+
   test("an explicit pull request ID short-circuits without looking up the branch or fetching", async (t) => {
     const { service, calls } = createService(t);
 
@@ -162,6 +195,31 @@ describe("pull request resolution, creation, and updates", () => {
         "URL: https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42\n" +
         "Description:\n" +
         "(empty)",
+    );
+  });
+
+  test("formats concise list items with refs, links, and draft state", (t) => {
+    const { service } = createService(t);
+
+    assert.equal(
+      service.formatListItem(
+        pullRequest({
+          pullRequestId: 17,
+          title: "Draft item",
+          isDraft: true,
+          sourceRefName: "refs/heads/feature/draft-item",
+          targetRefName: "refs/heads/main",
+        }),
+      ),
+      "- PR #17: Draft item [draft]\n" +
+        "  feature/draft-item -> main\n" +
+        "  https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/17",
+    );
+    assert.equal(
+      service.formatListItem(pullRequest({ targetRefName: undefined })),
+      "- PR #42: Test pull request\n" +
+        "  feature/test -> unknown\n" +
+        "  https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42",
     );
   });
 

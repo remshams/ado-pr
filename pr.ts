@@ -1,11 +1,11 @@
 /**
- * Creates, inspects, and edits Azure DevOps pull requests, and manages their comment threads from a
- * git checkout whose origin remote points at Azure Repos.
+ * Creates, lists, inspects, and edits Azure DevOps pull requests, and manages their comment threads
+ * from a git checkout whose origin remote points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
- * is enough for `pr show` and `comment list`; "Read & Write" is needed for `pr create`, `pr edit`,
- * comment-changing commands, and `comment batch`). Run this via pr.sh, which accepts an exported
- * PAT or loads one from .env.
+ * is enough for `pr list`, `pr show`, and `comment list`; "Read & Write" is needed for `pr create`,
+ * `pr edit`, comment-changing commands, and `comment batch`). Run this via pr.sh, which accepts an
+ * exported PAT or loads one from .env.
  */
 import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
 import { createBatchRunner } from "./batch.ts";
@@ -33,6 +33,20 @@ async function main(): Promise<void> {
 
   if (options.resource === "pr") {
     switch (options.command) {
+      case "list": {
+        const prs = await pullRequests.list();
+        if (options.json) {
+          console.log(JSON.stringify(prs, null, 2));
+          return;
+        }
+        if (prs.length === 0) {
+          console.log("No active pull requests created by you in this repository.");
+          return;
+        }
+        console.log("Active pull requests created by you:\n");
+        console.log(prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"));
+        return;
+      }
       case "create": {
         const pr = await pullRequests.create(options);
         console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);

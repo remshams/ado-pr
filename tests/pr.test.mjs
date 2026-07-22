@@ -28,6 +28,104 @@ function assertSucceeded(result) {
   assert.equal(result.stderr, "");
 }
 
+test("pr list requests the current identity then prints active pull requests in response order", (t) => {
+  const cwd = createRepo(t);
+  const pullRequests = [
+    {
+      pullRequestId: 91,
+      title: "Draft API cleanup",
+      status: "active",
+      isDraft: true,
+      sourceRefName: "refs/heads/feature/api-cleanup",
+      targetRefName: "refs/heads/main",
+    },
+    {
+      pullRequestId: 12,
+      title: "Release fix",
+      status: "active",
+      isDraft: false,
+      sourceRefName: "refs/heads/fix/release",
+      targetRefName: "refs/heads/release/2026",
+    },
+  ];
+  const result = runPr(t, ["pr", "list"], {
+    cwd,
+    responses: [
+      { json: { authenticatedUser: { id: "creator/id +?#" } } },
+      { json: { count: pullRequests.length, value: pullRequests } },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(request), [
+    {
+      url:
+        "https://dev.azure.com/acme/_apis/connectionData?" +
+        "connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
+      method: "GET",
+      body: null,
+    },
+    {
+      url:
+        `${apiBase}/pullrequests?` +
+        "searchCriteria.creatorId=creator%2Fid%20%2B%3F%23&" +
+        "searchCriteria.status=active&api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+  ]);
+  assert.equal(
+    result.stdout,
+    "Active pull requests created by you:\n\n" +
+      "- PR #91: Draft API cleanup [draft]\n" +
+      "  feature/api-cleanup -> main\n" +
+      `  ${webBase}/91\n\n` +
+      "- PR #12: Release fix\n" +
+      "  fix/release -> release/2026\n" +
+      `  ${webBase}/12\n`,
+  );
+});
+
+test("pr list --json prints the collection value as a pretty JSON array", (t) => {
+  const cwd = createRepo(t);
+  const pullRequests = [
+    {
+      pullRequestId: 44,
+      title: "Raw collection entry",
+      sourceRefName: "refs/heads/feature/raw",
+      targetRefName: "refs/heads/main",
+      repository: { id: "repository-metadata-is-preserved" },
+    },
+  ];
+  const result = runPr(t, ["pr", "list", "--json"], {
+    cwd,
+    responses: [
+      { json: { authenticatedUser: { id: "me" } } },
+      { json: { value: pullRequests } },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.equal(result.stdout, `${JSON.stringify(pullRequests, null, 2)}\n`);
+  assert.equal(result.calls.length, 2);
+  assert.match(result.calls[1].url, /searchCriteria\.creatorId=me/);
+});
+
+test("pr list reports an empty active collection as a successful result", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(t, ["pr", "list"], {
+    cwd,
+    responses: [
+      { json: { authenticatedUser: { id: "me" } } },
+      { json: { count: 0, value: [] } },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.equal(result.calls.length, 2);
+  assert.equal(result.stdout, "No active pull requests created by you in this repository.\n");
+});
+
 test("create dispatches directly without resolving an existing pull request", (t) => {
   const cwd = createRepo(t);
   const result = runPr(
