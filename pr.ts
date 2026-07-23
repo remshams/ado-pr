@@ -2,10 +2,14 @@
  * Creates, lists, inspects, and edits Azure DevOps pull requests, and manages their comment threads
  * from a git checkout whose origin remote points at Azure Repos.
  *
- * Auth: requires an AZURE_DEVOPS_PAT env var (a Personal Access Token with "Code" scope - "Read"
- * is enough for `pr list`, `pr show`, and `comment list`; "Read & Write" is needed for `pr create`,
- * `pr edit`, comment-changing commands, and `comment batch`). Run this via pr.sh, which accepts an
- * exported PAT or loads one from .env.
+ * Auth: requires an AZURE_DEVOPS_PAT env var. Code (Read) is enough for read-only commands; Code
+ * (Read & Write) is needed for mutations. Reviewer additions additionally need Identity (Read),
+ * while reviewer removal resolves the PR's current reviewers using Code access only.
+ * Run this via pr.sh, which accepts an exported PAT or loads one from .env.
+ *
+ * Images use a bidirectional placeholder contract: every upload needs a matching
+ * {{image:<basename>}}, and every such placeholder needs an upload. Create/edit uploads replace
+ * every exact match with marked image Markdown; edit removal strips only exact marked references.
  */
 import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
 import { createBatchRunner } from "./batch.ts";
@@ -59,13 +63,9 @@ async function main(): Promise<void> {
         return;
       }
       case "edit": {
-        const prId = await pullRequests.resolveId(options.pr);
-        const pr = await pullRequests.update(prId, {
-          description: options.description,
-          draft: options.draft,
-        });
-        console.log(`Updated PR #${pr.pullRequestId}.`);
-        console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
+        const prId = await pullRequests.edit(options.pr, options);
+        console.log(`Updated PR #${prId}.`);
+        console.log(pullRequestWebUrl(ctx, prId));
         return;
       }
     }

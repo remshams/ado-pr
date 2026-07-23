@@ -7,6 +7,7 @@ import {
   COMMAND_IDS,
   COMMAND_REGISTRY,
   FLAG_DEFINITIONS,
+  REPEATABLE_STRING_FLAG_NAMES,
   formatHelp,
   getBatchFields,
   getCommandDefinition,
@@ -25,6 +26,21 @@ test("registry keys, routes, and command-local schemas stay coherent", () => {
       assert.ok(definition.flags.includes(required), `${id} requires disallowed flag ${required}`);
     }
   }
+});
+
+test("only image and reviewer mutation flags are repeatable strings", () => {
+  assert.deepEqual(REPEATABLE_STRING_FLAG_NAMES, [
+    "image",
+    "remove-image",
+    "reviewer",
+    "remove-reviewer",
+  ]);
+  assert.equal(FLAG_DEFINITIONS.image.kind, "repeatableString");
+  assert.ok(COMMAND_REGISTRY["pr.create"].flags.includes("image"));
+  assert.ok(COMMAND_REGISTRY["pr.create"].flags.includes("reviewer"));
+  assert.ok(!COMMAND_REGISTRY["pr.create"].flags.includes("remove-image"));
+  assert.ok(COMMAND_REGISTRY["pr.edit"].flags.includes("remove-image"));
+  assert.ok(COMMAND_REGISTRY["pr.edit"].flags.includes("remove-reviewer"));
 });
 
 test("batch schemas contain only registered fields and identify their command", () => {
@@ -51,4 +67,25 @@ test("help is generated from every registered command and batch schema", () => {
   for (const command of BATCH_COMMANDS) {
     assert.ok(help.includes(`\"command\":\"${command}\"`));
   }
+
+  const optionWidth = Math.max(
+    ...Object.values(FLAG_DEFINITIONS).map((definition) => definition.usage.length),
+  ) + 2;
+  for (const definition of Object.values(FLAG_DEFINITIONS)) {
+    assert.ok(
+      help.split("\n").includes(
+        `  ${definition.usage.padEnd(optionWidth)}${definition.description}`,
+      ),
+      `help does not clearly separate ${definition.usage} from its description`,
+    );
+  }
+
+  assert.match(
+    help,
+    /Identity \(Read\), also named vso\.identity, only for --reviewer additions on pr create\/edit\./,
+  );
+  assert.match(
+    help,
+    /--remove-reviewer resolves current PR reviewers and needs only Code \(Read & Write\)\./,
+  );
 });

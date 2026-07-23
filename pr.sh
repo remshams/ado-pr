@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Creates and lists Azure DevOps pull requests, and lists/creates/replies-to/edits/deletes/resolves
-# PR comments, from a git checkout whose origin remote points at Azure Repos (see pr.ts for the
-# actions/options). This tool is fully self-contained
+# Creates, lists, and edits Azure DevOps pull requests (including attachments and reviewers), and
+# manages PR comments from a git checkout whose origin remote points at Azure Repos (see pr.ts for
+# the actions/options). This tool is fully self-contained
 # (its own package.json/node_modules live alongside this script), so it works against any such
 # checkout/worktree without needing anything installed or copied there - just cd into the target
 # worktree and run this.
@@ -9,6 +9,8 @@
 # Requires:
 #   - Node.js >= 22.6 (TypeScript stripping and --env-file support). No build step is needed.
 #   - AZURE_DEVOPS_PAT either exported by the caller or set in a .env path alongside this script.
+#     Mutations need Code (Read & Write); reviewer additions also need Identity (Read). Reviewer
+#     removal resolves current PR reviewers and does not need Identity access.
 #     Regular files accept a literal PAT or an op:// reference resolved just-in-time by 1Password
 #     CLI. The path may also be a 1Password Environment mount containing a literal PAT.
 set -euo pipefail

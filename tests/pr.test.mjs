@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
 import { createTempGitRepo, runPr } from "./test-helpers.mjs";
@@ -19,7 +21,7 @@ function semanticRequest(call) {
   return {
     url: call.url,
     method: call.method,
-    body: call.body === null ? null : JSON.parse(call.body),
+    body: typeof call.body === "string" ? JSON.parse(call.body) : call.body,
   };
 }
 
@@ -172,6 +174,139 @@ test("create dispatches directly without resolving an existing pull request", (t
     },
   ]);
   assert.equal(result.stdout, `Created PR #101: Dispatch coverage\n${webBase}/101\n`);
+});
+
+test("create resolves reviewers, uploads binary images, and patches every matching placeholder", (t) => {
+  const cwd = createRepo(t);
+  writeFileSync(join(cwd, "flow[1].png"), Buffer.from([0, 255, 16, 32]));
+  const placeholderDescription =
+    "Flow {{image:flow[1].png}} and repeated {{image:flow[1].png}}";
+  const attachmentUrl = "https://attachments.test/flow(1).png?token=x";
+  const finalDescription =
+    `Flow ![flow\\[1\\].png](<${attachmentUrl}>)<!-- ado-pr-image:flow%5B1%5D.png --> and repeated ` +
+    `![flow\\[1\\].png](<${attachmentUrl}>)<!-- ado-pr-image:flow%5B1%5D.png -->`;
+  const result = runPr(
+    t,
+    [
+      "pr",
+      "create",
+      "--title",
+      "Illustrated flow",
+      "--description",
+      placeholderDescription,
+      "--source",
+      "feature/dispatch",
+      "--target",
+      "main",
+      "--image",
+      "flow[1].png",
+      "--reviewer",
+      "Ada Lovelace",
+    ],
+    {
+      cwd,
+      responses: [
+        {
+          json: {
+            value: [
+              {
+                id: "reviewer/id",
+                providerDisplayName: "ADA LOVELACE",
+                isActive: true,
+              },
+            ],
+          },
+        },
+        {
+          json: {
+            pullRequestId: 102,
+            title: "Illustrated flow",
+            sourceRefName: "refs/heads/feature/dispatch",
+          },
+        },
+        { json: { value: [] } },
+        { json: { displayName: "flow[1].png", url: attachmentUrl } },
+        {
+          json: {
+            pullRequestId: 102,
+            title: "Illustrated flow",
+            description: finalDescription,
+            sourceRefName: "refs/heads/feature/dispatch",
+          },
+        },
+      ],
+    },
+  );
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url:
+        "https://vssps.dev.azure.com/acme/_apis/identities?" +
+        "searchFilter=General&filterValue=Ada%20Lovelace&queryMembership=None&api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullrequests?api-version=7.1`,
+      method: "POST",
+      body: {
+        sourceRefName: "refs/heads/feature/dispatch",
+        targetRefName: "refs/heads/main",
+        title: "Illustrated flow",
+        description: placeholderDescription,
+        isDraft: false,
+        reviewers: [{ id: "reviewer/id" }],
+      },
+    },
+    {
+      url: `${apiBase}/pullRequests/102/attachments?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/102/attachments/flow%5B1%5D.png?api-version=7.1`,
+      method: "POST",
+      body: { encoding: "base64", data: "AP8QIA==" },
+    },
+    {
+      url: `${apiBase}/pullRequests/102?api-version=7.1`,
+      method: "PATCH",
+      body: { description: finalDescription },
+    },
+  ]);
+  assert.equal(result.stdout, `Created PR #102: Illustrated flow\n${webBase}/102\n`);
+});
+
+test("create rejects an image placeholder mismatch before creating a pull request", (t) => {
+  const cwd = createRepo(t);
+  writeFileSync(join(cwd, "flow.png"), Buffer.from([1, 2, 3]));
+  const result = runPr(
+    t,
+    [
+      "pr",
+      "create",
+      "--title",
+      "Mismatch",
+      "--description",
+      "{{image:other.png}}",
+      "--source",
+      "feature/dispatch",
+      "--target",
+      "main",
+      "--image",
+      "flow.png",
+    ],
+    { cwd },
+  );
+
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.calls, []);
+  assert.equal(
+    result.stderr,
+    "Image placeholder mismatch: missing {{image:flow.png}} for --image flow.png; " +
+      "no --image was supplied for {{image:other.png}}.\n",
+  );
 });
 
 test("show fetches an explicit PR and prints human-readable details", (t) => {
@@ -382,6 +517,126 @@ test("pr edit combines description and draft changes in one request", (t) => {
       url: `${apiBase}/pullRequests/42?api-version=7.1`,
       method: "PATCH",
       body: { description: "Work in progress", isDraft: true },
+    },
+  ]);
+  assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
+});
+
+test("pr edit preflights and applies image and reviewer additions and removals in safe order", (t) => {
+  const cwd = createRepo(t);
+  writeFileSync(join(cwd, "new.png"), Buffer.from("new-image-bytes"));
+  const oldUrl = "https://attachments.test/old.png?token=exact";
+  const newUrl = "https://attachments.test/new.png?token=new";
+  const replacement =
+    `New {{image:new.png}}\nOld ![old.png](<${oldUrl}>)` +
+    "<!-- ado-pr-image:old.png -->";
+  const finalDescription =
+    `New ![new.png](<${newUrl}>)<!-- ado-pr-image:new.png -->\nOld `;
+  const result = runPr(
+    t,
+    [
+      "pr",
+      "edit",
+      "--pr",
+      "42",
+      "--description",
+      replacement,
+      "--image",
+      "new.png",
+      "--remove-image",
+      "old.png",
+      "--reviewer",
+      "New Reviewer",
+      "--remove-reviewer",
+      "old@example.test",
+      "--draft",
+    ],
+    {
+      cwd,
+      responses: [
+        {
+          json: {
+            value: [
+              { id: "new/id", providerDisplayName: "New Reviewer", isActive: true },
+            ],
+          },
+        },
+        {
+          json: {
+            value: [
+              {
+                id: "old/id",
+                displayName: "Old Reviewer",
+                uniqueName: "OLD@EXAMPLE.TEST",
+                inactive: true,
+                vote: 10,
+              },
+            ],
+          },
+        },
+        { json: { value: [{ displayName: "old.png", url: oldUrl }] } },
+        { json: { displayName: "new.png", url: newUrl } },
+        {
+          json: {
+            pullRequestId: 42,
+            title: "Updated assets",
+            description: finalDescription,
+            sourceRefName: "refs/heads/feature/dispatch",
+          },
+        },
+        { status: 204 },
+        { body: "" },
+        { status: 204 },
+      ],
+    },
+  );
+
+  assertSucceeded(result);
+  assert.deepEqual(result.calls.map(semanticRequest), [
+    {
+      url:
+        "https://vssps.dev.azure.com/acme/_apis/identities?" +
+        "searchFilter=General&filterValue=New%20Reviewer&queryMembership=None&api-version=7.1",
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/42/reviewers?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/42/attachments?api-version=7.1`,
+      method: "GET",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/42/attachments/new.png?api-version=7.1`,
+      method: "POST",
+      body: {
+        encoding: "base64",
+        data: Buffer.from("new-image-bytes").toString("base64"),
+      },
+    },
+    {
+      url: `${apiBase}/pullRequests/42?api-version=7.1`,
+      method: "PATCH",
+      body: { description: finalDescription, isDraft: true },
+    },
+    {
+      url: `${apiBase}/pullRequests/42/attachments/old.png?api-version=7.1`,
+      method: "DELETE",
+      body: null,
+    },
+    {
+      url: `${apiBase}/pullRequests/42/reviewers/new%2Fid?api-version=7.1`,
+      method: "PUT",
+      body: { id: "new/id", vote: 0 },
+    },
+    {
+      url: `${apiBase}/pullRequests/42/reviewers/old%2Fid?api-version=7.1`,
+      method: "DELETE",
+      body: null,
     },
   ]);
   assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);

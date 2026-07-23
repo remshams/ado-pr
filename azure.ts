@@ -9,16 +9,29 @@ function authHeader(pat: string): string {
 
 interface AzureRequestBaseOptions {
   method?: string;
+}
+
+interface AzureJsonBodyOptions {
   body?: unknown;
+  rawBody?: never;
+  contentType?: never;
 }
 
-export interface AzureJsonRequestOptions extends AzureRequestBaseOptions {
+interface AzureRawBodyOptions {
+  body?: never;
+  rawBody: Uint8Array<ArrayBuffer>;
+  contentType: string;
+}
+
+type AzureBodyOptions = AzureJsonBodyOptions | AzureRawBodyOptions;
+
+export type AzureJsonRequestOptions = AzureRequestBaseOptions & AzureBodyOptions & {
   responseType?: "json";
-}
+};
 
-export interface AzureNoContentRequestOptions extends AzureRequestBaseOptions {
+export type AzureNoContentRequestOptions = AzureRequestBaseOptions & AzureBodyOptions & {
   responseType: "none";
-}
+};
 
 export type AzureRequestOptions = AzureJsonRequestOptions | AzureNoContentRequestOptions;
 
@@ -46,13 +59,19 @@ export function createAzureRequester({
   fetch?: typeof globalThis.fetch;
 }): AzureRequester {
   async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | void> {
+    const hasRawBody = options.rawBody !== undefined;
+    const hasJsonBody = options.body !== undefined;
     const response = await fetchImpl(url, {
       method: options.method ?? "GET",
       headers: {
         Authorization: authHeader(pat),
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(hasRawBody
+          ? { "Content-Type": options.contentType }
+          : hasJsonBody
+            ? { "Content-Type": "application/json" }
+            : {}),
       },
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: hasRawBody ? options.rawBody : hasJsonBody ? JSON.stringify(options.body) : undefined,
     });
 
     if (!response.ok) {

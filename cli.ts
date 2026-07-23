@@ -4,6 +4,7 @@ import {
   BOOLEAN_FLAG_NAMES,
   COMMAND_REGISTRY,
   FLAG_DEFINITIONS,
+  REPEATABLE_STRING_FLAG_NAMES,
   STRING_FLAG_NAMES,
   formatHelp,
   getCommandId,
@@ -13,7 +14,7 @@ import {
   type FlagName,
   type ParsedCommandFlags,
   type PositiveIntegerFlagName,
-  type StringFlagName,
+  type RepeatableStringFlagName,
   type TextFlagName,
 } from "./command-registry.ts";
 import { isPositiveInteger, type CliOptions } from "./operation-types.ts";
@@ -21,14 +22,16 @@ import { isPositiveInteger, type CliOptions } from "./operation-types.ts";
 const KNOWN_FLAGS = new Set<string>(Object.keys(FLAG_DEFINITIONS));
 const STRING_FLAG_SET = new Set<string>(STRING_FLAG_NAMES);
 const BOOLEAN_FLAG_SET = new Set<string>(BOOLEAN_FLAG_NAMES);
+const REPEATABLE_STRING_FLAG_SET = new Set<string>(REPEATABLE_STRING_FLAG_NAMES);
 
 interface FlagOccurrence {
   name: string;
   display: string;
   value?: string;
-  hasExplicitValue: boolean;
   hasInlineValue: boolean;
 }
+
+type FlagOccurrences = Map<string, FlagOccurrence[]>;
 
 function printUsageAndExit(message?: string): never {
   if (message) {
@@ -54,7 +57,6 @@ function scanFlags(args: string[]): FlagOccurrence[] {
       occurrences.push({
         name: "help",
         display: "-h",
-        hasExplicitValue: false,
         hasInlineValue: false,
       });
       continue;
@@ -64,7 +66,6 @@ function scanFlags(args: string[]): FlagOccurrence[] {
         occurrences.push({
           name: token,
           display: token,
-          hasExplicitValue: false,
           hasInlineValue: false,
         });
       }
@@ -72,13 +73,14 @@ function scanFlags(args: string[]): FlagOccurrence[] {
     }
 
     const equalsIndex = token.indexOf("=");
-    const name = token.slice(2, equalsIndex === -1 ? undefined : equalsIndex);
+    const hasInlineValue = equalsIndex !== -1;
+    const name = token.slice(2, hasInlineValue ? equalsIndex : undefined);
     const isStringFlag = STRING_FLAG_SET.has(name);
-    let value = equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
+    let value = hasInlineValue ? token.slice(equalsIndex + 1) : undefined;
 
     if (
       isStringFlag &&
-      equalsIndex === -1 &&
+      !hasInlineValue &&
       args[index + 1] !== undefined &&
       !looksLikeOption(args[index + 1])
     ) {
@@ -90,8 +92,7 @@ function scanFlags(args: string[]): FlagOccurrence[] {
       name,
       display: `--${name}`,
       value,
-      hasExplicitValue: value !== undefined,
-      hasInlineValue: equalsIndex !== -1,
+      hasInlineValue,
     });
   }
 
@@ -113,36 +114,60 @@ function validateRouteFlags(
   route: string,
   allowed: ReadonlySet<string>,
   occurrences: FlagOccurrence[],
-): Map<string, FlagOccurrence> {
-  const byName = new Map<string, FlagOccurrence>();
+): FlagOccurrences {
+  const byName: FlagOccurrences = new Map();
   for (const occurrence of occurrences) {
     if (!allowed.has(occurrence.name)) {
       printUsageAndExit(`${occurrence.display} is not valid for "${route}"`);
     }
-    if (byName.has(occurrence.name)) {
+    const previous = byName.get(occurrence.name);
+    if (previous && !REPEATABLE_STRING_FLAG_SET.has(occurrence.name)) {
       printUsageAndExit(`${occurrence.display} may only be passed once`);
     }
-    byName.set(occurrence.name, occurrence);
+    if (previous) {
+      previous.push(occurrence);
+    } else {
+      byName.set(occurrence.name, [occurrence]);
+    }
   }
   return byName;
 }
 
 function parseStringFlag(
-  occurrences: Map<string, FlagOccurrence>,
-  flag: StringFlagName,
+  occurrences: FlagOccurrences,
+  flag: TextFlagName | PositiveIntegerFlagName,
 ): string | undefined {
-  const occurrence = occurrences.get(flag);
+  const occurrence = occurrences.get(flag)?.[0];
   if (!occurrence) {
     return undefined;
   }
-  if (!occurrence.hasExplicitValue) {
+  if (occurrence.value === undefined) {
     printUsageAndExit(`--${flag} requires an explicit value`);
   }
   return occurrence.value;
 }
 
+function parseRepeatedStringFlag(
+  occurrences: FlagOccurrences,
+  flag: RepeatableStringFlagName,
+): string[] | undefined {
+  const matches = occurrences.get(flag);
+  if (!matches) {
+    return undefined;
+  }
+  for (const occurrence of matches) {
+    if (occurrence.value === undefined) {
+      printUsageAndExit(`--${flag} requires an explicit value`);
+    }
+    if (occurrence.value === "") {
+      printUsageAndExit(`--${flag} must not be empty`);
+    }
+  }
+  return matches.map((occurrence) => occurrence.value as string);
+}
+
 function parsePositiveIntFlag(
-  occurrences: Map<string, FlagOccurrence>,
+  occurrences: FlagOccurrences,
   flag: PositiveIntegerFlagName,
 ): number | undefined {
   const raw = parseStringFlag(occurrences, flag);
@@ -159,23 +184,23 @@ function parsePositiveIntFlag(
 function parseCommandFlags<Id extends CommandId>(
   commandId: Id,
   route: string,
-  occurrences: Map<string, FlagOccurrence>,
+  occurrences: FlagOccurrences,
   enforceRequired: true,
 ): ParsedCommandFlags<Id>;
 function parseCommandFlags<Id extends CommandId>(
   commandId: Id,
   route: string,
-  occurrences: Map<string, FlagOccurrence>,
+  occurrences: FlagOccurrences,
   enforceRequired: false,
 ): void;
 function parseCommandFlags<Id extends CommandId>(
   commandId: Id,
   route: string,
-  occurrences: Map<string, FlagOccurrence>,
+  occurrences: FlagOccurrences,
   enforceRequired: boolean,
 ): ParsedCommandFlags<Id> | void {
   const definition = COMMAND_REGISTRY[commandId];
-  const values: Partial<Record<FlagName, string | number | boolean>> = {};
+  const values: Partial<Record<FlagName, string | string[] | number | boolean>> = {};
   const requiredFlags = new Set<FlagName>(
     "requiredFlags" in definition ? definition.requiredFlags : [],
   );
@@ -186,6 +211,8 @@ function parseCommandFlags<Id extends CommandId>(
       values[flag] = occurrences.has(flag);
     } else if (kind === "positiveInteger") {
       values[flag] = parsePositiveIntFlag(occurrences, flag as PositiveIntegerFlagName);
+    } else if (kind === "repeatableString") {
+      values[flag] = parseRepeatedStringFlag(occurrences, flag as RepeatableStringFlagName);
     } else {
       values[flag] = parseStringFlag(occurrences, flag as TextFlagName);
     }
@@ -205,14 +232,18 @@ function parseCommandFlags<Id extends CommandId>(
 
   const validationRules: readonly CommandValidationRule[] | undefined =
     "validationRules" in definition ? definition.validationRules : undefined;
-  if (validationRules?.includes("draftState")) {
+  if (validationRules?.includes("pullRequestEdit")) {
     const setDraft = values.draft === true;
     const clearDraft = values["no-draft"] === true;
     if (setDraft && clearDraft) {
       printUsageAndExit(`--draft and --no-draft cannot be used together`);
     }
-    if (enforceRequired && values.description === undefined && !setDraft && !clearDraft) {
-      printUsageAndExit(`--description, --draft, or --no-draft is required for "${route}"`);
+    const editFlags = definition.flags.filter((flag) => flag !== "pr");
+    if (enforceRequired && !editFlags.some((flag) => occurrences.has(flag))) {
+      const choices = editFlags
+        .map((flag, index) => `${index === editFlags.length - 1 ? "or " : ""}--${flag}`)
+        .join(", ");
+      printUsageAndExit(`${choices} is required for "${route}"`);
     }
   }
   if (validationRules?.includes("commentLocation")) {
@@ -265,22 +296,22 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
     sourceBranch: values.source,
     targetBranch: values.target,
     draft: values.draft,
+    images: values.image,
+    reviewers: values.reviewer,
   }),
   "pr.edit": (values) => {
     const draft = values.draft ? true : values["no-draft"] ? false : undefined;
-    if (values.description !== undefined) {
-      return {
-        resource: "pr",
-        command: "edit",
-        pr: values.pr,
-        description: values.description,
-        draft,
-      };
-    }
-    if (draft === undefined) {
-      throw new Error("Registered pr.edit validation did not produce an update.");
-    }
-    return { resource: "pr", command: "edit", pr: values.pr, draft };
+    return {
+      resource: "pr",
+      command: "edit",
+      pr: values.pr,
+      description: values.description,
+      draft,
+      images: values.image,
+      removeImages: values["remove-image"],
+      reviewers: values.reviewer,
+      removeReviewers: values["remove-reviewer"],
+    };
   },
   "comment.list": (values) => ({
     resource: "comment",

@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, test } from "node:test";
 
 import { createAzureRequester } from "../azure.ts";
-import { createPullRequestService } from "../pull-requests.ts";
+import {
+  createPullRequestService,
+  removeAttachmentMarkdown,
+  validateImagePlaceholders,
+} from "../pull-requests.ts";
 import { createMockFetch } from "./test-helpers.mjs";
 
 const ctx = {
@@ -33,6 +40,14 @@ function createService(
   const azure = createAzureRequester({ pat, fetch });
   const service = createPullRequestService({ azure, ctx, getCurrentBranch });
   return { service, calls };
+}
+
+function createTempImage(t, filename, bytes = [0, 255, 16]) {
+  const directory = mkdtempSync(join(tmpdir(), "ado-pr-image-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, filename);
+  writeFileSync(path, Buffer.from(bytes));
+  return path;
 }
 
 describe("pull request listing, resolution, creation, and updates", () => {
@@ -311,6 +326,23 @@ describe("pull request listing, resolution, creation, and updates", () => {
     });
   });
 
+  test("accepts a 4,000-character description and rejects 4,001 before a request", async (t) => {
+    const boundaryDescription = "x".repeat(4_000);
+    const accepted = createService(t, [
+      { json: pullRequest({ description: boundaryDescription }) },
+    ]);
+
+    await accepted.service.update(42, { description: boundaryDescription });
+    assert.equal(JSON.parse(accepted.calls[0].body).description.length, 4_000);
+
+    const rejected = createService(t);
+    await assert.rejects(rejected.service.update(42, { description: "x".repeat(4_001) }), {
+      message:
+        "Pull request description exceeds Azure DevOps' 4,000-character limit (received 4001 characters).",
+    });
+    assert.deepEqual(rejected.calls, []);
+  });
+
   test("rejects an update without fields before making a request", async (t) => {
     const { service, calls } = createService(t);
 
@@ -401,6 +433,25 @@ describe("pull request listing, resolution, creation, and updates", () => {
     );
   });
 
+  test("rejects an over-limit create description before any Azure request", async (t) => {
+    const { service, calls } = createService(t);
+
+    await assert.rejects(
+      service.create({
+        title: "Too much detail",
+        description: "x".repeat(4_001),
+        sourceBranch: "feature/known",
+        targetBranch: "main",
+        draft: false,
+      }),
+      {
+        message:
+          "Pull request description exceeds Azure DevOps' 4,000-character limit (received 4001 characters).",
+      },
+    );
+    assert.deepEqual(calls, []);
+  });
+
   test("sends an empty description and the requested draft state", async (t) => {
     const { service, calls } = createService(t, [{ json: pullRequest() }]);
 
@@ -419,5 +470,764 @@ describe("pull request listing, resolution, creation, and updates", () => {
       description: "",
       isDraft: true,
     });
+  });
+
+  test("checks a newly created PR for attachment collisions before its first image upload", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const created = pullRequest({ pullRequestId: 93 });
+    const { service, calls } = createService(t, [
+      { json: created },
+      {
+        json: {
+          value: [{ displayName: "flow.png", url: "https://attachments.test/existing.png" }],
+        },
+      },
+    ]);
+
+    await assert.rejects(
+      service.create({
+        title: "Collision",
+        description: "{{image:flow.png}}",
+        sourceBranch: "feature/collision",
+        targetBranch: "main",
+        draft: false,
+        images: [path],
+      }),
+      /Cannot upload attachment filename "flow\.png" because it already exists on PR #93/,
+    );
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        { method: "POST", url: pullRequestsUrl },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/93/attachments?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("validates exact image placeholder sets while allowing repeated matching instances", () => {
+    assert.doesNotThrow(() =>
+      validateImagePlaceholders(
+        "First {{image:flow.png}} and again {{image:flow.png}} plus {{image:arch.png}}",
+        [{ filename: "flow.png" }, { filename: "arch.png" }],
+      ),
+    );
+    assert.throws(
+      () =>
+        validateImagePlaceholders("Only {{image:other.png}}", [{ filename: "flow.png" }]),
+      {
+        message:
+          "Image placeholder mismatch: missing {{image:flow.png}} for --image flow.png; no --image was supplied for {{image:other.png}}.",
+      },
+    );
+    assert.throws(() => validateImagePlaceholders("{{image:orphan.png}}", []), {
+      message:
+        "Image placeholder mismatch: no --image was supplied for {{image:orphan.png}}.",
+    });
+  });
+
+  test("removes repeated marked references and preserves unmarked text inside and outside code", () => {
+    const attachment = {
+      displayName: "flow.png",
+      url: "https://attachments.test/flow.png",
+    };
+    const image = `![flow.png](<${attachment.url}>)`;
+    const marked = `${image}<!-- ado-pr-image:flow.png -->`;
+
+    assert.equal(
+      removeAttachmentMarkdown(
+        `Remove ${marked} keep ${image} and \`${image}\`; remove ${marked}`,
+        attachment,
+      ),
+      `Remove  keep ${image} and \`${image}\`; remove `,
+    );
+  });
+
+  test("preserves custom, malformed, nested, and edited-marker references", () => {
+    const attachment = {
+      displayName: "flow.png",
+      url: "https://attachments.test/actual.png",
+    };
+    const image = `![flow.png](<${attachment.url}>)`;
+    const description =
+      `${image} ` +
+      `${image}<!-- ado-pr-image:edited.png --> ` +
+      `![custom](<${attachment.url}>)<!-- ado-pr-image:flow.png --> ` +
+      `![outer [flow.png]](<${attachment.url}>) ` +
+      `![flow.png](${attachment.url}) ` +
+      `![flow.png](<${attachment.url}>`;
+
+    assert.equal(removeAttachmentMarkdown(description, attachment), description);
+  });
+
+  test("strictly encodes escaped filenames in ownership markers", () => {
+    const attachment = {
+      displayName: "flow[1]-->.png",
+      url: "https://example.test/a_(1).png?x=1&y=2",
+    };
+    const marked =
+      `![flow\\[1\\]-->.png](<${attachment.url}>)` +
+      "<!-- ado-pr-image:flow%5B1%5D%2D%2D%3E.png -->";
+
+    assert.equal(removeAttachmentMarkdown(`Before ${marked} after`, attachment), "Before  after");
+    assert.equal(
+      marked.slice(marked.indexOf("<!--")),
+      "<!-- ado-pr-image:flow%5B1%5D%2D%2D%3E.png -->",
+    );
+  });
+
+  test("handles long marked and unmarked input in linear work", () => {
+    const attachment = {
+      displayName: "flow.png",
+      url: "https://attachments.test/long.png",
+    };
+    const image = `![flow.png](<${attachment.url}>)`;
+    const marked = `${image}<!-- ado-pr-image:flow.png -->`;
+    const unmarked = image.repeat(5_000);
+    const malformed = `![${"\\".repeat(200_000)} without a closing bracket`;
+
+    assert.equal(
+      removeAttachmentMarkdown(`${unmarked} ${malformed} ${marked.repeat(5_000)}`, attachment),
+      `${unmarked} ${malformed} `,
+    );
+  });
+
+  test("adds an image using the current full description and escapes its Markdown alt text", async (t) => {
+    const path = createTempImage(t, "flow[1].png", [0, 255, 16, 32]);
+    const attachmentUrl = "https://attachments.test/flow(1).png?token=x";
+    const current = pullRequest({ description: "Flow {{image:flow[1].png}}" });
+    const updated = pullRequest({
+      description:
+        `Flow ![flow\\[1\\].png](<${attachmentUrl}>)` +
+        "<!-- ado-pr-image:flow%5B1%5D.png -->",
+    });
+    const { service, calls } = createService(t, [
+      { json: current },
+      { json: { value: [] } },
+      { json: { displayName: "flow[1].png", url: attachmentUrl } },
+      { json: updated },
+    ]);
+
+    assert.equal(await service.edit(42, { images: [path] }), 42);
+    assert.deepEqual(
+      calls.map(({ method, url, body }) => ({ method, url, body })),
+      [
+        { method: "GET", url: `${repositoryUrl}/pullRequests/42?api-version=7.1`, body: null },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/attachments?api-version=7.1`,
+          body: null,
+        },
+        {
+          method: "POST",
+          url: `${repositoryUrl}/pullRequests/42/attachments/flow%5B1%5D.png?api-version=7.1`,
+          body: { encoding: "base64", data: "AP8QIA==" },
+        },
+        {
+          method: "PATCH",
+          url: `${repositoryUrl}/pullRequests/42?api-version=7.1`,
+          body: JSON.stringify({ description: updated.description }),
+        },
+      ],
+    );
+  });
+
+  test("rejects an over-limit description without removals before attachment mutation", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const { service, calls } = createService(t, [
+      { json: pullRequest({ description: `${"x".repeat(4_001)}{{image:flow.png}}` }) },
+    ]);
+
+    await assert.rejects(service.edit(42, { images: [path] }), {
+      message:
+        "Pull request description exceeds Azure DevOps' 4,000-character limit (received 4019 characters).",
+    });
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [{ method: "GET", url: `${repositoryUrl}/pullRequests/42?api-version=7.1` }],
+    );
+  });
+
+  test("cleans up its uploaded attachment when generated Markdown exceeds the limit", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const placeholder = "{{image:flow.png}}";
+    const description = `${"x".repeat(4_000 - placeholder.length)}${placeholder}`;
+    const attachmentUrl = "https://attachments.test/flow.png?token=generated-overflow";
+    const generatedLength =
+      4_000 -
+      placeholder.length +
+      `![flow.png](<${attachmentUrl}>)<!-- ado-pr-image:flow.png -->`.length;
+    const { service, calls } = createService(t, [
+      { json: { value: [] } },
+      { json: { displayName: "flow.png", url: attachmentUrl } },
+      { status: 204 },
+    ]);
+
+    await assert.rejects(service.edit(42, { description, images: [path] }), {
+      message:
+        `Generated pull request description exceeds Azure DevOps' 4,000-character limit (received ${generatedLength} characters).\n` +
+        "PR #42 was not updated; successfully uploaded attachments were cleaned up where safe.",
+    });
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/attachments?api-version=7.1`,
+        },
+        {
+          method: "POST",
+          url: `${repositoryUrl}/pullRequests/42/attachments/flow.png?api-version=7.1`,
+        },
+        {
+          method: "DELETE",
+          url: `${repositoryUrl}/pullRequests/42/attachments/flow.png?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("applies the final length limit after combined removals and placeholder expansion", async (t) => {
+    const path = createTempImage(t, "new.png");
+    const oldUrl = "https://attachments.test/old.png?token=old";
+    const newUrl = "https://attachments.test/new.png?token=new";
+    const oldMarked =
+      `![old.png](<${oldUrl}>)` + "<!-- ado-pr-image:old.png -->";
+    const newMarked =
+      `![new.png](<${newUrl}>)` + "<!-- ado-pr-image:new.png -->";
+    const placeholder = "{{image:new.png}}";
+    const finalDescription = `${"x".repeat(4_000 - newMarked.length)}${newMarked}`;
+    const intermediateDescription =
+      `${"x".repeat(4_000 - newMarked.length)}${oldMarked}${placeholder}`;
+    assert.ok(intermediateDescription.replace(placeholder, newMarked).length > 4_000);
+
+    const { service, calls } = createService(t, [
+      { json: { value: [{ displayName: "old.png", url: oldUrl }] } },
+      { json: { displayName: "new.png", url: newUrl } },
+      { json: pullRequest({ description: finalDescription }) },
+      { status: 204 },
+    ]);
+
+    assert.equal(
+      await service.edit(42, {
+        description: intermediateDescription,
+        images: [path],
+        removeImages: ["old.png"],
+      }),
+      42,
+    );
+    assert.deepEqual(
+      calls.map(({ method, body }) => ({ method, body })),
+      [
+        { method: "GET", body: null },
+        { method: "POST", body: { encoding: "base64", data: "AP8Q" } },
+        { method: "PATCH", body: JSON.stringify({ description: finalDescription }) },
+        { method: "DELETE", body: null },
+      ],
+    );
+  });
+
+  test("rejects every existing upload basename before any edit mutation", async (t) => {
+    const newImage = createTempImage(t, "new.png");
+    const flow = createTempImage(t, "flow.png");
+    const architecture = createTempImage(t, "architecture.png");
+    const { service, calls } = createService(t, [
+      {
+        json: {
+          value: [
+            { displayName: "flow.png", url: "https://attachments.test/flow.png" },
+            {
+              displayName: "architecture.png",
+              url: "https://attachments.test/architecture.png",
+            },
+          ],
+        },
+      },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, {
+        description: "{{image:new.png}} {{image:flow.png}} {{image:architecture.png}}",
+        images: [newImage, flow, architecture],
+      }),
+      {
+        message:
+          'Cannot upload attachment filenames "flow.png", "architecture.png" because they already exist on PR #42. ' +
+          "Attachment filename collisions are case-sensitive; remove existing attachments in a separate command because replacement is not supported.",
+      },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "GET");
+  });
+
+  test("allows a case-distinct upload basename under Azure displayName semantics", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const attachmentUrl = "https://attachments.test/new-flow.png";
+    const { service, calls } = createService(t, [
+      {
+        json: {
+          value: [{ displayName: "Flow.png", url: "https://attachments.test/existing.png" }],
+        },
+      },
+      { json: { displayName: "flow.png", url: attachmentUrl } },
+      {
+        json: pullRequest({
+          description: `![flow.png](<${attachmentUrl}>)<!-- ado-pr-image:flow.png -->`,
+        }),
+      },
+    ]);
+
+    assert.equal(
+      await service.edit(42, { description: "{{image:flow.png}}", images: [path] }),
+      42,
+    );
+    assert.deepEqual(
+      calls.map(({ method }) => method),
+      ["GET", "POST", "PATCH"],
+    );
+  });
+
+  test("does not mask generated overflow when cleanup also fails", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const placeholder = "{{image:flow.png}}";
+    const description = `${"x".repeat(4_000 - placeholder.length)}${placeholder}`;
+    const attachmentUrl = "https://attachments.test/cleanup-failure.png";
+    const { service, calls } = createService(t, [
+      { json: { value: [] } },
+      { json: { displayName: "flow.png", url: attachmentUrl } },
+      { status: 503, statusText: "Service Unavailable", body: "delete failed" },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, { description, images: [path] }),
+      (error) => {
+        assert.match(
+          error.message,
+          /^Generated pull request description exceeds Azure DevOps' 4,000-character limit/,
+        );
+        assert.match(error.message, /cleanup failed for "flow\.png"/);
+        assert.match(error.message, /503 Service Unavailable/);
+        return true;
+      },
+    );
+    assert.deepEqual(
+      calls.map(({ method }) => method),
+      ["GET", "POST", "DELETE"],
+    );
+  });
+
+  test("cleans up earlier uploads when a later upload fails", async (t) => {
+    const first = createTempImage(t, "first.png", [1]);
+    const second = createTempImage(t, "second.png", [2]);
+    const firstUrl = "https://attachments.test/first.png";
+    const { service, calls } = createService(t, [
+      { json: { value: [] } },
+      { json: { displayName: "first.png", url: firstUrl } },
+      { status: 503, statusText: "Service Unavailable", body: "upload failed" },
+      { status: 204 },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, {
+        description: "{{image:first.png}} {{image:second.png}}",
+        images: [first, second],
+      }),
+      /Azure DevOps API request .* failed: 503 Service Unavailable[\s\S]*PR #42 was not updated/,
+    );
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/attachments?api-version=7.1`,
+        },
+        {
+          method: "POST",
+          url: `${repositoryUrl}/pullRequests/42/attachments/first.png?api-version=7.1`,
+        },
+        {
+          method: "POST",
+          url: `${repositoryUrl}/pullRequests/42/attachments/second.png?api-version=7.1`,
+        },
+        {
+          method: "DELETE",
+          url: `${repositoryUrl}/pullRequests/42/attachments/first.png?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("does not clean up an upload after an uncertain description PATCH failure", async (t) => {
+    const path = createTempImage(t, "flow.png");
+    const attachmentUrl = "https://attachments.test/flow.png";
+    const { service, calls } = createService(t, [
+      { json: { value: [] } },
+      { json: { displayName: "flow.png", url: attachmentUrl } },
+      { status: 503, statusText: "Service Unavailable", body: "patch failed" },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, { description: "{{image:flow.png}}", images: [path] }),
+      /The PR update outcome is uncertain\. Newly uploaded attachments were left in place/,
+    );
+    assert.deepEqual(
+      calls.map(({ method }) => method),
+      ["GET", "POST", "PATCH"],
+    );
+  });
+
+  test("rejects duplicate image basenames before any Azure request", async (t) => {
+    const first = createTempImage(t, "same.png", [1]);
+    const second = createTempImage(t, "same.png", [2]);
+    const { service, calls } = createService(t);
+
+    await assert.rejects(service.edit(42, { images: [first, second] }), {
+      message: 'Duplicate image basename "same.png".',
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  test("rejects adding and removing the same image filename before any Azure request", async (t) => {
+    const path = createTempImage(t, "same.png", [1]);
+    const { service, calls } = createService(t);
+
+    await assert.rejects(
+      service.edit(42, { images: [path], removeImages: ["same.png"] }),
+      { message: 'Cannot add and remove image "same.png" in the same command.' },
+    );
+    assert.deepEqual(calls, []);
+  });
+
+  test("requires one exact attachment match before any edit mutation", async (t) => {
+    const { service, calls } = createService(t, [{ json: { value: [] } }]);
+
+    await assert.rejects(
+      service.edit(42, { description: "Replacement", removeImages: ["missing.png"] }),
+      { message: 'Attachment "missing.png" was not found on PR #42.' },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "GET");
+    assert.match(calls[0].url, /\/attachments\?api-version=7\.1$/);
+  });
+
+  test("rejects ambiguous exact attachment matches before any edit mutation", async (t) => {
+    const attachment = {
+      displayName: "duplicate.png",
+      url: "https://attachments.test/one",
+    };
+    const { service, calls } = createService(t, [
+      { json: { value: [attachment, { ...attachment, url: "https://attachments.test/two" }] } },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, { description: "Replacement", removeImages: ["duplicate.png"] }),
+      { message: 'Attachment "duplicate.png" is ambiguous on PR #42.' },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "GET");
+  });
+
+  test("fetches the current description, patches exact references, then deletes the attachment", async (t) => {
+    const url = "https://attachments.test/remove.png?token=exact";
+    const { service, calls } = createService(t, [
+      {
+        json: pullRequest({
+          description:
+            `Before ![remove.png](<${url}>)` +
+            "<!-- ado-pr-image:remove.png --> After",
+        }),
+      },
+      { json: { value: [{ displayName: "remove.png", url }] } },
+      { json: pullRequest({ description: "Before  After" }) },
+      { status: 204 },
+    ]);
+
+    assert.equal(await service.edit(42, { removeImages: ["remove.png"] }), 42);
+    assert.deepEqual(
+      calls.map(({ method, url: requestUrl, body }) => ({ method, url: requestUrl, body })),
+      [
+        { method: "GET", url: `${repositoryUrl}/pullRequests/42?api-version=7.1`, body: null },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/attachments?api-version=7.1`,
+          body: null,
+        },
+        {
+          method: "PATCH",
+          url: `${repositoryUrl}/pullRequests/42?api-version=7.1`,
+          body: JSON.stringify({ description: "Before  After" }),
+        },
+        {
+          method: "DELETE",
+          url: `${repositoryUrl}/pullRequests/42/attachments/remove.png?api-version=7.1`,
+          body: null,
+        },
+      ],
+    );
+  });
+
+  test("intentionally leaves a custom-edited reference unchanged when deleting its attachment", async (t) => {
+    const url = "https://attachments.test/custom.png";
+    const description = `Keep ![custom label](<${url}>)`;
+    const { service, calls } = createService(t, [
+      { json: pullRequest({ description }) },
+      { json: { value: [{ displayName: "custom.png", url }] } },
+      { status: 204 },
+    ]);
+
+    assert.equal(await service.edit(42, { removeImages: ["custom.png"] }), 42);
+    assert.deepEqual(
+      calls.map(({ method, url: requestUrl }) => ({ method, url: requestUrl })),
+      [
+        { method: "GET", url: `${repositoryUrl}/pullRequests/42?api-version=7.1` },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/attachments?api-version=7.1`,
+        },
+        {
+          method: "DELETE",
+          url: `${repositoryUrl}/pullRequests/42/attachments/custom.png?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("resolves an active reviewer by exact Account property and uses the dedicated endpoint", async (t) => {
+    const { service, calls } = createService(t, [
+      {
+        json: {
+          value: [
+            {
+              id: "reviewer/id +?#",
+              providerDisplayName: "Ada Lovelace",
+              isActive: true,
+              properties: { Account: { $value: "ada@example.test" } },
+            },
+            {
+              id: "inactive",
+              providerDisplayName: "ada@example.test",
+              isActive: false,
+            },
+          ],
+        },
+      },
+      { json: { value: [] } },
+      { body: "" },
+    ]);
+
+    assert.equal(await service.edit(42, { reviewers: ["ADA@EXAMPLE.TEST"] }), 42);
+    assert.deepEqual(
+      calls.map(({ method, url, body }) => ({ method, url, body })),
+      [
+        {
+          method: "GET",
+          url:
+            "https://vssps.dev.azure.com/test-org/_apis/identities?" +
+            "searchFilter=General&filterValue=ADA%40EXAMPLE.TEST&queryMembership=None&api-version=7.1",
+          body: null,
+        },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/reviewers?api-version=7.1`,
+          body: null,
+        },
+        {
+          method: "PUT",
+          url:
+            `${repositoryUrl}/pullRequests/42/reviewers/` +
+            "reviewer%2Fid%20%2B%3F%23?api-version=7.1",
+          body: JSON.stringify({ id: "reviewer/id +?#", vote: 0 }),
+        },
+      ],
+    );
+  });
+
+  test("does not reset the vote when adding an existing reviewer", async (t) => {
+    const identity = {
+      id: "existing-reviewer",
+      providerDisplayName: "Ada Lovelace",
+      isActive: true,
+    };
+    const { service, calls } = createService(t, [
+      { json: { value: [identity] } },
+      {
+        json: {
+          value: [
+            {
+              id: "EXISTING-REVIEWER",
+              displayName: "Ada Lovelace",
+              uniqueName: "ada@example.test",
+              vote: 10,
+            },
+          ],
+        },
+      },
+    ]);
+
+    assert.equal(await service.edit(42, { reviewers: ["Ada Lovelace"] }), 42);
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        {
+          method: "GET",
+          url:
+            "https://vssps.dev.azure.com/test-org/_apis/identities?" +
+            "searchFilter=General&filterValue=Ada%20Lovelace&queryMembership=None&api-version=7.1",
+        },
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/reviewers?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("accepts an exact case-insensitive custom display name and prefers it in labels", async (t) => {
+    const identity = {
+      id: "custom-reviewer",
+      customDisplayName: "Ada Team Alias",
+      providerDisplayName: "Provider Name",
+      isActive: true,
+    };
+    const { service, calls } = createService(t, [
+      { json: { value: [identity] } },
+      { json: { value: [] } },
+      { body: "" },
+    ]);
+
+    assert.equal(await service.edit(42, { reviewers: ["ADA TEAM ALIAS"] }), 42);
+    assert.deepEqual(
+      calls.map(({ method }) => method),
+      ["GET", "GET", "PUT"],
+    );
+
+    const ambiguous = createService(t, [
+      {
+        json: {
+          value: [identity, { ...identity, id: "other-reviewer" }],
+        },
+      },
+    ]);
+    await assert.rejects(ambiguous.service.edit(42, { reviewers: ["ada team alias"] }), {
+      message:
+        'Reviewer "ada team alias" is ambiguous; exact matches were:\n' +
+        "  Ada Team Alias (custom-reviewer)\n" +
+        "  Ada Team Alias (other-reviewer)",
+    });
+  });
+
+  test("rejects zero and ambiguous exact active reviewer matches", async (t) => {
+    const zero = createService(t, [
+      {
+        json: {
+          value: [
+            { id: "inactive", providerDisplayName: "Ada", isActive: false },
+            { id: "partial", providerDisplayName: "Ada Example", isActive: true },
+          ],
+        },
+      },
+    ]);
+    await assert.rejects(zero.service.edit(42, { reviewers: ["Ada"] }), {
+      message:
+        'No active Azure DevOps identity exactly matched reviewer "Ada" by custom display name, display name, account, or mail.',
+    });
+
+    const ambiguous = createService(t, [
+      {
+        json: {
+          value: [
+            { id: "one", providerDisplayName: "Ada", isActive: true },
+            { id: "two", providerDisplayName: "ADA", isActive: true },
+          ],
+        },
+      },
+    ]);
+    await assert.rejects(
+      ambiguous.service.edit(42, { reviewers: ["ada"] }),
+      /Reviewer "ada" is ambiguous; exact matches were:/,
+    );
+  });
+
+  test("removes an inactive current reviewer without an identity lookup", async (t) => {
+    const { service, calls } = createService(t, [
+      {
+        json: {
+          value: [
+            {
+              id: "inactive/id",
+              displayName: "Former Reviewer",
+              uniqueName: "former@example.test",
+              inactive: true,
+              vote: 10,
+            },
+          ],
+        },
+      },
+      { status: 204 },
+    ]);
+
+    assert.equal(
+      await service.edit(42, { removeReviewers: ["FORMER@EXAMPLE.TEST"] }),
+      42,
+    );
+    assert.deepEqual(
+      calls.map(({ method, url }) => ({ method, url })),
+      [
+        {
+          method: "GET",
+          url: `${repositoryUrl}/pullRequests/42/reviewers?api-version=7.1`,
+        },
+        {
+          method: "DELETE",
+          url: `${repositoryUrl}/pullRequests/42/reviewers/inactive%2Fid?api-version=7.1`,
+        },
+      ],
+    );
+  });
+
+  test("rejects zero and ambiguous current reviewer removal matches before mutation", async (t) => {
+    const zero = createService(t, [{ json: { value: [] } }]);
+    await assert.rejects(zero.service.edit(42, { removeReviewers: ["Missing"] }), {
+      message:
+        'No current reviewer exactly matched "Missing" by display name or unique name on PR #42.',
+    });
+    assert.ok(zero.calls.every((call) => call.method === "GET"));
+
+    const ambiguous = createService(t, [
+      {
+        json: {
+          value: [
+            { id: "one", displayName: "Ada", uniqueName: "one@example.test" },
+            { id: "two", displayName: "ADA", uniqueName: "two@example.test" },
+          ],
+        },
+      },
+    ]);
+    await assert.rejects(
+      ambiguous.service.edit(42, { removeReviewers: ["ada"] }),
+      /Current reviewer "ada" is ambiguous on PR #42; exact matches were:/,
+    );
+    assert.ok(ambiguous.calls.every((call) => call.method === "GET"));
+  });
+
+  test("rejects the same resolved reviewer in add and remove sets before mutation", async (t) => {
+    const identity = { id: "same", providerDisplayName: "Ada", isActive: true };
+    const { service, calls } = createService(t, [
+      { json: { value: [identity] } },
+      {
+        json: {
+          value: [{ id: "same", displayName: "ADA", uniqueName: "ada@example.test", vote: 5 }],
+        },
+      },
+    ]);
+
+    await assert.rejects(
+      service.edit(42, { reviewers: ["Ada"], removeReviewers: ["ada"] }),
+      { message: "Cannot add and remove reviewer Ada (same) in the same command." },
+    );
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every((call) => call.method === "GET"));
   });
 });
