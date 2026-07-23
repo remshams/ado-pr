@@ -18,7 +18,6 @@ import {
 const fetchPreloadPath = fileURLToPath(new URL("./fixtures/fetch-preload.mjs", import.meta.url));
 const testHelpersUrl = new URL("./test-helpers.mjs", import.meta.url).href;
 const origin = "https://dev.azure.com/test-org/test-project/_git/test-repo";
-const expectedAuthorization = `Basic ${Buffer.from(":test-only-fake-pat").toString("base64")}`;
 
 function createRepo(t) {
   return createTempGitRepo(t, { origin, branch: "test/infrastructure" });
@@ -279,7 +278,7 @@ test("runPr isolates ambient secrets and NODE_OPTIONS while enforcing the fake P
     [explicitName]: "explicit-test-value",
     AZURE_DEVOPS_PAT: "test-only-fake-pat",
   });
-  assert.equal(result.calls[0].headers.authorization, expectedAuthorization);
+  assert.equal(result.calls[0].headers.authorization, "<redacted>");
 });
 
 test("runPr reports a bounded subprocess timeout", (t) => {

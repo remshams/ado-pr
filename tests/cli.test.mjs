@@ -94,6 +94,13 @@ test("bare --help and -h document every resource-first command and the batch con
     assert.match(result.stderr, new RegExp(`pr\\.sh ${command.replace(" ", " ")}`));
   }
   assert.match(result.stderr, /--draft \| --no-draft/);
+  assert.match(result.stderr, /--image <path>/);
+  assert.match(result.stderr, /--remove-image <filename>/);
+  assert.match(result.stderr, /--reviewer <email-or-display-name>/);
+  assert.match(result.stderr, /Identity \(Read\)/);
+  assert.match(result.stderr, /maximum 4,000 characters/);
+  assert.match(result.stderr, /\{\{image:<basename>\}\}/);
+  assert.match(result.stderr, /every\s+such placeholder needs a corresponding --image/);
   assert.match(result.stderr, /  --no-draft\s+Mark an existing PR as ready/);
   assert.match(result.stderr, /  -h, --help\s+Show this help\./);
 
@@ -215,6 +222,14 @@ test("each command rejects options belonging to other commands", () => {
     [["pr", "list", "--pr", "1"], 'Error: --pr is not valid for "pr list"'],
     [["pr", "show", "--title", "x"], 'Error: --title is not valid for "pr show"'],
     [["pr", "create", "--title", "x", "--pr", "1"], 'Error: --pr is not valid for "pr create"'],
+    [
+      ["pr", "create", "--title", "x", "--remove-image", "old.png"],
+      'Error: --remove-image is not valid for "pr create"',
+    ],
+    [
+      ["pr", "create", "--title", "x", "--remove-reviewer", "Ada"],
+      'Error: --remove-reviewer is not valid for "pr create"',
+    ],
     [["pr", "edit", "--draft", "--json"], 'Error: --json is not valid for "pr edit"'],
     [["comment", "list", "--message", "x"], 'Error: --message is not valid for "comment list"'],
     [
@@ -281,7 +296,7 @@ test("required command options are validated in dependency order", () => {
 test("pr edit requires an explicit change and supports setting or clearing draft", () => {
   assertUsageError(
     runCli("pr", "edit"),
-    'Error: --description, --draft, or --no-draft is required for "pr edit"',
+    'Error: --description, --draft, --no-draft, --image, --remove-image, --reviewer, or --remove-reviewer is required for "pr edit"',
   );
   assertUsageError(
     runCli("pr", "edit", "--description"),
@@ -302,6 +317,10 @@ test("pr edit requires an explicit change and supports setting or clearing draft
     ["pr", "edit", "--description", "-"],
     ["pr", "edit", "--draft"],
     ["pr", "edit", "--no-draft"],
+    ["pr", "edit", "--image", "flow.png", "--image", "arch.png"],
+    ["pr", "edit", "--remove-image", "old.png", "--remove-image", "older.png"],
+    ["pr", "edit", "--reviewer", "Ada Lovelace", "--reviewer", "grace@example.test"],
+    ["pr", "edit", "--remove-reviewer", "Old Reviewer"],
   ]) {
     assertParsedBeforePat(...args);
   }
@@ -332,6 +351,42 @@ test("positive integer flags and duplicate flags are rejected", () => {
     runCli("comment", "list", "--json", "--json"),
     "Error: --json may only be passed once",
   );
+});
+
+test("only registered repeatable string flags accept duplicate occurrences", () => {
+  assertParsedBeforePat(
+    "pr",
+    "create",
+    "--title",
+    "Images and reviewers",
+    "--image",
+    "one.png",
+    "--image=two.png",
+    "--reviewer",
+    "Ada Lovelace",
+    "--reviewer=grace@example.test",
+  );
+  assertUsageError(
+    runCli("pr", "create", "--title", "one", "--title", "two"),
+    "Error: --title may only be passed once",
+  );
+  assertUsageError(
+    runCli("pr", "edit", "--image"),
+    "Error: --image requires an explicit value",
+  );
+});
+
+test("repeatable string flags reject empty inline and separate values during parsing", () => {
+  for (const [command, flag] of [
+    ["create", "image"],
+    ["create", "reviewer"],
+    ["edit", "remove-image"],
+    ["edit", "remove-reviewer"],
+  ]) {
+    const prefix = ["pr", command, ...(command === "create" ? ["--title", "x"] : [])];
+    assertUsageError(runCli(...prefix, `--${flag}=`), `Error: --${flag} must not be empty`);
+    assertUsageError(runCli(...prefix, `--${flag}`, ""), `Error: --${flag} must not be empty`);
+  }
 });
 
 test("comment create preserves file line-range validation", () => {

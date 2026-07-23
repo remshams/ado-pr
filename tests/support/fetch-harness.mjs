@@ -32,11 +32,22 @@ function queuedResponseFromDescriptor(descriptor, index) {
 
 async function recordRequest(input, init) {
   const request = new Request(input, init);
+  const headers = Object.fromEntries(request.headers);
+  if (headers.authorization !== undefined) headers.authorization = "<redacted>";
+  let body = null;
+  if (request.body !== null) {
+    body = request.headers.get("content-type") === "application/octet-stream"
+      ? {
+          encoding: "base64",
+          data: Buffer.from(await request.clone().arrayBuffer()).toString("base64"),
+        }
+      : await request.clone().text();
+  }
   return {
     url: request.url,
     method: request.method,
-    headers: Object.fromEntries(request.headers),
-    body: request.body === null ? null : await request.clone().text(),
+    headers,
+    body,
   };
 }
 

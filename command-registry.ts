@@ -1,4 +1,4 @@
-export type FlagKind = "string" | "positiveInteger" | "boolean";
+export type FlagKind = "string" | "repeatableString" | "positiveInteger" | "boolean";
 
 interface FlagDefinition {
   kind: FlagKind;
@@ -21,7 +21,27 @@ export const FLAG_DEFINITIONS = {
   description: {
     kind: "string",
     usage: "--description <text>",
-    description: "Pull request description. Pass an explicit empty string to clear it.",
+    description: "Pull request description (maximum 4,000 characters). Empty clears it.",
+  },
+  image: {
+    kind: "repeatableString",
+    usage: "--image <path>",
+    description: "Upload an image for a matching {{image:<filename>}} description placeholder.",
+  },
+  "remove-image": {
+    kind: "repeatableString",
+    usage: "--remove-image <filename>",
+    description: "Remove an attachment and its exact generated Markdown references; `pr edit` only.",
+  },
+  reviewer: {
+    kind: "repeatableString",
+    usage: "--reviewer <email-or-display-name>",
+    description: "Add a uniquely resolved active reviewer. Repeat to add multiple reviewers.",
+  },
+  "remove-reviewer": {
+    kind: "repeatableString",
+    usage: "--remove-reviewer <email-or-display-name>",
+    description: "Remove a uniquely resolved reviewer; valid only for `pr edit`.",
   },
   source: {
     kind: "string",
@@ -96,35 +116,33 @@ export const FLAG_DEFINITIONS = {
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagName = keyof typeof FLAG_DEFINITIONS;
-export type TextFlagName = {
-  [Name in FlagName]: (typeof FLAG_DEFINITIONS)[Name]["kind"] extends "string" ? Name : never;
-}[FlagName];
-export type PositiveIntegerFlagName = {
-  [Name in FlagName]: (typeof FLAG_DEFINITIONS)[Name]["kind"] extends "positiveInteger"
-    ? Name
-    : never;
-}[FlagName];
-export type StringFlagName = TextFlagName | PositiveIntegerFlagName;
-export type BooleanFlagName = {
-  [Name in FlagName]: (typeof FLAG_DEFINITIONS)[Name]["kind"] extends "boolean" ? Name : never;
+type FlagNameForKind<Kind extends FlagKind> = {
+  [Name in FlagName]: (typeof FLAG_DEFINITIONS)[Name]["kind"] extends Kind ? Name : never;
 }[FlagName];
 
-export const TEXT_FLAG_NAMES = Object.entries(FLAG_DEFINITIONS)
-  .filter(([, definition]) => definition.kind === "string")
-  .map(([name]) => name) as TextFlagName[];
+export type TextFlagName = FlagNameForKind<"string">;
+export type RepeatableStringFlagName = FlagNameForKind<"repeatableString">;
+export type PositiveIntegerFlagName = FlagNameForKind<"positiveInteger">;
+export type StringFlagName = TextFlagName | RepeatableStringFlagName | PositiveIntegerFlagName;
+export type BooleanFlagName = FlagNameForKind<"boolean">;
 
-export const POSITIVE_INTEGER_FLAG_NAMES = Object.entries(FLAG_DEFINITIONS)
-  .filter(([, definition]) => definition.kind === "positiveInteger")
-  .map(([name]) => name) as PositiveIntegerFlagName[];
+function flagNamesForKind<Kind extends FlagKind>(kind: Kind): FlagNameForKind<Kind>[] {
+  return Object.entries(FLAG_DEFINITIONS)
+    .filter(([, definition]) => definition.kind === kind)
+    .map(([name]) => name) as FlagNameForKind<Kind>[];
+}
+
+export const TEXT_FLAG_NAMES = flagNamesForKind("string");
+export const REPEATABLE_STRING_FLAG_NAMES = flagNamesForKind("repeatableString");
+export const POSITIVE_INTEGER_FLAG_NAMES = flagNamesForKind("positiveInteger");
 
 export const STRING_FLAG_NAMES: StringFlagName[] = [
   ...TEXT_FLAG_NAMES,
+  ...REPEATABLE_STRING_FLAG_NAMES,
   ...POSITIVE_INTEGER_FLAG_NAMES,
 ];
 
-export const BOOLEAN_FLAG_NAMES = Object.entries(FLAG_DEFINITIONS)
-  .filter(([, definition]) => definition.kind === "boolean")
-  .map(([name]) => name) as BooleanFlagName[];
+export const BOOLEAN_FLAG_NAMES = flagNamesForKind("boolean");
 
 export type BatchFieldKind = "command" | "positiveInteger" | "message" | "file";
 
@@ -148,7 +166,7 @@ export const BATCH_FIELD_DEFINITIONS = {
 
 export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 
-export type CommandValidationRule = "draftState" | "commentLocation";
+export type CommandValidationRule = "pullRequestEdit" | "commentLocation";
 
 interface CommandDefinition {
   resource: "pr" | "comment";
@@ -196,18 +214,28 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
     resource: "pr",
     command: "create",
     usage:
-      'pr create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft]',
-    summary: "Create a pull request from the current branch or --source.",
-    flags: ["title", "description", "source", "target", "draft"],
+      'pr create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft] [--image <path>]... [--reviewer <email-or-display-name>]...',
+    summary: "Create a pull request, optionally uploading images and adding reviewers.",
+    flags: ["title", "description", "source", "target", "draft", "image", "reviewer"],
     requiredFlags: ["title"],
   },
   "pr.edit": {
     resource: "pr",
     command: "edit",
-    usage: 'pr edit [--description "..."] [--draft | --no-draft] [--pr <id>]',
-    summary: "Change a pull request description and/or draft state.",
-    flags: ["pr", "description", "draft", "no-draft"],
-    validationRules: ["draftState"],
+    usage:
+      'pr edit [--description "..."] [--draft | --no-draft] [--image <path>]... [--remove-image <filename>]... [--reviewer <email-or-display-name>]... [--remove-reviewer <email-or-display-name>]... [--pr <id>]',
+    summary: "Change PR fields, images, and/or reviewers.",
+    flags: [
+      "pr",
+      "description",
+      "draft",
+      "no-draft",
+      "image",
+      "remove-image",
+      "reviewer",
+      "remove-reviewer",
+    ],
+    validationRules: ["pullRequestEdit"],
   },
   "comment.list": {
     resource: "comment",
@@ -293,7 +321,9 @@ type FlagValue<Name extends FlagName> = (typeof FLAG_DEFINITIONS)[Name]["kind"] 
   ? boolean
   : (typeof FLAG_DEFINITIONS)[Name]["kind"] extends "positiveInteger"
     ? number
-    : string;
+    : (typeof FLAG_DEFINITIONS)[Name]["kind"] extends "repeatableString"
+      ? string[]
+      : string;
 type PresentCommandFlag<Id extends CommandId> =
   | RequiredCommandFlag<Id>
   | Extract<CommandFlag<Id>, BooleanFlagName>;
@@ -381,23 +411,35 @@ function formatBatchShape(command: BatchCommand): string {
   return `{${fields.join(",")}}`;
 }
 
+function formatHelpRows(rows: readonly (readonly [string, string])[], minimumWidth = 0): string {
+  const width = Math.max(minimumWidth, ...rows.map(([label]) => label.length + 2));
+  return rows
+    .map(([label, description]) => `  ${label.padEnd(width)}${description}`)
+    .join("\n");
+}
+
 export function formatHelp(): string {
   const commands = COMMAND_IDS.map((id) => COMMAND_REGISTRY[id]);
   const usage = commands
     .map((definition, index) => `${index === 0 ? "Usage:" : "      "} pr.sh ${definition.usage}`)
     .join("\n");
-  const commandList = commands
-    .map(
-      (definition) =>
-        `  ${`${definition.resource} ${definition.command}`.padEnd(25)}${definition.summary}`,
-    )
-    .join("\n");
+  const commandList = formatHelpRows(
+    commands.map(
+      (definition): [string, string] => [
+        `${definition.resource} ${definition.command}`,
+        definition.summary,
+      ],
+    ),
+    25,
+  );
   const batchShapes = BATCH_COMMANDS.map((command) => `    ${formatBatchShape(command)}`).join(
     "\n",
   );
-  const options = Object.values(FLAG_DEFINITIONS)
-    .map((definition) => `  ${definition.usage.padEnd(25)}${definition.description}`)
-    .join("\n");
+  const options = formatHelpRows(
+    Object.values(FLAG_DEFINITIONS).map(
+      (definition): [string, string] => [definition.usage, definition.description],
+    ),
+  );
 
   return `${usage}
 
@@ -417,5 +459,18 @@ ${options}
 
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
-  - AZURE_DEVOPS_PAT exported by the caller or set in .env.`;
+  - AZURE_DEVOPS_PAT exported by the caller or set in .env.
+  - PAT Code (Read & Write) for mutations.
+  - Identity (Read), also named vso.identity, only for --reviewer additions on pr create/edit.
+    --remove-reviewer resolves current PR reviewers and needs only Code (Read & Write).
+
+Image notes:
+  Every --image path needs a matching {{image:<basename>}} in the effective description, and every
+  such placeholder needs a corresponding --image. Existing attachment displayName collisions are
+  rejected before upload using case-sensitive filename matching; replacement is not supported.
+  Upload failures before the description update trigger best-effort cleanup of new attachments. If
+  the final update fails, its outcome is uncertain, so uploads are retained and may be orphaned.
+  Generated image Markdown has an adjacent invisible ownership marker. Keep the marker unchanged for
+  automatic reference removal. If it is edited or removed, attachment deletion retains the custom
+  reference, which may then be broken.`;
 }

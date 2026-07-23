@@ -12,7 +12,7 @@ import {
 import { createMockFetch } from "./test-helpers.mjs";
 
 const fakePat = "test-only-fake-pat";
-const expectedAuthorization = "Basic OnRlc3Qtb25seS1mYWtlLXBhdA==";
+const expectedAuthorization = "<redacted>";
 
 test("Azure requester defaults to an authenticated GET without a body", async (t) => {
   const { fetch, calls } = createMockFetch(t, [{ json: { value: ["fake-result"] } }]);
@@ -55,6 +55,32 @@ test("Azure requester sends mutations with a JSON body and Content-Type", async 
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
+    },
+  ]);
+});
+
+test("Azure requester sends raw binary bytes with an explicit Content-Type", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [
+    { json: { displayName: "flow.png", url: "fake-url" } },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  const result = await azure.request("https://example.invalid/attachment/flow.png", {
+    method: "POST",
+    rawBody: new Uint8Array([0, 255, 16, 32]),
+    contentType: "application/octet-stream",
+  });
+
+  assert.deepEqual(result, { displayName: "flow.png", url: "fake-url" });
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/attachment/flow.png",
+      method: "POST",
+      headers: {
+        authorization: expectedAuthorization,
+        "content-type": "application/octet-stream",
+      },
+      body: { encoding: "base64", data: "AP8QIA==" },
     },
   ]);
 });

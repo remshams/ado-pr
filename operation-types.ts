@@ -29,22 +29,19 @@ type CliOptionsShape =
       sourceBranch?: string;
       targetBranch?: string;
       draft: boolean;
+      images?: string[];
+      reviewers?: string[];
     }
-  | (PullRequestTarget &
-      (
-        | {
-            resource: "pr";
-            command: "edit";
-            description: string;
-            draft?: boolean;
-          }
-        | {
-            resource: "pr";
-            command: "edit";
-            description?: never;
-            draft: boolean;
-          }
-      ))
+  | (PullRequestTarget & {
+      resource: "pr";
+      command: "edit";
+      description?: string;
+      draft?: boolean;
+      images?: string[];
+      removeImages?: string[];
+      reviewers?: string[];
+      removeReviewers?: string[];
+    })
   | (PullRequestTarget & {
       resource: "comment";
       command: "list";
