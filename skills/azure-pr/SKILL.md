@@ -31,6 +31,13 @@ Append the disclosure on its own lines after the comment content:
 🤖 Written by an AI agent (<actual model name>).
 ```
 
-Replace `<actual model name>` with the exact provider and model identity currently executing the turn, obtained from runtime/session metadata. Never infer, guess, or copy the model name from an existing PR comment, an earlier agent message, the branch, or a default value; different comments may have been written by different models. If the runtime does not expose the exact model identity, ask the user for it before posting or editing comment content rather than using an unverified name. When editing a comment, ensure the resulting content contains one current disclosure rather than dropping it or adding duplicates. Never post or edit agent-authored comment text without the disclosure.
+Replace `<actual model name>` with the exact provider and model identity currently executing the turn, obtained from runtime/session metadata. Never infer, guess, or copy the model name from an existing PR comment, an earlier agent message, the branch, or a default value; different comments may have been written by different models. If the runtime does not expose the exact model identity and it cannot be determined reliably, leave the model name out entirely and post only the rest of the disclosure:
+
+```text
+---
+🤖 Written by an AI agent.
+```
+
+Do not ask the user for the model name and do not use an unverified one; the model name is optional, the AI-authorship disclosure is not. When editing a comment, ensure the resulting content contains one current disclosure rather than dropping it or adding duplicates. Never post or edit agent-authored comment text without the disclosure.
 
 Operations that do not write comment content, such as `pr.sh comment delete`, `pr.sh comment resolve`, `comment.delete`, and `comment.resolve`, do not require a disclosure.
