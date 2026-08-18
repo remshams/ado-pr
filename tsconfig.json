@@ -18,6 +18,7 @@
     "lib.ts",
     "azure.ts",
     "pull-requests.ts",
+    "builds.ts",
     "file-anchors.ts",
     "threads.ts",
     "batch.ts"
