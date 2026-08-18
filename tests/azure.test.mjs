@@ -225,6 +225,79 @@ test("Azure requester reports the method, URL, status, status text, and response
   );
 });
 
+test("Azure requester bounds successful response bodies when a caller sets a limit", async (t) => {
+  const { fetch } = createMockFetch(t, [
+    { body: "123456" },
+    { json: { value: "too-large" } },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/text-limit", {
+      responseType: "text",
+      maxResponseBytes: 5,
+    }),
+    /response body exceeded 5 bytes/,
+  );
+  await assert.rejects(
+    azure.request("https://example.invalid/json-limit", { maxResponseBytes: 8 }),
+    /response body exceeded 8 bytes/,
+  );
+});
+
+test("Azure requester aborts stalled requests at the caller-supplied timeout", async () => {
+  const fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/stalled", { timeoutMs: 10 }),
+    {
+      message: "Azure DevOps API request (GET https://example.invalid/stalled) timed out after 10ms.",
+    },
+  );
+});
+
+test("Azure requester bounds and sanitizes untrusted API error details", async (t) => {
+  const basicCredential = Buffer.from(`:${fakePat}`).toString("base64");
+  const body =
+    `\u001b[31mAuthorization: Basic ${basicCredential}\npassword=${fakePat}\n` + "x".repeat(5_000);
+  const { fetch } = createMockFetch(t, [
+    { status: 500, statusText: "Bad Status", body },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/failure?continuationToken=opaque-secret"),
+    (error) => {
+      assert.doesNotMatch(error.message, /opaque-secret|test-only-fake-pat|\u001b/);
+      assert.match(error.message, /continuationToken=<redacted>/);
+      assert.match(error.message, /Authorization: <redacted>/);
+      assert.match(error.message, /password=<redacted>/);
+      assert.match(error.message, /<response body truncated>/);
+      assert.ok(error.message.length < 4_500);
+      return true;
+    },
+  );
+});
+
+test("Azure requester validates timeout and response-limit options before fetch", async (t) => {
+  const { fetch, calls } = createMockFetch(t);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/invalid", { timeoutMs: 0 }),
+    /timeoutMs must be a positive safe integer/,
+  );
+  await assert.rejects(
+    azure.request("https://example.invalid/invalid", { maxResponseBytes: Number.MAX_SAFE_INTEGER + 1 }),
+    /maxResponseBytes must be a positive safe integer/,
+  );
+  assert.deepEqual(calls, []);
+});
+
 test("authenticated-user lookup requests connection data and returns its identity id", async (t) => {
   const { fetch, calls } = createMockFetch(t, [
     { json: { authenticatedUser: { id: "identity/id +?#" } } },
