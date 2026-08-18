@@ -218,17 +218,29 @@ test("legacy flat action aliases remain rejected even when combined with help", 
   }
 });
 
-test("build flags parse with registry-derived types and reject foreign options", () => {
+test("build flags parse with registry-derived types and reject missing or foreign options", () => {
   assertParsedBeforePat("build", "list", "--history");
   assertParsedBeforePat("build", "show", "--build", "7", "--full-logs");
-  assertUsageError(
-    runCli("build", "list", "--build", "7"),
-    'Error: --build is not valid for "build list"',
-  );
-  assertUsageError(
-    runCli("build", "show", "--build", "7", "--history"),
-    'Error: --history is not valid for "build show"',
-  );
+  assertParsedBeforePat("build", "retry", "--build", "7", "--pr", "42");
+
+  for (const command of ["show", "retry"]) {
+    assertUsageError(
+      runCli("build", command),
+      `Error: --build is required for "build ${command}"`,
+    );
+    assertUsageError(
+      runCli("build", command, "--build", "0"),
+      'Error: invalid --build "0" (pass it once, as a single positive integer)',
+    );
+  }
+  for (const [args, expected] of [
+    [["build", "list", "--build", "7"], 'Error: --build is not valid for "build list"'],
+    [["build", "show", "--build", "7", "--history"], 'Error: --history is not valid for "build show"'],
+    [["build", "retry", "--build", "7", "--json"], 'Error: --json is not valid for "build retry"'],
+    [["build", "list", "--full-logs"], 'Error: --full-logs is not valid for "build list"'],
+  ]) {
+    assertUsageError(runCli(...args), expected);
+  }
 });
 
 test("unknown flags and invalid boolean values are rejected", () => {

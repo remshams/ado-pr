@@ -31,9 +31,8 @@ function assertSucceeded(result) {
   assert.equal(result.stderr, "");
 }
 
-test("build list dispatches through BuildService and prints a normalized JSON envelope", (t) => {
-  const cwd = createRepo(t);
-  const pr = {
+function validationPr(overrides = {}) {
+  return {
     pullRequestId: 42,
     title: "Build validation",
     status: "active",
@@ -41,7 +40,32 @@ test("build list dispatches through BuildService and prints a normalized JSON en
     sourceRefName: "refs/heads/feature/dispatch",
     repository: { id: "repo-id", name: "widgets" },
     lastMergeCommit: { commitId: "merge-1" },
+    ...overrides,
   };
+}
+
+function validationBuild(overrides = {}) {
+  return {
+    id: 700,
+    buildNumber: "20260818.1",
+    status: "completed",
+    result: "failed",
+    reason: "pullRequest",
+    sourceBranch: "refs/pull/42/merge",
+    sourceVersion: "merge-1",
+    queueTime: "2026-08-18T10:00:00Z",
+    startTime: "2026-08-18T10:01:00Z",
+    finishTime: "2026-08-18T10:03:00Z",
+    repository: { id: "repo-id", name: "widgets", type: "TfsGit" },
+    definition: { id: 9, name: "Widget CI" },
+    _links: { web: { href: "https://dev.azure.com/acme/build/700" } },
+    ...overrides,
+  };
+}
+
+test("build list dispatches through BuildService and prints a normalized JSON envelope", (t) => {
+  const cwd = createRepo(t);
+  const pr = validationPr();
   const result = runPr(t, ["build", "list", "--pr", "42", "--json"], {
     cwd,
     responses: [
@@ -63,6 +87,139 @@ test("build list dispatches through BuildService and prints a normalized JSON en
     builds: [],
   });
   assert.equal(result.calls[1].url, `${buildApiBase}?reasonFilter=pullRequest&branchName=refs%2Fpull%2F42%2Fmerge&repositoryId=repo-id&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1`);
+});
+
+test("build list prints a successful explicit message for an empty current collection", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(t, ["build", "list", "--pr", "42"], {
+    cwd,
+    responses: [{ json: validationPr() }, { json: { value: [] } }],
+  });
+
+  assertSucceeded(result);
+  assert.equal(result.stdout, "No associated current merge version builds found for PR #42.\n");
+});
+
+test("build show --full-logs prints its normalized diagnostic envelope", (t) => {
+  const cwd = createRepo(t);
+  const build = validationBuild();
+  const timeline = {
+    id: "timeline-700",
+    records: [
+      {
+        id: "task-lint",
+        type: "Task",
+        name: "Lint",
+        state: "completed",
+        result: "failed",
+        issues: [{ type: "error", category: "lint", message: "Formatting differs" }],
+        log: { id: 17 },
+      },
+    ],
+  };
+  const result = runPr(
+    t,
+    ["build", "show", "--build", "700", "--pr", "42", "--full-logs", "--json"],
+    {
+      cwd,
+      responses: [
+        { json: validationPr() },
+        { json: build },
+        { json: timeline },
+        { json: { value: [{ id: 17, type: "Container" }] } },
+        { body: "src/app.ts needs formatting\n" },
+      ],
+    },
+  );
+
+  assertSucceeded(result);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.current, true);
+  assert.deepEqual(output.build, build);
+  assert.deepEqual(output.timeline, timeline);
+  assert.equal(output.problemRecords[0].logMode, "full");
+  assert.equal(output.problemRecords[0].logRange, null);
+  assert.equal(output.problemRecords[0].logText, "src/app.ts needs formatting\n");
+  assert.deepEqual(
+    result.calls.map(({ url, method }) => ({ url, method })),
+    [
+      { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET" },
+      { url: `${buildApiBase}/700?api-version=7.1`, method: "GET" },
+      { url: `${buildApiBase}/700/timeline?api-version=7.1`, method: "GET" },
+      { url: `${buildApiBase}/700/logs?api-version=7.1`, method: "GET" },
+      { url: `${buildApiBase}/700/logs/17?api-version=7.1`, method: "GET" },
+    ],
+  );
+  assert.equal(result.calls[4].headers.accept, "text/plain");
+});
+
+test("build show prints partial JSON and exits nonzero when one problem log fails", (t) => {
+  const cwd = createRepo(t);
+  const result = runPr(t, ["build", "show", "--build", "700", "--pr", "42", "--json"], {
+    cwd,
+    responses: [
+      { json: validationPr() },
+      { json: validationBuild() },
+      {
+        json: {
+          records: [
+            { id: "task-test", type: "Task", name: "Test", result: "failed", log: { id: 18 } },
+          ],
+        },
+      },
+      { json: { value: [{ id: 18, lineCount: 12 }] } },
+      { status: 503, statusText: "Unavailable", body: "temporary log failure" },
+    ],
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, "");
+  const output = JSON.parse(result.stdout);
+  assert.match(output.problemRecords[0].logError, /503 Unavailable/);
+  assert.deepEqual(output.problemRecords[0].logRange, { startLine: 1, endLine: 12 });
+});
+
+test("build retry double-checks its target and prints Azure's returned build", (t) => {
+  const cwd = createRepo(t);
+  const returned = validationBuild({
+    id: 701,
+    buildNumber: "20260818.2",
+    status: "inProgress",
+    result: undefined,
+    _links: { web: { href: "https://dev.azure.com/acme/build/701" } },
+  });
+  const result = runPr(t, ["build", "retry", "--build", "700", "--pr", "42"], {
+    cwd,
+    responses: [
+      { json: validationPr() },
+      { json: validationBuild() },
+      { json: validationPr({ isDraft: false }) },
+      { json: validationBuild() },
+      { json: returned },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(
+    result.calls.map(({ url, method, body }) => ({ url, method, body })),
+    [
+      { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET", body: null },
+      { url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
+      { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET", body: null },
+      { url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
+      {
+        url: `${buildApiBase}/700?retry=true&api-version=7.1`,
+        method: "PATCH",
+        body: JSON.stringify({ id: 700 }),
+      },
+    ],
+  );
+  assert.equal(
+    result.stdout,
+    "Azure DevOps accepted the retry request for build 701/20260818.2.\n" +
+      "Returned status/result: inProgress/unknown\n" +
+      "URL: https://dev.azure.com/acme/build/701\n",
+  );
 });
 
 test("pr list requests the current identity then prints active pull requests in response order", (t) => {
