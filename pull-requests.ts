@@ -12,6 +12,15 @@ import type { AzureRequester } from "./azure.ts";
 import { getCurrentBranch as defaultGetCurrentBranch } from "./lib.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
 
+export interface PullRequestRepository {
+  id: string;
+  name: string;
+}
+
+export interface PullRequestCommit {
+  commitId: string;
+}
+
 export interface PullRequest {
   pullRequestId: number;
   title: string;
@@ -20,6 +29,8 @@ export interface PullRequest {
   isDraft?: boolean;
   sourceRefName: string;
   targetRefName?: string;
+  repository?: PullRequestRepository;
+  lastMergeCommit?: PullRequestCommit;
 }
 
 export interface CreatePullRequestOptions {

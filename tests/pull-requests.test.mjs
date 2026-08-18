@@ -97,6 +97,8 @@ describe("pull request listing, resolution, creation, and updates", () => {
       status: "active",
       isDraft: true,
       targetRefName: "refs/heads/main",
+      repository: { id: "repository-id", name: "test-repository" },
+      lastMergeCommit: { commitId: "merge-commit-id" },
     });
     const { service, calls } = createService(t, [{ json: expected }]);
 
