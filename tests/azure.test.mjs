@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AzureRequestError,
   createAzureRequester,
   getAuthenticatedUserId,
+  isAzureRequestError,
   orgProjectUrl,
   pullRequestApiUrl,
   pullRequestWebUrl,
@@ -214,6 +216,11 @@ test("Azure requester reports the method, URL, status, status text, and response
     }),
     (error) => {
       assert.equal(error?.name, "Error");
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(isAzureRequestError(error), true);
+      assert.equal(error.kind, "http");
+      assert.equal(error.status, 429);
+      assert.equal(error.retryAfterMs, undefined);
       assert.equal(
         error?.message,
         `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
@@ -237,11 +244,21 @@ test("Azure requester bounds successful response bodies when a caller sets a lim
       responseType: "text",
       maxResponseBytes: 5,
     }),
-    /response body exceeded 5 bytes/,
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "response");
+      assert.match(error.message, /response body exceeded 5 bytes/);
+      return true;
+    },
   );
   await assert.rejects(
     azure.request("https://example.invalid/json-limit", { maxResponseBytes: 8 }),
-    /response body exceeded 8 bytes/,
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "response");
+      assert.match(error.message, /response body exceeded 8 bytes/);
+      return true;
+    },
   );
 });
 
@@ -251,11 +268,164 @@ test("Azure requester aborts stalled requests at the caller-supplied timeout", a
       init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
     });
   const azure = createAzureRequester({ pat: fakePat, fetch });
+  const caller = new AbortController();
 
   await assert.rejects(
-    azure.request("https://example.invalid/stalled", { timeoutMs: 10 }),
+    azure.request("https://example.invalid/stalled", {
+      signal: caller.signal,
+      timeoutMs: 10,
+    }),
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "timeout");
+      assert.equal(
+        error.message,
+        "Azure DevOps API request (GET https://example.invalid/stalled) timed out after 10ms.",
+      );
+      return true;
+    },
+  );
+  caller.abort(new Error(`late caller reason ${fakePat}`));
+});
+
+test("Azure requester supports external cancellation in every response mode without leaking reasons", async () => {
+  const secretReason = `Authorization: Bearer caller-secret password=${fakePat}\u001b[31m`;
+  const fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    });
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  for (const options of [{}, { responseType: "text" }, { responseType: "none" }]) {
+    const controller = new AbortController();
+    const pending = azure.request("https://example.invalid/cancelled", {
+      ...options,
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    });
+    controller.abort(new Error(secretReason));
+
+    await assert.rejects(pending, (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "abort");
+      assert.equal(error.name, "Error");
+      assert.doesNotMatch(error.message, /caller-secret|test-only-fake-pat|Authorization|\u001b/);
+      assert.doesNotMatch(JSON.stringify(error), /caller-secret|test-only-fake-pat|Authorization|\u001b/);
+      return true;
+    });
+  }
+});
+
+test("Azure requester gives the first cancellation source precedence", async () => {
+  const caller = new AbortController();
+  caller.abort(new Error(`timeout-like ${fakePat}`));
+  let fetchCalled = false;
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => {
+      fetchCalled = true;
+      throw new Error("must not run");
+    },
+  });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/pre-cancelled", {
+      signal: caller.signal,
+      timeoutMs: 1,
+    }),
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "abort");
+      assert.doesNotMatch(error.message, /timeout-like|test-only-fake-pat/);
+      return true;
+    },
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("Azure requester exposes parsed Retry-After delays only for valid HTTP values", async (t) => {
+  const futureDate = new Date(Date.now() + 120_000).toUTCString();
+  const { fetch } = createMockFetch(t, [
+    { status: 429, headers: { "retry-after": "17" } },
+    { status: 503, headers: { "retry-after": futureDate } },
+    { status: 503, headers: { "retry-after": "-4" } },
+    { status: 503, headers: { "retry-after": "not-a-date" } },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  const errors = [];
+  for (let index = 0; index < 4; index += 1) {
+    try {
+      await azure.request(`https://example.invalid/retry/${index}`);
+      assert.fail("request should reject");
+    } catch (error) {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "http");
+      errors.push(error);
+    }
+  }
+
+  assert.equal(errors[0].status, 429);
+  assert.equal(errors[0].retryAfterMs, 17_000);
+  assert.equal(errors[1].status, 503);
+  assert.ok(errors[1].retryAfterMs > 118_000 && errors[1].retryAfterMs <= 120_000);
+  assert.equal(errors[2].retryAfterMs, undefined);
+  assert.equal(errors[3].retryAfterMs, undefined);
+});
+
+test("Azure requester classifies and sanitizes bounded network failures", async () => {
+  const basicCredential = Buffer.from(`:${fakePat}`).toString("base64");
+  const source =
+    `\u001b[31mAuthorization: Basic ${basicCredential} password=${fakePat} client_secret=source-secret ` +
+    "x".repeat(5_000);
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => {
+      throw new Error(source);
+    },
+  });
+
+  await assert.rejects(
+    azure.request(
+      `https://user:${fakePat}@example.invalid/${encodeURIComponent(fakePat)}?access_token=another-secret`,
+    ),
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "network");
+      assert.equal(error.status, undefined);
+      assert.equal(error.retryAfterMs, undefined);
+      assert.doesNotMatch(
+        error.message,
+        /test-only-fake-pat|another-secret|source-secret|Authorization.*Basic|\u001b/,
+      );
+      assert.match(error.message, /<redacted>/);
+      assert.ok(error.message.length < 3_500);
+      assert.doesNotMatch(JSON.stringify(error), /test-only-fake-pat|another-secret|source-secret|Authorization.*Basic|\u001b/);
+      return true;
+    },
+  );
+});
+
+test("Azure requester classifies malformed successful JSON as a sanitized response failure", async (t) => {
+  const basicCredential = Buffer.from(`:${fakePat}`).toString("base64");
+  const { fetch } = createMockFetch(t, [
     {
-      message: "Azure DevOps API request (GET https://example.invalid/stalled) timed out after 10ms.",
+      body:
+        `{"Authorization":"Basic ${basicCredential}",` +
+        `"proxy-authorization":"Bearer response-secret","password":"${fakePat}"`,
+    },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/malformed"),
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "response");
+      assert.doesNotMatch(error.message, /test-only-fake-pat|response-secret|Authorization.*Basic|\u001b/);
+      assert.doesNotMatch(JSON.stringify(error), /test-only-fake-pat|response-secret|Authorization.*Basic|\u001b/);
+      assert.ok(error.message.length < 1_500);
+      return true;
     },
   );
 });
@@ -263,7 +433,8 @@ test("Azure requester aborts stalled requests at the caller-supplied timeout", a
 test("Azure requester bounds and sanitizes untrusted API error details", async (t) => {
   const basicCredential = Buffer.from(`:${fakePat}`).toString("base64");
   const body =
-    `\u001b[31mAuthorization: Basic ${basicCredential}\npassword=${fakePat}\n` + "x".repeat(5_000);
+    `\u001b[31mAuthorization: Basic ${basicCredential}\nAuthorization: Bearer response-secret\npassword=${fakePat}\n` +
+    "x".repeat(5_000);
   const { fetch } = createMockFetch(t, [
     { status: 500, statusText: "Bad Status", body },
   ]);
@@ -272,7 +443,11 @@ test("Azure requester bounds and sanitizes untrusted API error details", async (
   await assert.rejects(
     azure.request("https://example.invalid/failure?continuationToken=opaque-secret"),
     (error) => {
-      assert.doesNotMatch(error.message, /opaque-secret|test-only-fake-pat|\u001b/);
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "http");
+      assert.equal(error.status, 500);
+      assert.doesNotMatch(error.message, /opaque-secret|test-only-fake-pat|response-secret|\u001b/);
+      assert.doesNotMatch(JSON.stringify(error), /opaque-secret|test-only-fake-pat|response-secret|\u001b/);
       assert.match(error.message, /continuationToken=<redacted>/);
       assert.match(error.message, /Authorization: <redacted>/);
       assert.match(error.message, /password=<redacted>/);
