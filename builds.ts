@@ -6,7 +6,11 @@ import {
 } from "./azure.ts";
 import type { AzureRequester } from "./azure.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
-import type { PullRequest, PullRequestService } from "./pull-requests.ts";
+import type {
+  PullRequest,
+  PullRequestReadOptions,
+  PullRequestService,
+} from "./pull-requests.ts";
 
 const BUILD_PAGE_SIZE = 100;
 const DEFAULT_LOG_LINE_COUNT = 200;
@@ -951,9 +955,15 @@ export function createBuildService({
   now?: () => number;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): BuildService {
-  async function resolvePullRequest(requestedPrId: number | undefined): Promise<ValidatedPullRequest> {
+  async function resolvePullRequest(
+    requestedPrId: number | undefined,
+    options?: PullRequestReadOptions,
+  ): Promise<ValidatedPullRequest> {
     assertRequestedPullRequestId(requestedPrId);
-    const pr = validatePullRequest(await pullRequests.resolve(requestedPrId), "pull request");
+    const pr = validatePullRequest(
+      await pullRequests.resolve(requestedPrId, options),
+      "pull request",
+    );
     if (requestedPrId !== undefined && pr.id !== requestedPrId) {
       throw new Error(
         `Malformed Azure DevOps response: hydrated pull request ID ${pr.id} did not match selected PR #${requestedPrId}.`,
@@ -1283,7 +1293,11 @@ export function createBuildService({
       "Build wait timeout",
     );
     throwIfWaitAborted(signal);
-    const pr = await resolvePullRequest(requestedPrId);
+    const pr = await resolvePullRequest(requestedPrId, {
+      signal,
+      timeoutMs: READ_TIMEOUT_MS,
+      maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+    });
     throwIfWaitAborted(signal);
 
     const startedAt = now();

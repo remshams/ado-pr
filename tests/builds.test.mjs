@@ -1162,6 +1162,46 @@ describe("deterministic build wait", () => {
     assert.equal(sleepCalls, 0);
   });
 
+  test("passes bounded read controls to PR resolution and cancels it promptly", async () => {
+    const controller = new AbortController();
+    const resolutionStarted = deferred();
+    let controls;
+    let buildPolls = 0;
+    const service = createBuildService({
+      azure: {
+        async request() {
+          buildPolls += 1;
+          return build({ result: "succeeded" });
+        },
+        async requestWithMetadata() { throw new Error("unexpected"); },
+      },
+      ctx,
+      pullRequests: {
+        resolve(_requestedPrId, options) {
+          controls = options;
+          resolutionStarted.resolve();
+          return new Promise((_resolve, reject) => {
+            options.signal.addEventListener(
+              "abort",
+              () => reject(new AzureRequestError("resolution aborted", "abort")),
+              { once: true },
+            );
+          });
+        },
+        async get() { throw new Error("unexpected"); },
+      },
+    });
+
+    const waiting = service.wait(42, 700, { signal: controller.signal });
+    await resolutionStarted.promise;
+    assert.equal(controls.signal, controller.signal);
+    assert.equal(controls.timeoutMs, 30_000);
+    assert.equal(controls.maxResponseBytes, 16 * 1024 * 1024);
+    controller.abort();
+    await assert.rejects(waiting, (error) => error.kind === "abort");
+    assert.equal(buildPolls, 0);
+  });
+
   test("snapshots signal and progress callback before resolving the PR", async () => {
     const resolution = deferred();
     const originalController = new AbortController();
