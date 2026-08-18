@@ -175,7 +175,7 @@ function parsePositiveIntFlag(
     return undefined;
   }
   const value = Number(raw);
-  if (!isPositiveInteger(value)) {
+  if (!/^[1-9]\d*$/.test(raw) || !isPositiveInteger(value)) {
     printUsageAndExit(`invalid --${flag} "${raw}" (pass it once, as a single positive integer)`);
   }
   return value;

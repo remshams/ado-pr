@@ -371,6 +371,12 @@ test("positive integer flags and duplicate flags are rejected", () => {
     runCli("pr", "show", "--pr", "abc"),
     'Error: invalid --pr "abc" (pass it once, as a single positive integer)',
   );
+  for (const value of ["9007199254740993", "1e2", "+7", "01"]) {
+    assertUsageError(
+      runCli("build", "show", "--build", value),
+      `Error: invalid --build "${value}" (pass it once, as a single positive integer)`,
+    );
+  }
   assertUsageError(
     runCli("comment", "create", "--message", "first", "--message", "second"),
     "Error: --message may only be passed once",

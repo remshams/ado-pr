@@ -122,7 +122,7 @@ type RegistryMatchesCliOptions = Assert<
 export type CliOptions = RegistryMatchesCliOptions extends true ? CliOptionsShape : never;
 
 export function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
 
 /** Builds an optional file-anchor location from CLI options or a batch operation. */
