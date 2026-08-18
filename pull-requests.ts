@@ -3,6 +3,7 @@ import { basename } from "node:path";
 
 import {
   API_VERSION,
+  AzureRequestError,
   getAuthenticatedUserId,
   pullRequestApiUrl,
   pullRequestWebUrl,
@@ -55,6 +56,12 @@ export interface EditPullRequestOptions extends UpdatePullRequestOptions {
   removeReviewers?: string[];
 }
 
+export interface PullRequestReadOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+}
+
 interface PullRequestAttachment {
   displayName: string;
   url: string;
@@ -87,9 +94,12 @@ export interface PullRequestService {
   create(options: CreatePullRequestOptions): Promise<PullRequest>;
   edit(requestedPrId: number | undefined, options: EditPullRequestOptions): Promise<number>;
   update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest>;
-  get(prId: number): Promise<PullRequest>;
-  findForCurrentBranch(): Promise<PullRequest>;
-  resolve(requestedPrId: number | undefined): Promise<PullRequest>;
+  get(prId: number, options?: PullRequestReadOptions): Promise<PullRequest>;
+  findForCurrentBranch(options?: PullRequestReadOptions): Promise<PullRequest>;
+  resolve(
+    requestedPrId: number | undefined,
+    options?: PullRequestReadOptions,
+  ): Promise<PullRequest>;
   resolveId(requestedPrId: number | undefined): Promise<number>;
   format(pr: PullRequest): string;
   formatListItem(pr: PullRequest): string;
@@ -270,7 +280,7 @@ export function createPullRequestService({
 }: {
   azure: AzureRequester;
   ctx: AzureDevOpsRepoContext;
-  getCurrentBranch?: () => Promise<string>;
+  getCurrentBranch?: (options?: { signal?: AbortSignal }) => Promise<string>;
 }): PullRequestService {
   async function list(): Promise<PullRequest[]> {
     const currentUserId = await getAuthenticatedUserId(azure, ctx.organization);
@@ -482,10 +492,23 @@ export function createPullRequestService({
     await azure.request(url, { method: "DELETE", responseType: "none" });
   }
 
-  async function findForCurrentBranch(): Promise<PullRequest> {
-    const branch = await getCurrentBranch();
+  async function findForCurrentBranch(
+    options: PullRequestReadOptions = {},
+  ): Promise<PullRequest> {
+    let branch: string;
+    try {
+      branch = await getCurrentBranch({ signal: options.signal });
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw new AzureRequestError("Pull request resolution was aborted by the caller.", "abort");
+      }
+      throw error;
+    }
+    if (options.signal?.aborted) {
+      throw new AzureRequestError("Pull request resolution was aborted by the caller.", "abort");
+    }
     const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(toFullRef(branch))}&searchCriteria.status=active&api-version=${API_VERSION}`;
-    const data = await azure.request<{ value: PullRequest[] }>(url);
+    const data = await azure.request<{ value: PullRequest[] }>(url, options);
     if (!Array.isArray(data.value)) {
       throw new Error("Malformed Azure DevOps response: pull request collection value must be an array.");
     }
@@ -690,9 +713,12 @@ export function createPullRequestService({
   }
 
   /** Fetches a pull request by ID, including its description and other PR-level metadata. */
-  async function get(prId: number): Promise<PullRequest> {
+  async function get(
+    prId: number,
+    options: PullRequestReadOptions = {},
+  ): Promise<PullRequest> {
     const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
-    const pr = await azure.request<PullRequest>(url);
+    const pr = await azure.request<PullRequest>(url, options);
     assertPullRequestId(pr?.pullRequestId, "hydrated pull request.pullRequestId");
     if (pr.pullRequestId !== prId) {
       throw new Error(
@@ -703,17 +729,20 @@ export function createPullRequestService({
   }
 
   /** Resolves and fully fetches either an explicitly selected PR or the active PR for the branch. */
-  async function resolve(requestedPrId: number | undefined): Promise<PullRequest> {
-    if (requestedPrId) {
-      return get(requestedPrId);
+  async function resolve(
+    requestedPrId: number | undefined,
+    options: PullRequestReadOptions = {},
+  ): Promise<PullRequest> {
+    if (requestedPrId !== undefined) {
+      return get(requestedPrId, options);
     }
-    const candidate = await findForCurrentBranch();
+    const candidate = await findForCurrentBranch(options);
     // Azure truncates descriptions in pull-request collection responses, so hydrate the selected PR.
-    return get(candidate.pullRequestId);
+    return get(candidate.pullRequestId, options);
   }
 
   async function resolveId(requestedPrId: number | undefined): Promise<number> {
-    if (requestedPrId) {
+    if (requestedPrId !== undefined) {
       return requestedPrId;
     }
     const pr = await findForCurrentBranch();

@@ -124,6 +124,72 @@ describe("pull request listing, resolution, creation, and updates", () => {
     assert.equal(calls[0].url, `${repositoryUrl}/pullRequests/123?api-version=7.1`);
   });
 
+  test("forwards bounded read controls through explicit and branch resolution", async () => {
+    const controller = new AbortController();
+    const controls = {
+      signal: controller.signal,
+      timeoutMs: 12_345,
+      maxResponseBytes: 54_321,
+    };
+    const requests = [];
+    const branchControls = [];
+    const azure = {
+      async request(url, options) {
+        requests.push({ url, options });
+        return url.includes("searchCriteria.sourceRefName")
+          ? { value: [pullRequest()] }
+          : pullRequest();
+      },
+      async requestWithMetadata() {
+        assert.fail("Unexpected metadata request");
+      },
+    };
+    const service = createPullRequestService({
+      azure,
+      ctx,
+      async getCurrentBranch(options) {
+        branchControls.push(options);
+        return "feature/test";
+      },
+    });
+
+    await service.resolve(42, controls);
+    await service.resolve(undefined, controls);
+
+    assert.equal(requests.length, 3);
+    assert.ok(requests.every(({ options }) => options === controls));
+    assert.deepEqual(branchControls, [{ signal: controller.signal }]);
+  });
+
+  test("turns branch-discovery cancellation into a classified abort", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("untrusted abort reason"));
+    let azureCalls = 0;
+    const service = createPullRequestService({
+      azure: {
+        async request() {
+          azureCalls += 1;
+          assert.fail("Unexpected Azure request");
+        },
+        async requestWithMetadata() {
+          assert.fail("Unexpected metadata request");
+        },
+      },
+      ctx,
+      async getCurrentBranch({ signal }) {
+        assert.equal(signal, controller.signal);
+        throw signal.reason;
+      },
+    });
+
+    await assert.rejects(service.resolve(undefined, { signal: controller.signal }), (error) => {
+      assert.equal(error.kind, "abort");
+      assert.doesNotMatch(error.message, /untrusted abort reason/);
+      return true;
+    });
+    assert.equal(azureCalls, 0);
+  });
+
   test("binds explicit and branch-selected IDs to their hydrated responses", async (t) => {
     const explicit = createService(t, [{ json: pullRequest({ pullRequestId: 999 }) }]);
     await assert.rejects(explicit.service.resolve(123), {
