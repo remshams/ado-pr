@@ -178,6 +178,17 @@ describe("Git repository integration", { concurrency: false }, () => {
     });
   });
 
+  test("runCommand aborts its child when the caller signal is canceled", async () => {
+    const controller = new AbortController();
+    const pending = runCommand(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { signal: controller.signal },
+    );
+    controller.abort();
+    await assert.rejects(pending, (error) => error?.code === "ABORT_ERR");
+  });
+
   test("getRepoContext ignores a hostile ambient insteadOf URL rewrite", async (t) => {
     const origin = "https://dev.azure.com/acme/Project/_git/widgets";
     const repo = createTempGitRepo(t, { origin });

@@ -46,15 +46,15 @@ export async function getRepoContext(): Promise<AzureDevOpsRepoContext> {
   return parseAzureDevOpsRemote(stdout.trim());
 }
 
-export async function getCurrentBranch(): Promise<string> {
-  const { stdout } = await runCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+export async function getCurrentBranch(options: { signal?: AbortSignal } = {}): Promise<string> {
+  const { stdout } = await runCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"], options);
   return stdout.trim();
 }
 
 export function runCommand(
   command: string,
   args: string[],
-  options: { inheritTerminal?: boolean; detached?: boolean } = {},
+  options: { inheritTerminal?: boolean; detached?: boolean; signal?: AbortSignal } = {},
 ): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve, reject) => {
     // When a command may need to interact with the user (e.g. a sudo password prompt), inherit
@@ -63,6 +63,7 @@ export function runCommand(
     const child = spawn(command, args, {
       stdio: options.inheritTerminal ? ["inherit", "pipe", "inherit"] : "pipe",
       detached: options.detached,
+      signal: options.signal,
     });
     let stdout = "";
     child.stdout?.on("data", (chunk) => (stdout += chunk.toString()));
