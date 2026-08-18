@@ -473,6 +473,277 @@ test("Azure requester validates timeout and response-limit options before fetch"
   assert.deepEqual(calls, []);
 });
 
+test("cancellation settles promptly when fetch ignores its signal in every response mode", async () => {
+  const modes = [{}, { responseType: "text" }, { responseType: "none" }];
+
+  for (const cancellation of ["caller", "timeout"]) {
+    for (const mode of modes) {
+      let resolveFetch;
+      let cancelledBodies = 0;
+      const fetch = () => new Promise((resolve) => {
+        resolveFetch = resolve;
+      });
+      const azure = createAzureRequester({ pat: fakePat, fetch });
+      const controller = new AbortController();
+      const pending = azure.request("https://example.invalid/ignores-abort", {
+        ...mode,
+        ...(cancellation === "caller"
+          ? { signal: controller.signal }
+          : { timeoutMs: 5 }),
+      });
+      if (cancellation === "caller") controller.abort(new Error(`secret ${fakePat}`));
+
+      await assert.rejects(
+        Promise.race([
+          pending,
+          new Promise((_, reject) => setTimeout(() => reject(new Error("cancellation was not prompt")), 100)),
+        ]),
+        (error) => {
+          assert.ok(error instanceof AzureRequestError);
+          assert.equal(error.kind, cancellation === "caller" ? "abort" : "timeout");
+          return true;
+        },
+      );
+
+      resolveFetch(new Response(new ReadableStream({
+        cancel() {
+          cancelledBodies += 1;
+        },
+      })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(cancelledBodies, 1);
+    }
+  }
+});
+
+test("cancellation settles promptly when a response body read ignores its signal", async () => {
+  let startedReading = false;
+  const body = new ReadableStream({
+    pull() {
+      startedReading = true;
+      return new Promise(() => {});
+    },
+    cancel() {
+      return new Promise(() => {});
+    },
+  });
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => new Response(body),
+  });
+  const controller = new AbortController();
+  const pending = azure.request("https://example.invalid/stalled-body", {
+    responseType: "text",
+    signal: controller.signal,
+  });
+  while (!startedReading) await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  await assert.rejects(
+    Promise.race([
+      pending,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("body cancellation was not prompt")), 100)),
+    ]),
+    (error) => error instanceof AzureRequestError && error.kind === "abort",
+  );
+});
+
+test("response body transport errors are network failures, while decode and size failures are response failures", async () => {
+  const partialFailureBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"partial":'));
+      queueMicrotask(() => controller.error(new Error("socket reset mid-body")));
+    },
+  });
+  const failedHttpBody = new ReadableStream({
+    start(controller) {
+      controller.error(new Error("socket reset while reading 401 detail"));
+    },
+  });
+  const responses = [
+    new Response(partialFailureBody),
+    new Response('{"fragment":"must not appear"'),
+    new Response("123456"),
+    new Response(failedHttpBody, { status: 401, statusText: "Unauthorized" }),
+  ];
+  const azure = createAzureRequester({ pat: fakePat, fetch: async () => responses.shift() });
+
+  await assert.rejects(azure.request("https://example.invalid/partial"), (error) => {
+    assert.ok(error instanceof AzureRequestError);
+    assert.equal(error.kind, "network");
+    return true;
+  });
+  await assert.rejects(azure.request("https://example.invalid/malformed-generic"), (error) => {
+    assert.ok(error instanceof AzureRequestError);
+    assert.equal(error.kind, "response");
+    assert.match(error.message, /response body was not valid JSON/);
+    assert.doesNotMatch(error.message, /fragment|must not appear/);
+    return true;
+  });
+  await assert.rejects(
+    azure.request("https://example.invalid/oversized", { responseType: "text", maxResponseBytes: 5 }),
+    (error) => error instanceof AzureRequestError && error.kind === "response",
+  );
+  await assert.rejects(azure.request("https://example.invalid/http-body-failure"), (error) => {
+    assert.ok(error instanceof AzureRequestError);
+    assert.equal(error.kind, "http");
+    assert.equal(error.status, 401);
+    return true;
+  });
+});
+
+test("oversized timeout values are rejected before fetch", async () => {
+  let fetchCalled = false;
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => {
+      fetchCalled = true;
+      return new Response();
+    },
+  });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/timeout-overflow", { timeoutMs: 2_147_483_648 }),
+    /no greater than 2147483647/,
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("a never-settling reader cancellation cannot block response-size rejection", async () => {
+  let cancelStarted = false;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("oversized"));
+    },
+    cancel() {
+      cancelStarted = true;
+      return new Promise(() => {});
+    },
+  });
+  const azure = createAzureRequester({ pat: fakePat, fetch: async () => new Response(body) });
+
+  await assert.rejects(
+    Promise.race([
+      azure.request("https://example.invalid/hostile-cancel", {
+        responseType: "text",
+        maxResponseBytes: 2,
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("reader.cancel blocked rejection")), 100)),
+    ]),
+    (error) => error instanceof AzureRequestError && error.kind === "response",
+  );
+  assert.equal(cancelStarted, true);
+});
+
+test("request-body serialization observes cancellation and sanitizes throwing toJSON failures", async () => {
+  let toJSONCalls = 0;
+  let fetchCalls = 0;
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => {
+      fetchCalls += 1;
+      return new Response();
+    },
+  });
+
+  await assert.rejects(
+    azure.request("https://example.invalid/pre-aborted-body", {
+      signal: preAborted.signal,
+      body: { toJSON() { toJSONCalls += 1; } },
+    }),
+    (error) => error instanceof AzureRequestError && error.kind === "abort",
+  );
+  assert.equal(toJSONCalls, 0);
+
+  await assert.rejects(
+    azure.request("https://example.invalid/throwing-body", {
+      method: "POST",
+      body: {
+        toJSON() {
+          throw new Error(`{"nested":{"client_secret":"white space secret"},"password":"${fakePat}"}`);
+        },
+      },
+    }),
+    (error) => {
+      assert.ok(error instanceof AzureRequestError);
+      assert.equal(error.kind, "response");
+      assert.doesNotMatch(error.message, /white space secret|test-only-fake-pat/);
+      assert.doesNotMatch(JSON.stringify(error), /white space secret|test-only-fake-pat/);
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("Retry-After uses response receipt time and saturates valid overflow deterministically", async () => {
+  const date = new Date(20_000).toUTCString();
+  const nowValues = [1_000, 4_000, 5_000, 8_000, 9_000, 12_000, 13_000, 16_000, 17_000, 20_000];
+  const responses = [
+    new Response("delayed", { status: 429, headers: { "retry-after": "10" } }),
+    new Response("delayed", { status: 503, headers: { "retry-after": date } }),
+    new Response("delayed", { status: 503, headers: { "retry-after": "9".repeat(400) } }),
+    new Response("delayed", { status: 503, headers: { "retry-after": "-1" } }),
+    new Response("delayed", { status: 503, headers: { "retry-after": "invalid" } }),
+  ];
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => responses.shift(),
+    now: () => nowValues.shift(),
+  });
+  const errors = [];
+  for (let index = 0; index < 5; index += 1) {
+    try {
+      await azure.request(`https://example.invalid/deterministic-retry/${index}`);
+      assert.fail("request should reject");
+    } catch (error) {
+      assert.ok(error instanceof AzureRequestError);
+      errors.push(error);
+    }
+  }
+
+  assert.equal(errors[0].retryAfterMs, 7_000);
+  assert.equal(errors[1].retryAfterMs, 12_000);
+  assert.equal(errors[2].retryAfterMs, Number.MAX_SAFE_INTEGER - 3_000);
+  assert.equal(errors[3].retryAfterMs, undefined);
+  assert.equal(errors[4].retryAfterMs, undefined);
+});
+
+test("HTTP error sanitization recursively redacts credentials and terminal controls", async () => {
+  const encodedPat = Buffer.from(`:${fakePat}`).toString("base64");
+  const body = JSON.stringify({
+    message: "fake rate limit detail\n\tkept formatting",
+    nested: {
+      access_token: "white space token",
+      ClientSecret: "another white space secret",
+      deeper: [{ authorization: `Basic ${encodedPat}` }, { cookie: fakePat }],
+    },
+    controls: "carriage\rC1\u009b bidi\u202e ansi\u001b[31mend",
+  });
+  const azure = createAzureRequester({
+    pat: fakePat,
+    fetch: async () => new Response(body, { status: 429, statusText: "Slow Down" }),
+  });
+
+  await assert.rejects(azure.request("https://example.invalid/sanitize"), (error) => {
+    assert.ok(error instanceof AzureRequestError);
+    assert.equal(error.kind, "http");
+    assert.match(error.message, /fake rate limit detail/);
+    assert.doesNotMatch(
+      error.message,
+      /white space token|another white space secret|test-only-fake-pat|\r|\u009b|\u202e|\u001b/,
+    );
+    const serialized = JSON.stringify(error);
+    assert.doesNotMatch(
+      serialized,
+      /white space token|another white space secret|test-only-fake-pat|\r|\u009b|\u202e|\u001b/,
+    );
+    assert.equal(Object.hasOwn(error, "body"), false);
+    return true;
+  });
+});
+
 test("authenticated-user lookup requests connection data and returns its identity id", async (t) => {
   const { fetch, calls } = createMockFetch(t, [
     { json: { authenticatedUser: { id: "identity/id +?#" } } },
