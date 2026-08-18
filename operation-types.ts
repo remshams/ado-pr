@@ -43,6 +43,24 @@ type CliOptionsShape =
       removeReviewers?: string[];
     })
   | (PullRequestTarget & {
+      resource: "build";
+      command: "list";
+      history: boolean;
+      json: boolean;
+    })
+  | (PullRequestTarget & {
+      resource: "build";
+      command: "show";
+      build: number;
+      fullLogs: boolean;
+      json: boolean;
+    })
+  | (PullRequestTarget & {
+      resource: "build";
+      command: "retry";
+      build: number;
+    })
+  | (PullRequestTarget & {
       resource: "comment";
       command: "list";
       json: boolean;

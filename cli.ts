@@ -313,6 +313,27 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
       removeReviewers: values["remove-reviewer"],
     };
   },
+  "build.list": (values) => ({
+    resource: "build",
+    command: "list",
+    pr: values.pr,
+    history: values.history,
+    json: values.json,
+  }),
+  "build.show": (values) => ({
+    resource: "build",
+    command: "show",
+    build: values.build,
+    pr: values.pr,
+    fullLogs: values["full-logs"],
+    json: values.json,
+  }),
+  "build.retry": (values) => ({
+    resource: "build",
+    command: "retry",
+    build: values.build,
+    pr: values.pr,
+  }),
   "comment.list": (values) => ({
     resource: "comment",
     command: "list",

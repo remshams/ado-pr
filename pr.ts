@@ -2,9 +2,12 @@
  * Creates, lists, inspects, and edits Azure DevOps pull requests, and manages their comment threads
  * from a git checkout whose origin remote points at Azure Repos.
  *
- * Auth: requires an AZURE_DEVOPS_PAT env var. Code (Read) is enough for read-only commands; Code
- * (Read & Write) is needed for mutations. Reviewer additions additionally need Identity (Read),
- * while reviewer removal resolves the PR's current reviewers using Code access only.
+ * Auth: requires an AZURE_DEVOPS_PAT env var. Code (Read) is enough for PR/comment reads; Code
+ * (Read & Write) is needed for PR/comment mutations. Build queries need Build (Read), also named
+ * vso.build; build retries additionally need Build execute (vso.build_execute). Build commands cover
+ * YAML/classic Build API validations only, never Releases, external checks, or individual retries.
+ * Reviewer additions additionally need Identity (Read), while reviewer removal resolves the PR's
+ * current reviewers using Code access only.
  * Run this via pr.sh, which accepts an exported PAT or loads one from .env.
  *
  * Images use a bidirectional placeholder contract: every upload needs a matching
@@ -13,6 +16,7 @@
  */
 import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
 import { createBatchRunner } from "./batch.ts";
+import { createBuildService } from "./builds.ts";
 import { getPat, parseArgs } from "./cli.ts";
 import { createFileAnchorService } from "./file-anchors.ts";
 import { getRepoContext } from "./lib.ts";
@@ -34,6 +38,31 @@ async function main(): Promise<void> {
   const fileAnchors = createFileAnchorService({ azure, ctx });
   const threads = createThreadService({ azure, ctx, fileAnchors });
   const batch = createBatchRunner({ threads });
+  const builds = createBuildService({ azure, ctx, pullRequests });
+
+  if (options.resource === "build") {
+    switch (options.command) {
+      case "list": {
+        const result = await builds.list(options.pr, { history: options.history });
+        console.log(options.json ? JSON.stringify(result, null, 2) : builds.formatList(result));
+        return;
+      }
+      case "show": {
+        const result = await builds.show(options.pr, options.build, {
+          fullLogs: options.fullLogs,
+        });
+        console.log(options.json ? JSON.stringify(result, null, 2) : builds.formatShow(result));
+        if (builds.hasLogErrors(result)) process.exitCode = 1;
+        return;
+      }
+      case "retry": {
+        const result = await builds.retry(options.pr, options.build);
+        console.log(builds.formatRetry(result));
+        return;
+      }
+    }
+    return assertNever(options);
+  }
 
   if (options.resource === "pr") {
     switch (options.command) {

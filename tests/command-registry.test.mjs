@@ -28,6 +28,16 @@ test("registry keys, routes, and command-local schemas stay coherent", () => {
   }
 });
 
+test("registers resource-first build routes and keeps them out of batch schemas", () => {
+  assert.deepEqual(COMMAND_REGISTRY["build.list"].flags, ["pr", "history", "json"]);
+  assert.deepEqual(COMMAND_REGISTRY["build.show"].requiredFlags, ["build"]);
+  assert.deepEqual(COMMAND_REGISTRY["build.retry"].requiredFlags, ["build"]);
+  assert.ok(!BATCH_COMMANDS.some((command) => command.startsWith("build.")));
+  assert.equal(FLAG_DEFINITIONS.build.kind, "positiveInteger");
+  assert.equal(FLAG_DEFINITIONS.history.kind, "boolean");
+  assert.equal(FLAG_DEFINITIONS["full-logs"].kind, "boolean");
+});
+
 test("only image and reviewer mutation flags are repeatable strings", () => {
   assert.deepEqual(REPEATABLE_STRING_FLAG_NAMES, [
     "image",

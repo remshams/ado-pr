@@ -84,6 +84,9 @@ test("bare --help and -h document every resource-first command and the batch con
     "pr create",
     "pr edit",
     "comment list",
+    "build list",
+    "build show",
+    "build retry",
     "comment create",
     "comment reply",
     "comment edit",
@@ -132,6 +135,9 @@ test("qualified command help succeeds after route and supplied-option validation
     ["pr", "create"],
     ["pr", "edit"],
     ["comment", "list"],
+    ["build", "list"],
+    ["build", "show"],
+    ["build", "retry"],
     ["comment", "create"],
     ["comment", "reply"],
     ["comment", "edit"],
@@ -158,6 +164,7 @@ test("help does not mask malformed command-like invocations", () => {
       ["pr", "show", "--pr", "0", "--help"],
       'Error: invalid --pr "0" (pass it once, as a single positive integer)',
     ],
+    [["build", "retry", "--build", "1", "--build", "2"], "Error: --build may only be passed once"],
     [
       ["pr", "edit", "--draft", "--no-draft", "--help"],
       "Error: --draft and --no-draft cannot be used together",
@@ -209,6 +216,19 @@ test("legacy flat action aliases remain rejected even when combined with help", 
     const args = ["comment", "--message", "old", ...(help ? [help] : [])];
     assertUsageError(runCli(...args), 'Error: a command is required for resource "comment"');
   }
+});
+
+test("build flags parse with registry-derived types and reject foreign options", () => {
+  assertParsedBeforePat("build", "list", "--history");
+  assertParsedBeforePat("build", "show", "--build", "7", "--full-logs");
+  assertUsageError(
+    runCli("build", "list", "--build", "7"),
+    'Error: --build is not valid for "build list"',
+  );
+  assertUsageError(
+    runCli("build", "show", "--build", "7", "--history"),
+    'Error: --history is not valid for "build show"',
+  );
 });
 
 test("unknown flags and invalid boolean values are rejected", () => {

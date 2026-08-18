@@ -13,6 +13,11 @@ export const FLAG_DEFINITIONS = {
     usage: "--pr <id>",
     description: "Use a specific pull request instead of the current branch's active PR.",
   },
+  build: {
+    kind: "positiveInteger",
+    usage: "--build <id>",
+    description: "Build ID (required for `build show` and `build retry`).",
+  },
   title: {
     kind: "string",
     usage: "--title <text>",
@@ -103,10 +108,20 @@ export const FLAG_DEFINITIONS = {
     usage: "--exclude-resolved",
     description: "Hide resolved threads.",
   },
+  history: {
+    kind: "boolean",
+    usage: "--history",
+    description: "Include historical PR validation builds instead of only the current merge version.",
+  },
+  "full-logs": {
+    kind: "boolean",
+    usage: "--full-logs",
+    description: "Fetch complete potentially sensitive problem logs instead of the final 200 lines.",
+  },
   json: {
     kind: "boolean",
     usage: "--json",
-    description: "Print raw JSON for `pr list`, `pr show`, or `comment list`.",
+    description: "Print normalized build output, or raw JSON for PR/comment list and PR show.",
   },
   help: {
     kind: "boolean",
@@ -169,7 +184,7 @@ export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 export type CommandValidationRule = "pullRequestEdit" | "commentLocation";
 
 interface CommandDefinition {
-  resource: "pr" | "comment";
+  resource: "pr" | "comment" | "build";
   command: string;
   usage: string;
   summary: string;
@@ -236,6 +251,29 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
       "remove-reviewer",
     ],
     validationRules: ["pullRequestEdit"],
+  },
+  "build.list": {
+    resource: "build",
+    command: "list",
+    usage: "build list [--pr <id>] [--history] [--json]",
+    summary: "List PR-associated Azure Pipelines validation builds.",
+    flags: ["pr", "history", "json"],
+  },
+  "build.show": {
+    resource: "build",
+    command: "show",
+    usage: "build show --build <id> [--pr <id>] [--full-logs] [--json]",
+    summary: "Inspect a PR validation build, timeline, issues, and diagnostic logs.",
+    flags: ["build", "pr", "full-logs", "json"],
+    requiredFlags: ["build"],
+  },
+  "build.retry": {
+    resource: "build",
+    command: "retry",
+    usage: "build retry --build <id> [--pr <id>]",
+    summary: "Retry an eligible failed PR validation build at the whole-build level.",
+    flags: ["build", "pr"],
+    requiredFlags: ["build"],
   },
   "comment.list": {
     resource: "comment",
@@ -461,6 +499,10 @@ Requires:
   - A git checkout whose origin remote points at Azure Repos.
   - AZURE_DEVOPS_PAT exported by the caller or set in .env.
   - PAT Code (Read & Write) for mutations.
+  - Build read, also named vso.build, for build queries; Build execute, also named vso.build_execute,
+    for build retries.
+  - Build commands support YAML and classic Build API validation runs, not Releases, external status
+    checks, or individual stage/job/task retries.
   - Identity (Read), also named vso.identity, only for --reviewer additions on pr create/edit.
     --remove-reviewer resolves current PR reviewers and needs only Code (Read & Write).
 

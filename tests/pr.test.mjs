@@ -8,6 +8,7 @@ import { createTempGitRepo, runPr } from "./test-helpers.mjs";
 const origin = "https://dev.azure.com/acme/Test%20Project/_git/widgets";
 const apiBase = "https://dev.azure.com/acme/Test%20Project/_apis/git/repositories/widgets";
 const webBase = "https://dev.azure.com/acme/Test%20Project/_git/widgets/pullrequest";
+const buildApiBase = "https://dev.azure.com/acme/Test%20Project/_apis/build/builds";
 
 function createRepo(t, branch = "feature/dispatch") {
   return createTempGitRepo(t, { origin, branch });
@@ -29,6 +30,40 @@ function assertSucceeded(result) {
   assert.equal(result.status, 0);
   assert.equal(result.stderr, "");
 }
+
+test("build list dispatches through BuildService and prints a normalized JSON envelope", (t) => {
+  const cwd = createRepo(t);
+  const pr = {
+    pullRequestId: 42,
+    title: "Build validation",
+    status: "active",
+    isDraft: true,
+    sourceRefName: "refs/heads/feature/dispatch",
+    repository: { id: "repo-id", name: "widgets" },
+    lastMergeCommit: { commitId: "merge-1" },
+  };
+  const result = runPr(t, ["build", "list", "--pr", "42", "--json"], {
+    cwd,
+    responses: [
+      { json: pr },
+      { json: { count: 0, value: [] } },
+    ],
+  });
+
+  assertSucceeded(result);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    pullRequest: {
+      id: 42,
+      title: "Build validation",
+      status: "active",
+      draft: true,
+      currentMergeCommit: "merge-1",
+    },
+    history: false,
+    builds: [],
+  });
+  assert.equal(result.calls[1].url, `${buildApiBase}?reasonFilter=pullRequest&branchName=refs%2Fpull%2F42%2Fmerge&repositoryId=repo-id&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1`);
+});
 
 test("pr list requests the current identity then prints active pull requests in response order", (t) => {
   const cwd = createRepo(t);
