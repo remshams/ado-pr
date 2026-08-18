@@ -109,6 +109,16 @@ function transientError(kind, status, retryAfterMs) {
   return new AzureRequestError(`safe ${kind} failure`, kind, { status, retryAfterMs });
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createWaitHarness(responses, { resolvedPr = pullRequest(), start = 0 } = {}) {
   const clock = { value: start };
   const calls = [];
@@ -720,6 +730,25 @@ describe("safe build retry", () => {
     assert.deepEqual(calls, []);
     assert.deepEqual(pullRequestCalls, []);
   });
+
+  test("rejects invalid requested PR IDs before resolution or Azure calls", async (t) => {
+    const operations = [
+      (service, prId) => service.list(prId, { history: true }),
+      (service, prId) => service.show(prId, 700),
+      (service, prId) => service.retry(prId, 700),
+      (service, prId) => service.wait(prId, 700),
+    ];
+    for (const prId of [0, -1, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      for (const operation of operations) {
+        const { service, calls, pullRequestCalls } = setup(t, []);
+        await assert.rejects(operation(service, prId), {
+          message: "Pull request ID must be a positive safe integer.",
+        });
+        assert.deepEqual(calls, []);
+        assert.deepEqual(pullRequestCalls, []);
+      }
+    }
+  });
 });
 
 describe("deterministic build wait", () => {
@@ -739,6 +768,7 @@ describe("deterministic build wait", () => {
       const result = await service.wait(undefined, 700);
 
       assert.equal(result.outcome, expectedOutcome);
+      assert.equal(result.buildId, 700);
       assert.equal(result.timedOut, false);
       assert.equal(result.build, observed);
       assert.equal(result.pollCount, 1);
@@ -850,6 +880,7 @@ describe("deterministic build wait", () => {
         draft: false,
         currentMergeCommit: "ABCDEF123",
       },
+      buildId: 700,
       build: observed,
       pollCount: 1,
       transientFailureCount: 0,
@@ -864,6 +895,7 @@ describe("deterministic build wait", () => {
   test("times out with no observation before the third transient failure", async () => {
     const { service, calls } = createWaitHarness([transientError("network")]);
     const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 10 });
+    assert.equal(result.buildId, 700);
     assert.equal(result.build, null);
     assert.equal(result.outcome, "timeout");
     assert.equal(result.pollCount, 1);
@@ -880,10 +912,62 @@ describe("deterministic build wait", () => {
     ]);
     const result = await service.wait(42, 700, { timeoutSeconds: 10 });
     assert.equal(result.outcome, "timeout");
+    assert.equal(result.buildId, 700);
     assert.equal(result.build, null);
     assert.equal(result.pollCount, 1);
     assert.equal(result.transientFailureCount, 0);
     assert.equal(calls[0].options.timeoutMs, 10_000);
+  });
+
+  test("counts a transient completing exactly at the deadline and lets timeout win", async () => {
+    for (const attemptCount of [1, 2, 3]) {
+      const warnings = [];
+      const responses = Array.from({ length: attemptCount }, (_value, index) =>
+        index === attemptCount - 1
+          ? ({ clock }) => {
+              clock.value += 10_000;
+              throw transientError("network");
+            }
+          : transientError("network"),
+      );
+      const { service, calls } = createWaitHarness(responses);
+      const result = await service.wait(42, 700, {
+        intervalSeconds: 10,
+        timeoutSeconds: attemptCount * 10,
+        onProgress(event) {
+          if (event.type === "transient-warning") warnings.push(event);
+        },
+      });
+      assert.equal(result.outcome, "timeout");
+      assert.equal(result.pollCount, attemptCount);
+      assert.equal(result.transientFailureCount, attemptCount);
+      assert.equal(calls.length, attemptCount);
+      assert.equal(warnings.length, attemptCount - 1);
+    }
+  });
+
+  test("ceil-clamps a fractional remaining request budget to one millisecond", async () => {
+    let nowCallCount = 0;
+    let requestTimeoutMs;
+    const azure = {
+      async request(_url, options) {
+        requestTimeoutMs = options.timeoutMs;
+        return build({ result: "succeeded" });
+      },
+      async requestWithMetadata() { throw new Error("unexpected"); },
+    };
+    const service = createBuildService({
+      azure,
+      ctx,
+      pullRequests: createPullRequestStub().service,
+      now: () => (nowCallCount++ === 0 ? 0 : 9_999.5),
+    });
+
+    const result = await service.wait(42, 700, { timeoutSeconds: 10 });
+
+    assert.equal(requestTimeoutMs, 1);
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(result.elapsedSeconds, 9.9995);
   });
 
   test("counts attempts, keeps cumulative failures, and resets the consecutive count after an observation", async () => {
@@ -994,9 +1078,9 @@ describe("deterministic build wait", () => {
     assert.equal(events.filter(({ type }) => type === "transient-warning")[0].retryAfterMs, 700_000);
   });
 
-  test("clips Retry-After sleep and request timeout to the overall deadline", async () => {
+  test("clips a saturated Retry-After sleep and request timeout to the overall deadline", async () => {
     const { service, calls, sleeps } = createWaitHarness([
-      transientError("http", 429, 60_000),
+      transientError("http", 429, Number.MAX_SAFE_INTEGER),
     ]);
     const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 10 });
     assert.equal(result.outcome, "timeout");
@@ -1007,13 +1091,13 @@ describe("deterministic build wait", () => {
 
   test("cancels promptly during an injected sleep", async () => {
     const controller = new AbortController();
-    let sleepStarted = false;
+    const sleepStarted = deferred();
     const azure = {
       async request() { return build({ status: "inProgress", result: undefined }); },
       async requestWithMetadata() { throw new Error("unexpected"); },
     };
     const sleep = () => new Promise(() => {
-      sleepStarted = true;
+      sleepStarted.resolve();
     });
     const service = createBuildService({
       azure,
@@ -1023,17 +1107,17 @@ describe("deterministic build wait", () => {
       sleep,
     });
     const waiting = service.wait(42, 700, { intervalSeconds: 10, signal: controller.signal });
-    while (!sleepStarted) await Promise.resolve();
+    await sleepStarted.promise;
     controller.abort();
     await assert.rejects(waiting, (error) => error.kind === "abort");
   });
 
   test("cancels the active request through the caller signal", async () => {
     const controller = new AbortController();
-    let requestStarted = false;
+    const requestStarted = deferred();
     const azure = {
       request(_url, options) {
-        requestStarted = true;
+        requestStarted.resolve();
         return new Promise((_resolve, reject) => {
           options.signal.addEventListener("abort", () => reject(new AzureRequestError("request aborted", "abort")), { once: true });
         });
@@ -1047,9 +1131,219 @@ describe("deterministic build wait", () => {
       now: () => 0,
     });
     const waiting = service.wait(42, 700, { signal: controller.signal });
-    while (!requestStarted) await Promise.resolve();
+    await requestStarted.promise;
     controller.abort();
     await assert.rejects(waiting, (error) => error.kind === "abort");
+  });
+
+  test("does not invoke an injected sleep when abort happens during listener installation", async () => {
+    const controller = new AbortController();
+    const originalAddEventListener = controller.signal.addEventListener.bind(controller.signal);
+    controller.signal.addEventListener = (...args) => {
+      originalAddEventListener(...args);
+      controller.abort();
+    };
+    let sleepCalls = 0;
+    const service = createBuildService({
+      azure: {
+        async request() { return build({ status: "inProgress", result: undefined }); },
+        async requestWithMetadata() { throw new Error("unexpected"); },
+      },
+      ctx,
+      pullRequests: createPullRequestStub().service,
+      now: () => 0,
+      sleep: async () => { sleepCalls += 1; },
+    });
+
+    await assert.rejects(
+      service.wait(42, 700, { intervalSeconds: 10, signal: controller.signal }),
+      (error) => error.kind === "abort",
+    );
+    assert.equal(sleepCalls, 0);
+  });
+
+  test("snapshots signal and progress callback before resolving the PR", async () => {
+    const resolution = deferred();
+    const originalController = new AbortController();
+    const replacementController = new AbortController();
+    replacementController.abort();
+    const originalEvents = [];
+    const replacementEvents = [];
+    const options = {
+      signal: originalController.signal,
+      onProgress: (event) => originalEvents.push(event),
+    };
+    const service = createBuildService({
+      azure: {
+        async request() { return build({ result: "succeeded" }); },
+        async requestWithMetadata() { throw new Error("unexpected"); },
+      },
+      ctx,
+      pullRequests: {
+        async resolve() {
+          await resolution.promise;
+          return pullRequest();
+        },
+        async get() { throw new Error("unexpected"); },
+      },
+      now: () => 0,
+    });
+
+    const waiting = service.wait(42, 700, options);
+    options.signal = replacementController.signal;
+    options.onProgress = (event) => replacementEvents.push(event);
+    resolution.resolve();
+    const result = await waiting;
+
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(originalEvents.length, 1);
+    assert.equal(replacementEvents.length, 0);
+  });
+
+  test("awaits async progress and propagates rejection without an unhandled promise", async () => {
+    const callbackStarted = deferred();
+    const callbackRelease = deferred();
+    const { service } = createWaitHarness([build({ result: "succeeded" })]);
+    let settled = false;
+    const waiting = service.wait(42, 700, {
+      async onProgress() {
+        callbackStarted.resolve();
+        await callbackRelease.promise;
+      },
+    });
+    void waiting.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await callbackStarted.promise;
+    assert.equal(settled, false);
+    callbackRelease.resolve();
+    assert.equal((await waiting).outcome, "succeeded");
+
+    const rejection = new Error("progress failed");
+    const unhandled = [];
+    const onUnhandled = (error) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const rejected = createWaitHarness([build({ result: "succeeded" })]);
+      await assert.rejects(
+        rejected.service.wait(42, 700, {
+          onProgress: async () => { throw rejection; },
+        }),
+        (error) => error === rejection,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("caller abort wins when a progress callback aborts and rejects", async () => {
+    const controller = new AbortController();
+    const { service } = createWaitHarness([build({ result: "succeeded" })]);
+    await assert.rejects(
+      service.wait(42, 700, {
+        signal: controller.signal,
+        async onProgress() {
+          controller.abort();
+          throw new Error("callback rejection");
+        },
+      }),
+      (error) => error.kind === "abort",
+    );
+  });
+
+  test("caller abort cancels a pending async progress callback and consumes its late rejection", async () => {
+    const controller = new AbortController();
+    const callbackStarted = deferred();
+    const callbackResult = deferred();
+    const unhandled = [];
+    const onUnhandled = (error) => unhandled.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const { service } = createWaitHarness([build({ result: "succeeded" })]);
+      const waiting = service.wait(42, 700, {
+        signal: controller.signal,
+        onProgress() {
+          callbackStarted.resolve();
+          return callbackResult.promise;
+        },
+      });
+      await callbackStarted.promise;
+      controller.abort();
+      await assert.rejects(waiting, (error) => error.kind === "abort");
+      callbackResult.reject(new Error("late callback rejection"));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("progress receives deep snapshots that cannot mutate wait state or its result", async () => {
+    const running = build({ status: "inProgress", result: undefined });
+    const completed = build({ status: "completed", result: "succeeded" });
+    const seen = [];
+    const { service } = createWaitHarness([running, completed]);
+    const result = await service.wait(42, 700, {
+      intervalSeconds: 10,
+      onProgress(event) {
+        seen.push({
+          prId: event.pullRequest.id,
+          status: event.build?.status,
+          repositoryId: event.build?.repository?.id,
+        });
+        event.pullRequest.id = 999;
+        event.pullRequest.title = "mutated";
+        if (event.build !== null) {
+          event.build.id = 999;
+          event.build.status = "completed";
+          event.build.result = "failed";
+          event.build.repository.id = "other";
+          event.build._links.web.href = "mutated";
+        }
+      },
+    });
+
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(result.buildId, 700);
+    assert.equal(result.pullRequest.id, 42);
+    assert.equal(result.pullRequest.title, "Validate widgets");
+    assert.equal(result.build.id, 700);
+    assert.equal(result.build.result, "succeeded");
+    assert.equal(result.build.repository.id, "repo-id");
+    assert.equal(result.build._links.web.href, "https://dev.azure.com/build/700");
+    assert.deepEqual(seen, [
+      { prId: 42, status: "inProgress", repositoryId: "repo-id" },
+      { prId: 42, status: "completed", repositoryId: "repo-id" },
+    ]);
+    assert.equal(running.id, 700);
+    assert.equal(completed.id, 700);
+  });
+
+  test("bounds sanitized transient error text in warnings and operational errors", async () => {
+    const hostile = new AzureRequestError(`bad\u001b[31m\u202E${"x".repeat(20_000)}`, "network");
+    const warnings = [];
+    const { service } = createWaitHarness([hostile, hostile, hostile]);
+    await assert.rejects(
+      service.wait(42, 700, {
+        intervalSeconds: 10,
+        timeoutSeconds: 100,
+        onProgress(event) {
+          if (event.type === "transient-warning") warnings.push(event);
+        },
+      }),
+      (error) => {
+        assert.doesNotMatch(error.message, /\u001b|\u202E/);
+        assert.ok(error.message.length < 4_300);
+        assert.match(error.message, /\[truncated\]$/);
+        return true;
+      },
+    );
+    assert.equal(warnings.length, 3);
+    assert.ok(warnings.every(({ error }) => error.length <= 4_096));
+    assert.ok(warnings.every(({ error }) => !/\u001b|\u202E/.test(error)));
   });
 
   test("rejects wrong IDs, association changes, and missing/none/unknown statuses immediately", async () => {
@@ -1127,6 +1421,7 @@ describe("deterministic build wait", () => {
       timedOut: true,
       outcome: "timeout",
     });
-    assert.match(timeoutText, /timed out/);
+    assert.match(timeoutText, /build 700.*timed out/);
+    assert.doesNotMatch(timeoutText, /requested build/);
   });
 });

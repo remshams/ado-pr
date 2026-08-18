@@ -27,6 +27,7 @@ const MIN_WAIT_TIMEOUT_SECONDS = 10;
 const MAX_WAIT_TIMEOUT_SECONDS = 86_400;
 const WAIT_HEARTBEAT_MS = 5 * 60_000;
 const MAX_CONSECUTIVE_TRANSIENT_FAILURES = 3;
+const MAX_WAIT_ERROR_LENGTH = 4_096;
 const MAX_DISPLAY_DEPTH = 20;
 const PROBLEM_RESULTS = new Set([
   "failed",
@@ -194,6 +195,7 @@ export type BuildWaitOutcome =
 
 export interface BuildWaitEnvelope {
   pullRequest: PullRequestBuildSummary;
+  buildId: number;
   build: AzureBuild | null;
   pollCount: number;
   transientFailureCount: number;
@@ -239,7 +241,7 @@ export interface WaitBuildOptions {
   intervalSeconds?: number;
   timeoutSeconds?: number;
   signal?: AbortSignal;
-  onProgress?: (event: BuildWaitProgress) => void;
+  onProgress?: (event: BuildWaitProgress) => void | Promise<void>;
 }
 
 export interface BuildService {
@@ -334,6 +336,15 @@ function optionalNonNegativeInteger(value: unknown, context: string): number | u
 function assertRequestedBuildId(buildId: number): void {
   if (!Number.isSafeInteger(buildId) || buildId < 1) {
     throw new Error("Build ID must be a positive safe integer.");
+  }
+}
+
+function assertRequestedPullRequestId(requestedPrId: number | undefined): void {
+  if (
+    requestedPrId !== undefined &&
+    (!Number.isSafeInteger(requestedPrId) || requestedPrId < 1)
+  ) {
+    throw new Error("Pull request ID must be a positive safe integer.");
   }
 }
 
@@ -693,6 +704,13 @@ function sanitizeError(error: unknown): string {
   return stripTerminalControls(message);
 }
 
+function sanitizeWaitError(error: unknown): string {
+  const sanitized = sanitizeError(error);
+  if (sanitized.length <= MAX_WAIT_ERROR_LENGTH) return sanitized;
+  const suffix = "… [truncated]";
+  return `${sanitized.slice(0, MAX_WAIT_ERROR_LENGTH - suffix.length)}${suffix}`;
+}
+
 function validateWaitSeconds(
   value: number | undefined,
   fallback: number,
@@ -753,12 +771,24 @@ async function cancellableSleep(
     };
     const onAbort = (): void => finish(() => reject(buildWaitAbortError()));
     signal.addEventListener("abort", onAbort, { once: true });
-    void Promise.resolve()
-      .then(() => sleep(milliseconds, signal))
-      .then(
-        () => finish(resolve),
-        (error: unknown) => finish(() => reject(error)),
-      );
+    if (signal.aborted || settled) {
+      onAbort();
+      return;
+    }
+
+    let sleeping: Promise<void>;
+    try {
+      // Invoke immediately after installing the listener. Deferring this call would let an abort
+      // settle the wrapper while still allowing an injected sleep's side effects to run later.
+      sleeping = sleep(milliseconds, signal);
+    } catch (error) {
+      finish(() => reject(error));
+      return;
+    }
+    void Promise.resolve(sleeping).then(
+      () => finish(resolve),
+      (error: unknown) => finish(() => reject(error)),
+    );
   });
 }
 
@@ -922,6 +952,7 @@ export function createBuildService({
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): BuildService {
   async function resolvePullRequest(requestedPrId: number | undefined): Promise<ValidatedPullRequest> {
+    assertRequestedPullRequestId(requestedPrId);
     const pr = validatePullRequest(await pullRequests.resolve(requestedPrId), "pull request");
     if (requestedPrId !== undefined && pr.id !== requestedPrId) {
       throw new Error(
@@ -1234,6 +1265,8 @@ export function createBuildService({
     buildId: number,
     options: WaitBuildOptions = {},
   ): Promise<BuildWaitEnvelope> {
+    const signal = options.signal;
+    const onProgress = options.onProgress;
     assertRequestedBuildId(buildId);
     const intervalSeconds = validateWaitSeconds(
       options.intervalSeconds,
@@ -1249,9 +1282,9 @@ export function createBuildService({
       MAX_WAIT_TIMEOUT_SECONDS,
       "Build wait timeout",
     );
-    throwIfWaitAborted(options.signal);
+    throwIfWaitAborted(signal);
     const pr = await resolvePullRequest(requestedPrId);
-    throwIfWaitAborted(options.signal);
+    throwIfWaitAborted(signal);
 
     const startedAt = now();
     const deadline = startedAt + timeoutSeconds * 1_000;
@@ -1268,6 +1301,7 @@ export function createBuildService({
       Math.max(0, at - startedAt) / 1_000;
     const timeoutEnvelope = (at = now()): BuildWaitEnvelope => ({
       pullRequest: pr.summary,
+      buildId,
       build: latestBuild,
       pollCount,
       transientFailureCount,
@@ -1283,17 +1317,33 @@ export function createBuildService({
       transientFailureCount,
       elapsedSeconds: elapsedSeconds(at),
     });
-    const emit = (event: BuildWaitProgress): void => {
-      options.onProgress?.(event);
-      throwIfWaitAborted(options.signal);
+    const emit = async (event: BuildWaitProgress): Promise<void> => {
+      if (onProgress !== undefined) {
+        try {
+          const callbackResult = onProgress(structuredClone(event));
+          const callbackOutcome = Promise.resolve(callbackResult).then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
+          );
+          let outcome: Awaited<typeof callbackOutcome> | undefined;
+          await cancellableSleep(async () => {
+            outcome = await callbackOutcome;
+          }, 0, signal);
+          if (outcome?.ok === false) throw outcome.error;
+        } catch (error) {
+          throwIfWaitAborted(signal);
+          throw error;
+        }
+      }
+      throwIfWaitAborted(signal);
     };
 
     while (true) {
-      throwIfWaitAborted(options.signal);
-      let current = now();
+      throwIfWaitAborted(signal);
+      const current = now();
       if (current >= deadline) return timeoutEnvelope(current);
       if (current >= nextHeartbeatAt) {
-        emit({ type: "heartbeat", ...progressBase(current) });
+        await emit({ type: "heartbeat", ...progressBase(current) });
         do nextHeartbeatAt += WAIT_HEARTBEAT_MS;
         while (nextHeartbeatAt <= current);
         continue;
@@ -1301,17 +1351,12 @@ export function createBuildService({
 
       if (current < nextPollAt) {
         const wakeAt = Math.min(nextPollAt, nextHeartbeatAt, deadline);
-        await cancellableSleep(
-          sleep,
-          Math.max(0, wakeAt - current),
-          options.signal,
-        );
-        throwIfWaitAborted(options.signal);
+        await cancellableSleep(sleep, Math.max(0, wakeAt - current), signal);
+        throwIfWaitAborted(signal);
         continue;
       }
 
-      const remainingMs = Math.floor(deadline - current);
-      if (remainingMs < 1) return timeoutEnvelope(current);
+      const remainingMs = Math.max(1, Math.ceil(deadline - current));
       pollCount += 1;
       const requestTimeoutMs = Math.min(READ_TIMEOUT_MS, remainingMs);
       const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
@@ -1321,41 +1366,48 @@ export function createBuildService({
         rawBuild = await azure.request<unknown>(url, {
           timeoutMs: requestTimeoutMs,
           maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-          signal: options.signal,
+          signal,
         });
         completedAt = now();
       } catch (error) {
         completedAt = now();
-        throwIfWaitAborted(options.signal);
+        throwIfWaitAborted(signal);
         if (isAzureRequestError(error) && error.kind === "abort") throw error;
-        if (completedAt >= deadline) return timeoutEnvelope(completedAt);
-        if (!isTransientWaitError(error)) throw error;
 
-        transientFailureCount += 1;
-        consecutiveTransientFailures += 1;
+        const transient = isTransientWaitError(error);
+        if (transient) {
+          transientFailureCount += 1;
+          consecutiveTransientFailures += 1;
+        }
+        if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+        if (!transient) throw error;
+
         const retryAfterMs =
           isAzureRequestError(error) && error.kind === "http"
             ? error.retryAfterMs
             : undefined;
-        emit({
+        const errorText = sanitizeWaitError(error);
+        await emit({
           type: "transient-warning",
           ...progressBase(completedAt),
           attempt: pollCount,
           consecutiveFailureCount: consecutiveTransientFailures,
-          error: sanitizeError(error),
+          error: errorText,
           ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
         });
         if (consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
           throw new Error(
-            `Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${sanitizeError(error)}`,
+            `Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
           );
         }
-        nextPollAt =
-          completedAt + Math.max(intervalMs, retryAfterMs ?? 0);
+        nextPollAt = Math.min(
+          deadline,
+          completedAt + Math.max(intervalMs, retryAfterMs ?? 0),
+        );
         continue;
       }
 
-      throwIfWaitAborted(options.signal);
+      throwIfWaitAborted(signal);
       if (completedAt >= deadline) return timeoutEnvelope(completedAt);
       const observedBuild = assertFetchedBuild(rawBuild, buildId, "wait build");
       assertBuildAssociation(observedBuild, pr);
@@ -1363,8 +1415,10 @@ export function createBuildService({
         throw new Error(`Cannot wait for build ${buildId}: Azure returned no build status.`);
       }
       const observedStatus = normalized(observedBuild.status);
-      if (observedStatus === "none" ||
-          (observedStatus !== "completed" && !WAITING_BUILD_STATUSES.has(observedStatus))) {
+      if (
+        observedStatus === "none" ||
+        (observedStatus !== "completed" && !WAITING_BUILD_STATUSES.has(observedStatus))
+      ) {
         throw new Error(
           `Cannot wait for build ${buildId}: Azure returned unknown build status ${display(observedBuild.status)}.`,
         );
@@ -1373,8 +1427,21 @@ export function createBuildService({
       latestBuild = observedBuild;
       consecutiveTransientFailures = 0;
       const stateKey = waitStateKey(observedBuild);
+      const terminalEnvelope: BuildWaitEnvelope | undefined =
+        observedStatus === "completed"
+          ? {
+              pullRequest: pr.summary,
+              buildId,
+              build: observedBuild,
+              pollCount,
+              transientFailureCount,
+              elapsedSeconds: elapsedSeconds(completedAt),
+              timedOut: false,
+              outcome: waitResultOutcome(observedBuild),
+            }
+          : undefined;
       if (stateKey !== previousStateKey) {
-        emit({
+        await emit({
           type: "state",
           ...progressBase(completedAt),
           change: previousStateKey === undefined ? "initial" : "changed",
@@ -1383,18 +1450,8 @@ export function createBuildService({
         });
         previousStateKey = stateKey;
       }
-      if (observedStatus === "completed") {
-        return {
-          pullRequest: pr.summary,
-          build: observedBuild,
-          pollCount,
-          transientFailureCount,
-          elapsedSeconds: elapsedSeconds(completedAt),
-          timedOut: false,
-          outcome: waitResultOutcome(observedBuild),
-        };
-      }
-      nextPollAt = completedAt + intervalMs;
+      if (terminalEnvelope !== undefined) return terminalEnvelope;
+      nextPollAt = Math.min(deadline, completedAt + intervalMs);
     }
   }
 
@@ -1483,8 +1540,8 @@ export function createBuildService({
   }
 
   function formatWaitResult(result: BuildWaitEnvelope): string {
-    const buildId = result.build?.id;
-    const identifier = buildId === undefined ? "requested build" : `build ${buildId}`;
+    const buildId = result.buildId;
+    const identifier = `build ${buildId}`;
     const statusResult = `${display(result.build?.status)}/${display(result.build?.result)}`;
     const counters =
       `${result.elapsedSeconds.toFixed(1)}s elapsed; ${result.pollCount} poll(s); ` +
