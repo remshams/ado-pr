@@ -9,8 +9,9 @@
 # Requires:
 #   - Node.js >= 22.6 (TypeScript stripping and --env-file support). No build step is needed.
 #   - AZURE_DEVOPS_PAT either exported by the caller or set in a .env path alongside this script.
-#     Mutations need Code (Read & Write); build queries need Build (Read, vso.build), and build
-#     retries need Build execute (vso.build_execute). Reviewer additions also need Identity (Read).
+#     PR/comment mutations need Code (Read & Write). Build commands need Code (Read); build queries
+#     also need Build (Read, vso.build), and retries additionally need Build execute
+#     (vso.build_execute). Reviewer additions also need Identity (Read).
 #     Reviewer removal resolves current PR reviewers and does not need Identity access. Build support
 #     covers YAML/classic Build API validations only: no Releases, external checks, or individual
 #     stage/job/task retries; diagnostics default to the final 200 log lines, while --full-logs is
