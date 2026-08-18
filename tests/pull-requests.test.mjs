@@ -124,6 +124,50 @@ describe("pull request listing, resolution, creation, and updates", () => {
     assert.equal(calls[0].url, `${repositoryUrl}/pullRequests/123?api-version=7.1`);
   });
 
+  test("binds explicit and branch-selected IDs to their hydrated responses", async (t) => {
+    const explicit = createService(t, [{ json: pullRequest({ pullRequestId: 999 }) }]);
+    await assert.rejects(explicit.service.resolve(123), {
+      message:
+        "Malformed Azure DevOps response: hydrated pull request ID 999 did not match selected PR #123.",
+    });
+
+    const branch = createService(
+      t,
+      [
+        { json: { value: [pullRequest({ pullRequestId: 74 })] } },
+        { json: pullRequest({ pullRequestId: 75 }) },
+      ],
+      async () => "feature/bound-selection",
+    );
+    await assert.rejects(branch.service.resolve(undefined), {
+      message:
+        "Malformed Azure DevOps response: hydrated pull request ID 75 did not match selected PR #74.",
+    });
+  });
+
+  test("rejects malformed branch-search collections before hydrating a candidate", async (t) => {
+    const malformedEnvelope = createService(
+      t,
+      [{ json: { value: {} } }],
+      async () => "feature/malformed-collection",
+    );
+    await assert.rejects(
+      malformedEnvelope.service.findForCurrentBranch(),
+      /pull request collection value must be an array/,
+    );
+
+    const unsafeId = createService(
+      t,
+      [{ json: { value: [pullRequest({ pullRequestId: Number.MAX_SAFE_INTEGER + 1 })] } }],
+      async () => "feature/unsafe-id",
+    );
+    await assert.rejects(
+      unsafeId.service.findForCurrentBranch(),
+      /pull request collection value\[0\]\.pullRequestId must be a positive safe integer/,
+    );
+    assert.equal(unsafeId.calls.length, 1);
+  });
+
   test("uses the current branch and URL-encodes its full source ref", async (t) => {
     const { service, calls } = createService(
       t,

@@ -108,6 +108,12 @@ function assertUniqueValues(values: string[], label: string): void {
   }
 }
 
+function assertPullRequestId(value: unknown, context: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Malformed Azure DevOps response: ${context} must be a positive safe integer.`);
+  }
+}
+
 function assertDescriptionLength(description: string, generated = false): void {
   if (description.length <= MAX_DESCRIPTION_LENGTH) return;
   throw new Error(
@@ -480,6 +486,12 @@ export function createPullRequestService({
     const branch = await getCurrentBranch();
     const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(toFullRef(branch))}&searchCriteria.status=active&api-version=${API_VERSION}`;
     const data = await azure.request<{ value: PullRequest[] }>(url);
+    if (!Array.isArray(data.value)) {
+      throw new Error("Malformed Azure DevOps response: pull request collection value must be an array.");
+    }
+    for (const [index, candidate] of data.value.entries()) {
+      assertPullRequestId(candidate?.pullRequestId, `pull request collection value[${index}].pullRequestId`);
+    }
 
     if (data.value.length === 0) {
       throw new Error(
@@ -680,7 +692,14 @@ export function createPullRequestService({
   /** Fetches a pull request by ID, including its description and other PR-level metadata. */
   async function get(prId: number): Promise<PullRequest> {
     const url = `${pullRequestApiUrl(ctx, prId)}?api-version=${API_VERSION}`;
-    return azure.request<PullRequest>(url);
+    const pr = await azure.request<PullRequest>(url);
+    assertPullRequestId(pr?.pullRequestId, "hydrated pull request.pullRequestId");
+    if (pr.pullRequestId !== prId) {
+      throw new Error(
+        `Malformed Azure DevOps response: hydrated pull request ID ${pr.pullRequestId} did not match selected PR #${prId}.`,
+      );
+    }
+    return pr;
   }
 
   /** Resolves and fully fetches either an explicitly selected PR or the active PR for the branch. */
