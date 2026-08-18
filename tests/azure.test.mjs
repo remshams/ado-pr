@@ -31,6 +31,91 @@ test("Azure requester defaults to an authenticated GET without a body", async (t
   ]);
 });
 
+test("Azure requester supports plain text responses and an explicit Accept header", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [{ body: "fake log line\\n" }]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  const result = await azure.request("https://example.invalid/log", {
+    responseType: "text",
+    accept: "text/plain; charset=utf-8",
+  });
+
+  assert.equal(result, "fake log line\\n");
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/log",
+      method: "GET",
+      headers: {
+        authorization: expectedAuthorization,
+        accept: "text/plain; charset=utf-8",
+      },
+      body: null,
+    },
+  ]);
+});
+
+test("Azure requester returns parsed data with response metadata", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [
+    {
+      json: { value: ["first-page"] },
+      headers: {
+        "x-ms-continuationtoken": "fake-next-page",
+        "x-request-id": "fake-request-id",
+      },
+    },
+  ]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  const result = await azure.requestWithMetadata("https://example.invalid/items", {
+    accept: "application/json",
+  });
+
+  assert.deepEqual(result.data, { value: ["first-page"] });
+  assert.equal(result.metadata.headers.get("x-ms-continuationtoken"), "fake-next-page");
+  assert.equal(result.metadata.headers.get("x-request-id"), "fake-request-id");
+  assert.equal(result.metadata.status, 200);
+  assert.equal(result.metadata.statusText, "");
+  assert.equal(result.metadata.url, "");
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/items",
+      method: "GET",
+      headers: {
+        authorization: expectedAuthorization,
+        accept: "application/json",
+      },
+      body: null,
+    },
+  ]);
+});
+
+test("Azure requester keeps text bodies, Accept, and metadata compatible with mutations", async (t) => {
+  const { fetch, calls } = createMockFetch(t, [{ body: "accepted" }]);
+  const azure = createAzureRequester({ pat: fakePat, fetch });
+
+  const result = await azure.requestWithMetadata("https://example.invalid/log", {
+    method: "POST",
+    body: { query: "fake query" },
+    responseType: "text",
+    accept: "text/plain",
+  });
+
+  assert.equal(result.data, "accepted");
+  assert.equal(result.metadata.headers.get("content-type"), "text/plain;charset=UTF-8");
+  assert.deepEqual(calls, [
+    {
+      url: "https://example.invalid/log",
+      method: "POST",
+      headers: {
+        authorization: expectedAuthorization,
+        accept: "text/plain",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ query: "fake query" }),
+    },
+  ]);
+});
+
 test("Azure requester sends mutations with a JSON body and Content-Type", async (t) => {
   const { fetch, calls } = createMockFetch(t, [{ json: { id: 17, status: "fake-created" } }]);
   const azure = createAzureRequester({ pat: fakePat, fetch });
@@ -86,7 +171,7 @@ test("Azure requester sends raw binary bytes with an explicit Content-Type", asy
 });
 
 test("Azure requester supports successful requests that expect no response body", async (t) => {
-  const { fetch } = createMockFetch(t, [{ body: "" }, { status: 204 }]);
+  const { fetch } = createMockFetch(t, [{ body: "" }, { status: 204 }, { status: 204 }]);
   const azure = createAzureRequester({ pat: fakePat, fetch });
 
   assert.equal(
@@ -103,11 +188,17 @@ test("Azure requester supports successful requests that expect no response body"
     }),
     undefined,
   );
+  const metadataResult = await azure.requestWithMetadata("https://example.invalid/no-content-metadata", {
+    method: "DELETE",
+    responseType: "none",
+  });
+  assert.equal(metadataResult.data, undefined);
+  assert.equal(metadataResult.metadata.status, 204);
 });
 
 test("Azure requester reports the method, URL, status, status text, and response body on failure", async (t) => {
   const url = "https://example.invalid/failure?continuation=fake-token";
-  const { fetch } = createMockFetch(t, [
+  const { fetch, calls } = createMockFetch(t, [
     {
       status: 429,
       statusText: "Too Many Requests",
@@ -127,6 +218,8 @@ test("Azure requester reports the method, URL, status, status text, and response
         error?.message,
         `Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
       );
+      assert.equal(error?.message.includes(fakePat), false);
+      assert.equal(calls[0].headers.authorization, expectedAuthorization);
       return true;
     },
   );

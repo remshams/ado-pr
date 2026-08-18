@@ -9,6 +9,8 @@ function authHeader(pat: string): string {
 
 interface AzureRequestBaseOptions {
   method?: string;
+  /** Sends an explicit value in the HTTP Accept request header. */
+  accept?: string;
 }
 
 interface AzureJsonBodyOptions {
@@ -29,15 +31,47 @@ export type AzureJsonRequestOptions = AzureRequestBaseOptions & AzureBodyOptions
   responseType?: "json";
 };
 
+export type AzureTextRequestOptions = AzureRequestBaseOptions & AzureBodyOptions & {
+  responseType: "text";
+};
+
 export type AzureNoContentRequestOptions = AzureRequestBaseOptions & AzureBodyOptions & {
   responseType: "none";
 };
 
-export type AzureRequestOptions = AzureJsonRequestOptions | AzureNoContentRequestOptions;
+export type AzureRequestOptions =
+  | AzureJsonRequestOptions
+  | AzureTextRequestOptions
+  | AzureNoContentRequestOptions;
+
+export interface AzureResponseMetadata {
+  headers: Headers;
+  status: number;
+  statusText: string;
+  url: string;
+}
+
+export interface AzureResponse<T> {
+  data: T;
+  metadata: AzureResponseMetadata;
+}
 
 export interface AzureRequester {
   request(url: string, options: AzureNoContentRequestOptions): Promise<void>;
+  request(url: string, options: AzureTextRequestOptions): Promise<string>;
   request<T>(url: string, options?: AzureJsonRequestOptions): Promise<T>;
+  requestWithMetadata(
+    url: string,
+    options: AzureNoContentRequestOptions,
+  ): Promise<AzureResponse<void>>;
+  requestWithMetadata(
+    url: string,
+    options: AzureTextRequestOptions,
+  ): Promise<AzureResponse<string>>;
+  requestWithMetadata<T>(
+    url: string,
+    options?: AzureJsonRequestOptions,
+  ): Promise<AzureResponse<T>>;
 }
 
 /** Gets the identity id authenticated by the PAT from the PAT-compatible connection endpoint. */
@@ -58,13 +92,17 @@ export function createAzureRequester({
   pat: string;
   fetch?: typeof globalThis.fetch;
 }): AzureRequester {
-  async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | void> {
+  async function requestWithMetadata<T>(
+    url: string,
+    options: AzureRequestOptions = {},
+  ): Promise<AzureResponse<T | void>> {
     const hasRawBody = options.rawBody !== undefined;
     const hasJsonBody = options.body !== undefined;
     const response = await fetchImpl(url, {
       method: options.method ?? "GET",
       headers: {
         Authorization: authHeader(pat),
+        ...(options.accept === undefined ? {} : { Accept: options.accept }),
         ...(hasRawBody
           ? { "Content-Type": options.contentType }
           : hasJsonBody
@@ -80,13 +118,27 @@ export function createAzureRequester({
       );
     }
 
+    const metadata: AzureResponseMetadata = {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+    };
     if (options.responseType === "none") {
-      return;
+      return { data: undefined, metadata };
     }
-    return (await response.json()) as T;
+    const data = options.responseType === "text" ? await response.text() : await response.json();
+    return { data: data as T, metadata };
   }
 
-  return { request: request as AzureRequester["request"] };
+  async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | void> {
+    return (await requestWithMetadata<T>(url, options)).data;
+  }
+
+  return {
+    request: request as AzureRequester["request"],
+    requestWithMetadata: requestWithMetadata as AzureRequester["requestWithMetadata"],
+  };
 }
 
 /** Base `https://dev.azure.com/{org}/{project}` URL shared by both the REST API and web UI. */
