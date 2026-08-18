@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createTempGitRepo, runPr } from "./test-helpers.mjs";
+import { createTempGitRepo, runPr, startPr } from "./test-helpers.mjs";
 
 const origin = "https://dev.azure.com/acme/Test%20Project/_git/widgets";
 const apiBase = "https://dev.azure.com/acme/Test%20Project/_apis/git/repositories/widgets";
@@ -239,7 +239,12 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
       cwd: createRepo(t),
       responses: [
         { json: validationPr() },
-        { json: validationBuild({ result: resultName }) },
+        {
+          json: validationBuild({
+            result: resultName,
+            unsafeMetadata: "C1\u009b bidi\u202e line\u2028separator",
+          }),
+        },
       ],
     });
 
@@ -255,7 +260,10 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
     if (resultName === "succeeded") {
       const parsed = JSON.parse(result.stdout);
       assert.equal(parsed.outcome, resultName);
-      assert.equal(result.stdout, `${JSON.stringify(parsed, null, 2)}\n`);
+      assert.equal(parsed.buildId, 700);
+      assert.equal(parsed.build.unsafeMetadata, "C1\u009b bidi\u202e line\u2028separator");
+      assert.doesNotMatch(result.stdout, /[\u009b\u202e\u2028]/);
+      assert.match(result.stdout, /C1\\u009b bidi\\u202e line\\u2028separator/);
     } else {
       const expectedOutcome = resultName === "mystery" ? "unknown" : resultName;
       assert.match(result.stdout, new RegExp(`^build 700 for PR #42 finished with outcome ${expectedOutcome}\\.`));
@@ -280,6 +288,43 @@ test("build wait reports operational HTTP errors without a result document", (t)
     { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET", body: null },
     { url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
   ]);
+});
+
+test("build wait exits 130 on SIGINT during PR resolution without final output", async (t) => {
+  const running = startPr(t, ["build", "wait", "--pr", "42", "--build", "700"], {
+    cwd: createRepo(t),
+    responses: [{ delayMs: 10_000, json: validationPr() }],
+  });
+  await running.waitForCalls(1);
+  running.child.kill("SIGINT");
+  const result = await running.completion;
+
+  assert.equal(result.status, 130);
+  assert.equal(result.signal, null);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(result.calls.length, 1);
+});
+
+test("build wait exits 143 on SIGTERM during polling sleep without final output", async (t) => {
+  const running = startPr(t, ["build", "wait", "--pr", "42", "--build", "700", "--interval", "10"], {
+    cwd: createRepo(t),
+    responses: [
+      { json: validationPr() },
+      { json: validationBuild({ status: "inProgress", result: undefined }) },
+    ],
+  });
+  await running.waitForCalls(2);
+  await running.waitForStderr(/initial state inProgress\/unknown/);
+  running.child.kill("SIGTERM");
+  const result = await running.completion;
+
+  assert.equal(result.status, 143);
+  assert.equal(result.signal, null);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /initial state inProgress\/unknown/);
+  assert.doesNotMatch(result.stderr, /finished with outcome|timed out/);
+  assert.equal(result.calls.length, 2);
 });
 
 test("pr list requests the current identity then prints active pull requests in response order", (t) => {

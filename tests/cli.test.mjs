@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { buildWaitExitCode } from "../operation-types.ts";
 import { spawnTestProcess } from "./test-helpers.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -219,6 +220,15 @@ test("legacy flat action aliases remain rejected even when combined with help", 
     const args = ["comment", "--message", "old", ...(help ? [help] : [])];
     assertUsageError(runCli(...args), 'Error: a command is required for resource "comment"');
   }
+});
+
+test("build wait maps completed and timeout outcomes to stable exit codes", () => {
+  assert.equal(buildWaitExitCode({ timedOut: false, outcome: "succeeded" }), 0);
+  for (const outcome of ["partiallySucceeded", "failed", "canceled", "unknown"]) {
+    assert.equal(buildWaitExitCode({ timedOut: false, outcome }), 1);
+  }
+  assert.equal(buildWaitExitCode({ timedOut: true, outcome: "timeout" }), 124);
+  assert.equal(buildWaitExitCode({ timedOut: true, outcome: "succeeded" }), 124);
 });
 
 test("build wait defaults, accepts bounds, and validates its parser contract", () => {

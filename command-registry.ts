@@ -26,7 +26,7 @@ export const FLAG_DEFINITIONS = {
   timeout: {
     kind: "positiveInteger",
     usage: "--timeout <seconds>",
-    description: "Maximum wait time for `build wait` (default 3600 seconds/1 hour; range 10–86400).",
+    description: "Maximum polling time after PR resolution for `build wait` (default 3600 seconds/1 hour; range 10–86400).",
   },
   title: {
     kind: "string",
@@ -516,13 +516,17 @@ ${options}
 
 Build wait:
   \`build wait\` monitors validation metadata for the requested build, whether it is current or
-  historical. --pr only selects or resolves the associated pull request. It polls every 60 seconds
-  by default and waits up to 1 hour; --interval accepts 10–3600 seconds and --timeout accepts
-  10–86400 seconds.
-  Progress is written to stderr and one final human-readable or pretty JSON result to stdout.
-  Exit codes are 0 for succeeded, 124 for timeout, and 1 for other completed outcomes. A third
-  consecutive transient failure aborts the wait. It does not fetch logs, retry individual work, or
-  mutate builds; use \`build show\` afterward for diagnostics.
+  historical. --pr only selects or resolves the associated pull request. After bounded PR
+  resolution, polling runs every 60 seconds for up to 1 hour by default; --interval accepts
+  10–3600 seconds and --timeout accepts 10–86400 seconds. Five-minute heartbeats and progress go to
+  stderr. Completed and timed-out waits emit one final human or pretty JSON result to stdout;
+  operational failures and signals emit none. JSON includes the selected PR summary, requested
+  build ID, raw Azure build metadata (or null before observation), counters, elapsed polling time,
+  timeout state, and outcome; inspect raw metadata before persisting it.
+  Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes/errors, 130 for SIGINT, and
+  143 for SIGTERM. Transient poll requests retry, but a third consecutive transient failure aborts.
+  Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;
+  use \`build show\` afterward for diagnostics.
 
 Requires:
   - A git checkout whose origin remote points at Azure Repos.

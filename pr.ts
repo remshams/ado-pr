@@ -20,12 +20,19 @@ import { createBuildService } from "./builds.ts";
 import { getPat, parseArgs } from "./cli.ts";
 import { createFileAnchorService } from "./file-anchors.ts";
 import { getRepoContext } from "./lib.ts";
-import { toCommentLocation } from "./operation-types.ts";
+import { buildWaitExitCode, toCommentLocation } from "./operation-types.ts";
 import { createPullRequestService } from "./pull-requests.ts";
 import { createThreadService } from "./threads.ts";
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled command: ${JSON.stringify(value)}`);
+}
+
+function safeJson(value: unknown): string {
+  return JSON.stringify(value, null, 2).replace(
+    /[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -87,10 +94,8 @@ async function main(): Promise<void> {
             process.exitCode = signalNumber;
             return;
           }
-          console.log(options.json ? JSON.stringify(result, null, 2) : builds.formatWaitResult(result));
-          process.exitCode = result.timedOut || result.outcome === "timeout"
-            ? 124
-            : result.outcome === "succeeded" ? 0 : 1;
+          console.log(options.json ? safeJson(result) : builds.formatWaitResult(result));
+          process.exitCode = buildWaitExitCode(result);
         } catch (error) {
           if (signalNumber !== undefined || controller.signal.aborted) {
             process.exitCode = signalNumber ?? 130;

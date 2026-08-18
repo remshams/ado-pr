@@ -103,7 +103,12 @@ test("help is generated from every registered command and batch schema", () => {
   );
   assert.match(help, /requested build, whether it is current or\s+historical/);
   assert.match(help, /--pr only selects or resolves the associated pull request/);
-  assert.match(help, /default 60 seconds/);
+  assert.match(help, /polling runs every 60 seconds for up to 1 hour/);
   assert.match(help, /10–3600 seconds/);
   assert.match(help, /10–86400 seconds/);
+  assert.match(help, /operational failures and signals emit none/);
+  assert.match(help, /raw Azure build metadata/);
+  assert.match(help, /130 for SIGINT[\s\S]*143 for SIGTERM/);
+  assert.match(help, /Transient poll requests retry/);
+  assert.match(help, /never retries\/requeues the build/);
 });
