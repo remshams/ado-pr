@@ -227,6 +227,61 @@ test("build retry double-checks its target and prints Azure's returned build", (
   );
 });
 
+test("build wait polls exactly PR and build metadata for every terminal outcome", (t) => {
+  for (const [resultName, expectedStatus] of [
+    ["succeeded", 0],
+    ["failed", 1],
+    ["partiallySucceeded", 1],
+    ["canceled", 1],
+    ["mystery", 1],
+  ]) {
+    const result = runPr(t, ["build", "wait", "--pr", "42", "--build", "700", ...(resultName === "succeeded" ? ["--json"] : [])], {
+      cwd: createRepo(t),
+      responses: [
+        { json: validationPr() },
+        { json: validationBuild({ result: resultName }) },
+      ],
+    });
+
+    assert.equal(result.status, expectedStatus, result.stderr);
+    assert.deepEqual(result.calls.map(request), [
+      { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET", body: null },
+      { url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
+    ]);
+    assert.match(result.stderr, /PR #42, build 700: initial state completed\//);
+    assert.doesNotMatch(result.stdout, /initial state|still waiting|transient warning/);
+    assert.equal(result.stdout.includes("timeline"), false);
+    assert.equal(result.stdout.includes("log"), false);
+    if (resultName === "succeeded") {
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.outcome, resultName);
+      assert.equal(result.stdout, `${JSON.stringify(parsed, null, 2)}\n`);
+    } else {
+      const expectedOutcome = resultName === "mystery" ? "unknown" : resultName;
+      assert.match(result.stdout, new RegExp(`^build 700 for PR #42 finished with outcome ${expectedOutcome}\\.`));
+      assert.equal(result.stdout.split("\n").length, 4);
+    }
+  }
+});
+
+test("build wait reports operational HTTP errors without a result document", (t) => {
+  const result = runPr(t, ["build", "wait", "--pr", "42", "--build", "700"], {
+    cwd: createRepo(t),
+    responses: [
+      { json: validationPr() },
+      { status: 400, statusText: "Bad Request", body: "build unavailable" },
+    ],
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, `Azure DevOps API request (GET ${buildApiBase}/700?api-version=7.1) failed: 400 Bad Request\nbuild unavailable\n`);
+  assert.deepEqual(result.calls.map(request), [
+    { url: `${apiBase}/pullRequests/42?api-version=7.1`, method: "GET", body: null },
+    { url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
+  ]);
+});
+
 test("pr list requests the current identity then prints active pull requests in response order", (t) => {
   const cwd = createRepo(t);
   const pullRequests = [

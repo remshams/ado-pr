@@ -16,7 +16,17 @@ export const FLAG_DEFINITIONS = {
   build: {
     kind: "positiveInteger",
     usage: "--build <id>",
-    description: "Build ID (required for `build show` and `build retry`).",
+    description: "Build ID (required for `build show`, `build retry`, and `build wait`).",
+  },
+  interval: {
+    kind: "positiveInteger",
+    usage: "--interval <seconds>",
+    description: "Polling interval for `build wait` (default 60 seconds; range 10–3600).",
+  },
+  timeout: {
+    kind: "positiveInteger",
+    usage: "--timeout <seconds>",
+    description: "Maximum wait time for `build wait` (default 3600 seconds/1 hour; range 10–86400).",
   },
   title: {
     kind: "string",
@@ -181,7 +191,7 @@ export const BATCH_FIELD_DEFINITIONS = {
 
 export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 
-export type CommandValidationRule = "pullRequestEdit" | "commentLocation";
+export type CommandValidationRule = "pullRequestEdit" | "commentLocation" | "buildWaitBounds";
 
 interface CommandDefinition {
   resource: "pr" | "comment" | "build";
@@ -274,6 +284,15 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
     summary: "Retry an eligible failed PR validation build at the whole-build level.",
     flags: ["build", "pr"],
     requiredFlags: ["build"],
+  },
+  "build.wait": {
+    resource: "build",
+    command: "wait",
+    usage: "build wait --build <id> [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
+    summary: "Wait for a PR validation build to reach a terminal outcome without mutating it.",
+    flags: ["build", "pr", "interval", "timeout", "json"],
+    requiredFlags: ["build"],
+    validationRules: ["buildWaitBounds"],
   },
   "comment.list": {
     resource: "comment",
@@ -494,6 +513,16 @@ ${batchShapes}
 
 Options:
 ${options}
+
+Build wait:
+  \`build wait\` monitors validation metadata for the requested build, whether it is current or
+  historical. --pr only selects or resolves the associated pull request. It polls every 60 seconds
+  by default and waits up to 1 hour; --interval accepts 10–3600 seconds and --timeout accepts
+  10–86400 seconds.
+  Progress is written to stderr and one final human-readable or pretty JSON result to stdout.
+  Exit codes are 0 for succeeded, 124 for timeout, and 1 for other completed outcomes. A third
+  consecutive transient failure aborts the wait. It does not fetch logs, retry individual work, or
+  mutate builds; use \`build show\` afterward for diagnostics.
 
 Requires:
   - A git checkout whose origin remote points at Azure Repos.

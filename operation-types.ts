@@ -61,6 +61,14 @@ type CliOptionsShape =
       build: number;
     })
   | (PullRequestTarget & {
+      resource: "build";
+      command: "wait";
+      build: number;
+      intervalSeconds: number;
+      timeoutSeconds: number;
+      json: boolean;
+    })
+  | (PullRequestTarget & {
       resource: "comment";
       command: "list";
       json: boolean;

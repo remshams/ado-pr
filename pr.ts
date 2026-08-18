@@ -60,6 +60,49 @@ async function main(): Promise<void> {
         console.log(builds.formatRetry(result));
         return;
       }
+      case "wait": {
+        const controller = new AbortController();
+        let signalNumber: number | undefined;
+        let signalCount = 0;
+        const onSignal = (number: number) => {
+          signalCount += 1;
+          if (signalCount > 1) {
+            process.exit(number);
+          }
+          signalNumber = number;
+          controller.abort();
+        };
+        const onInterrupt = () => onSignal(130);
+        const onTerminate = () => onSignal(143);
+        process.on("SIGINT", onInterrupt);
+        process.on("SIGTERM", onTerminate);
+        try {
+          const result = await builds.wait(options.pr, options.build, {
+            intervalSeconds: options.intervalSeconds,
+            timeoutSeconds: options.timeoutSeconds,
+            signal: controller.signal,
+            onProgress: (event) => console.error(builds.formatWaitProgress(event)),
+          });
+          if (signalNumber !== undefined) {
+            process.exitCode = signalNumber;
+            return;
+          }
+          console.log(options.json ? JSON.stringify(result, null, 2) : builds.formatWaitResult(result));
+          process.exitCode = result.timedOut || result.outcome === "timeout"
+            ? 124
+            : result.outcome === "succeeded" ? 0 : 1;
+        } catch (error) {
+          if (signalNumber !== undefined || controller.signal.aborted) {
+            process.exitCode = signalNumber ?? 130;
+            return;
+          }
+          throw error;
+        } finally {
+          process.removeListener("SIGINT", onInterrupt);
+          process.removeListener("SIGTERM", onTerminate);
+        }
+        return;
+      }
     }
     return assertNever(options);
   }

@@ -87,6 +87,7 @@ test("bare --help and -h document every resource-first command and the batch con
     "build list",
     "build show",
     "build retry",
+    "build wait",
     "comment create",
     "comment reply",
     "comment edit",
@@ -138,6 +139,7 @@ test("qualified command help succeeds after route and supplied-option validation
     ["build", "list"],
     ["build", "show"],
     ["build", "retry"],
+    ["build", "wait"],
     ["comment", "create"],
     ["comment", "reply"],
     ["comment", "edit"],
@@ -148,6 +150,7 @@ test("qualified command help succeeds after route and supplied-option validation
     assertSuccessfulHelp(runCli(resource, command, "--help"));
   }
   assertSuccessfulHelp(runCli("pr", "show", "--pr", "42", "-h"));
+  assertSuccessfulHelp(runCli("build", "wait", "--build", "42", "--interval", "10", "--timeout", "86400", "--help"));
 });
 
 test("help does not mask malformed command-like invocations", () => {
@@ -218,12 +221,32 @@ test("legacy flat action aliases remain rejected even when combined with help", 
   }
 });
 
+test("build wait defaults, accepts bounds, and validates its parser contract", () => {
+  assertParsedBeforePat("build", "wait", "--build", "7");
+  assertParsedBeforePat("build", "wait", "--build=7", "--pr=42", "--interval=10", "--timeout", "86400");
+  for (const [args, expected] of [
+    [["build", "wait", "--build", "7", "--interval", "9"], "Error: --interval must be between 10 and 3600 seconds"],
+    [["build", "wait", "--build", "7", "--interval", "3601"], "Error: --interval must be between 10 and 3600 seconds"],
+    [["build", "wait", "--build", "7", "--timeout", "9"], "Error: --timeout must be between 10 and 86400 seconds"],
+    [["build", "wait", "--build", "7", "--timeout", "86401"], "Error: --timeout must be between 10 and 86400 seconds"],
+    [["build", "wait", "--build", "7", "--interval"], "Error: --interval requires an explicit value"],
+    [["build", "wait", "--build", "7", "--timeout"], "Error: --timeout requires an explicit value"],
+    [["build", "wait", "--build", "7", "--timeout="], 'Error: invalid --timeout "" (pass it once, as a single positive integer)'],
+    [["build", "wait", "--build", "7", "--interval", "9007199254740993"], 'Error: invalid --interval "9007199254740993" (pass it once, as a single positive integer)'],
+    [["build", "wait", "--build", "7", "--timeout", "9007199254740993"], 'Error: invalid --timeout "9007199254740993" (pass it once, as a single positive integer)'],
+    [["build", "wait", "--build", "7", "--interval", "10", "--interval", "20"], "Error: --interval may only be passed once"],
+    [["build", "wait", "--build", "7", "--timeout", "10", "--timeout", "20"], "Error: --timeout may only be passed once"],
+    [["build", "wait", "--build", "7", "--json", "--interval", "9"], "Error: --interval must be between 10 and 3600 seconds"],
+    [["build", "wait", "--build", "7", "--history"], 'Error: --history is not valid for "build wait"'],
+  ]) assertUsageError(runCli(...args), expected);
+});
+
 test("build flags parse with registry-derived types and reject missing or foreign options", () => {
   assertParsedBeforePat("build", "list", "--history");
   assertParsedBeforePat("build", "show", "--build", "7", "--full-logs");
   assertParsedBeforePat("build", "retry", "--build", "7", "--pr", "42");
 
-  for (const command of ["show", "retry"]) {
+  for (const command of ["show", "retry", "wait"]) {
     assertUsageError(
       runCli("build", command),
       `Error: --build is required for "build ${command}"`,
@@ -374,6 +397,10 @@ test("positive integer flags and duplicate flags are rejected", () => {
   for (const value of ["9007199254740993", "1e2", "+7", "01"]) {
     assertUsageError(
       runCli("build", "show", "--build", value),
+      `Error: invalid --build "${value}" (pass it once, as a single positive integer)`,
+    );
+    assertUsageError(
+      runCli("build", "wait", "--build", value),
       `Error: invalid --build "${value}" (pass it once, as a single positive integer)`,
     );
   }

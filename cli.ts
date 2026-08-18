@@ -246,6 +246,17 @@ function parseCommandFlags<Id extends CommandId>(
       printUsageAndExit(`${choices} is required for "${route}"`);
     }
   }
+  if (validationRules?.includes("buildWaitBounds")) {
+    const interval = values.interval as number | undefined;
+    const timeout = values.timeout as number | undefined;
+    if (interval !== undefined && (interval < 10 || interval > 3600)) {
+      printUsageAndExit(`--interval must be between 10 and 3600 seconds`);
+    }
+    if (timeout !== undefined && (timeout < 10 || timeout > 86400)) {
+      printUsageAndExit(`--timeout must be between 10 and 86400 seconds`);
+    }
+  }
+
   if (validationRules?.includes("commentLocation")) {
     const file = values.file as string | undefined;
     const line = values.line as number | undefined;
@@ -333,6 +344,15 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
     command: "retry",
     build: values.build,
     pr: values.pr,
+  }),
+  "build.wait": (values) => ({
+    resource: "build",
+    command: "wait",
+    build: values.build,
+    pr: values.pr,
+    intervalSeconds: values.interval ?? 60,
+    timeoutSeconds: values.timeout ?? 3600,
+    json: values.json,
   }),
   "comment.list": (values) => ({
     resource: "comment",

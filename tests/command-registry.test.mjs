@@ -32,6 +32,9 @@ test("registers resource-first build routes and keeps them out of batch schemas"
   assert.deepEqual(COMMAND_REGISTRY["build.list"].flags, ["pr", "history", "json"]);
   assert.deepEqual(COMMAND_REGISTRY["build.show"].requiredFlags, ["build"]);
   assert.deepEqual(COMMAND_REGISTRY["build.retry"].requiredFlags, ["build"]);
+  assert.deepEqual(COMMAND_REGISTRY["build.wait"].flags, ["build", "pr", "interval", "timeout", "json"]);
+  assert.deepEqual(COMMAND_REGISTRY["build.wait"].requiredFlags, ["build"]);
+  assert.equal(COMMAND_REGISTRY["build.wait"].usage, "build wait --build <id> [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]");
   assert.ok(!BATCH_COMMANDS.some((command) => command.startsWith("build.")));
   assert.equal(FLAG_DEFINITIONS.build.kind, "positiveInteger");
   assert.equal(FLAG_DEFINITIONS.history.kind, "boolean");
@@ -98,4 +101,9 @@ test("help is generated from every registered command and batch schema", () => {
     help,
     /--remove-reviewer resolves current PR reviewers and needs only Code \(Read & Write\)\./,
   );
+  assert.match(help, /requested build, whether it is current or\s+historical/);
+  assert.match(help, /--pr only selects or resolves the associated pull request/);
+  assert.match(help, /default 60 seconds/);
+  assert.match(help, /10–3600 seconds/);
+  assert.match(help, /10–86400 seconds/);
 });
