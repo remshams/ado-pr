@@ -9,8 +9,12 @@
 # Requires:
 #   - Node.js >= 22.6 (TypeScript stripping and --env-file support). No build step is needed.
 #   - AZURE_DEVOPS_PAT either exported by the caller or set in a .env path alongside this script.
-#     Mutations need Code (Read & Write); reviewer additions also need Identity (Read). Reviewer
-#     removal resolves current PR reviewers and does not need Identity access.
+#     Mutations need Code (Read & Write); build queries need Build (Read, vso.build), and build
+#     retries need Build execute (vso.build_execute). Reviewer additions also need Identity (Read).
+#     Reviewer removal resolves current PR reviewers and does not need Identity access. Build support
+#     covers YAML/classic Build API validations only: no Releases, external checks, or individual
+#     stage/job/task retries; diagnostics default to the final 200 log lines, while --full-logs is
+#     explicit and potentially sensitive.
 #     Regular files accept a literal PAT or an op:// reference resolved just-in-time by 1Password
 #     CLI. The path may also be a 1Password Environment mount containing a literal PAT.
 set -euo pipefail
