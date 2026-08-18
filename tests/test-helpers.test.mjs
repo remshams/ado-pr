@@ -64,6 +64,15 @@ test("createMockFetch reports responses left unused during test teardown", () =>
   );
 });
 
+test("createMockFetch cancels a delayed response through the request signal", async (t) => {
+  const controller = new AbortController();
+  const { fetch, calls } = createMockFetch(t, [{ delayMs: 10_000, json: { late: true } }]);
+  const pending = fetch("https://example.invalid/delayed", { signal: controller.signal });
+  controller.abort(new Error("test cancellation"));
+  await assert.rejects(pending, /test cancellation/);
+  assert.equal(calls.length, 1);
+});
+
 test("createMockFetch validates queued response fixtures eagerly", (t) => {
   assert.throws(() => createMockFetch(t, {}), {
     name: "TypeError",

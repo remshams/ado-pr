@@ -85,7 +85,22 @@ export function createFetchQueue(responses, { onCall } = {}) {
 
     const { response, delayMs } = queue.shift();
     if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const signal = init?.signal;
+      await new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, delayMs);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
     }
     return response;
   };

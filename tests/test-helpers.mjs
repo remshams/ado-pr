@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -295,6 +295,133 @@ export function captureConsole(t, methods = ["log", "error", "warn"]) {
  * infrastructure assertions. The subprocess is killed after `timeout` ms.
  * Returns the normal `spawnSync` result plus parsed `calls` and `environment`.
  */
+export function startPr(
+  t,
+  args = [],
+  {
+    cwd = projectRoot,
+    responses = [],
+    env = {},
+    fakePat = "test-only-fake-pat",
+    timeout = 5_000,
+  } = {},
+) {
+  assert.ok(Array.isArray(args), "startPr args must be an array");
+  validateFetchResponses(responses);
+  assert.ok(
+    responses.every((response) => !(response instanceof Response)),
+    "startPr responses must be serializable descriptors, not Response objects",
+  );
+  assert.ok(Number.isFinite(timeout) && timeout > 0, "startPr timeout must be positive");
+
+  const tempPath = mkdtempSync(join(tmpdir(), "ado-pr-test-async-run-"));
+  const callsPath = join(tempPath, "fetch-calls.json");
+  const environmentPath = join(tempPath, "environment.json");
+  writeFileSync(callsPath, "[]\n");
+  writeFileSync(environmentPath, "{}\n");
+
+  const childEnv = { ...inheritedTestEnvironment(), ...env };
+  childEnv.AZURE_DEVOPS_PAT = fakePat;
+  childEnv[FETCH_RESPONSES_ENV] = JSON.stringify(responses);
+  childEnv[FETCH_CALLS_FILE_ENV] = callsPath;
+  childEnv[ENV_PROBE_NAMES_ENV] = "[]";
+  childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
+
+  const child = spawn(
+    process.execPath,
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--experimental-strip-types",
+      "--import",
+      fetchPreloadPath,
+      prPath,
+      ...args,
+    ],
+    { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  let closed = false;
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+
+  let timeoutHandle;
+  let timedOut = false;
+  const completion = new Promise((resolve, reject) => {
+    let spawnError;
+    child.once("error", (error) => { spawnError = error; });
+    child.once("close", (status, signal) => {
+      closed = true;
+      clearTimeout(timeoutHandle);
+      if (spawnError !== undefined) {
+        reject(spawnError);
+        return;
+      }
+      if (timedOut) {
+        reject(
+          new Error(
+            `pr.ts async subprocess timed out after ${timeout}ms` +
+              `${stdout ? `\nstdout:\n${stdout}` : ""}` +
+              `${stderr ? `\nstderr:\n${stderr}` : ""}`,
+          ),
+        );
+        return;
+      }
+      resolve({
+        status,
+        signal,
+        stdout,
+        stderr,
+        calls: JSON.parse(readFileSync(callsPath, "utf8")),
+      });
+    });
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeout);
+  });
+
+  void completion.catch(() => undefined);
+
+  const waitUntil = async (predicate, description) => {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      let value;
+      try {
+        value = predicate();
+      } catch {
+        // The preload rewrites files synchronously; retry a transient partial read.
+      }
+      if (value) return value;
+      if (closed) throw new Error(`pr.ts exited before ${description}:\n${stderr}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`Timed out waiting for ${description}`);
+  };
+
+  t.after(async () => {
+    if (!closed) child.kill("SIGKILL");
+    await completion.catch(() => undefined);
+    rmSync(tempPath, { recursive: true, force: true });
+  });
+
+  return {
+    child,
+    completion,
+    waitForCalls(count) {
+      return waitUntil(() => {
+        const calls = JSON.parse(readFileSync(callsPath, "utf8"));
+        return calls.length >= count ? calls : undefined;
+      }, `${count} fetch call(s)`);
+    },
+    waitForStderr(pattern) {
+      return waitUntil(() => pattern.test(stderr), `stderr matching ${pattern}`);
+    },
+  };
+}
+
 export function runPr(
   t,
   args = [],
