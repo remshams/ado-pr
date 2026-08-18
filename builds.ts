@@ -5,6 +5,16 @@ import type { PullRequest, PullRequestService } from "./pull-requests.ts";
 
 const BUILD_PAGE_SIZE = 100;
 const DEFAULT_LOG_LINE_COUNT = 200;
+const MAX_BUILD_PAGES = 1_000;
+const MAX_BUILD_RESPONSES = 100_000;
+const MAX_CONTINUATION_TOKEN_LENGTH = 8_192;
+const MAX_TIMELINE_RECORDS = 50_000;
+const MAX_LOG_METADATA_RECORDS = 50_000;
+const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_DEFAULT_LOG_BYTES = 2 * 1024 * 1024;
+const READ_TIMEOUT_MS = 30_000;
+const RETRY_TIMEOUT_MS = 60_000;
+const MAX_DISPLAY_DEPTH = 20;
 const PROBLEM_RESULTS = new Set([
   "failed",
   "succeededwithissues",
@@ -61,7 +71,7 @@ export interface TimelineLogReference extends AzureObject {
 
 export interface TimelineRecord extends AzureObject {
   id?: string;
-  parentId?: string;
+  parentId?: string | null;
   type?: string;
   name?: string;
   state?: string;
@@ -214,23 +224,23 @@ function optionalString(value: unknown, context: string): string | undefined {
 }
 
 function requirePositiveInteger(value: unknown, context: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new Error(`Malformed Azure DevOps response: ${context} must be a positive integer.`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Malformed Azure DevOps response: ${context} must be a positive safe integer.`);
   }
   return value;
 }
 
 function optionalNonNegativeInteger(value: unknown, context: string): number | undefined {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new Error(`Malformed Azure DevOps response: ${context} must be a non-negative integer.`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Malformed Azure DevOps response: ${context} must be a non-negative safe integer.`);
   }
   return value;
 }
 
 function assertRequestedBuildId(buildId: number): void {
-  if (!Number.isInteger(buildId) || buildId < 1) {
-    throw new Error("Build ID must be a positive integer.");
+  if (!Number.isSafeInteger(buildId) || buildId < 1) {
+    throw new Error("Build ID must be a positive safe integer.");
   }
 }
 
@@ -295,7 +305,7 @@ function assertActivePullRequest(pr: ValidatedPullRequest, operation: string): v
   }
   if (normalized(pr.status) !== "active") {
     throw new Error(
-      `Cannot ${operation}: PR #${pr.id} is ${pr.status}; only active pull requests are eligible. Use build history/show for completed or abandoned pull requests.`,
+      `Cannot ${operation}: PR #${pr.id} is ${display(pr.status)}; only active pull requests are eligible. Use build history/show for completed or abandoned pull requests.`,
     );
   }
 }
@@ -364,6 +374,8 @@ function assertBuildAssociation(build: AzureBuild, pr: ValidatedPullRequest): vo
 
 function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
   return (
+    pr.status !== undefined &&
+    normalized(pr.status) === "active" &&
     pr.mergeCommit !== undefined &&
     equalsIdentifier(build.sourceVersion as string, pr.mergeCommit)
   );
@@ -372,16 +384,24 @@ function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 function validateTimeline(value: unknown): BuildTimeline {
   const timeline = requireObject(value, "timeline") as BuildTimeline;
   const rawRecords = requireArray(timeline.records, "timeline.records");
+  if (rawRecords.length > MAX_TIMELINE_RECORDS) {
+    throw new Error(
+      `Azure DevOps timeline returned ${rawRecords.length} records; the safety limit is ${MAX_TIMELINE_RECORDS}.`,
+    );
+  }
   const ids = new Set<string>();
   timeline.records = rawRecords.map((rawRecord, index) => {
     const context = `timeline.records[${index}]`;
     const record = requireObject(rawRecord, context) as TimelineRecord;
     if (record.id !== undefined && record.id !== null) {
       const id = requireString(record.id, describeField(context, "id"));
-      if (ids.has(id)) {
-        throw new Error(`Malformed Azure DevOps response: duplicate timeline record ID "${id}".`);
+      const normalizedId = normalized(id);
+      if (ids.has(normalizedId)) {
+        throw new Error(
+          `Malformed Azure DevOps response: duplicate case-insensitive timeline record ID "${stripTerminalControls(id)}".`,
+        );
       }
-      ids.add(id);
+      ids.add(normalizedId);
     }
     optionalString(record.parentId, describeField(context, "parentId"));
     optionalString(record.type, describeField(context, "type"));
@@ -415,6 +435,11 @@ function validateTimeline(value: unknown): BuildTimeline {
 function validateLogMetadata(value: unknown): BuildLogMetadata[] {
   const envelope = requireObject(value, "build logs response");
   const logs = requireArray(envelope.value, "build logs response.value");
+  if (logs.length > MAX_LOG_METADATA_RECORDS) {
+    throw new Error(
+      `Azure DevOps returned ${logs.length} build-log records; the safety limit is ${MAX_LOG_METADATA_RECORDS}.`,
+    );
+  }
   const ids = new Set<number>();
   return logs.map((rawLog, index) => {
     const context = `build logs response.value[${index}]`;
@@ -445,23 +470,25 @@ function orderTimelineRecords(timeline: BuildTimeline): OrderedTimelineRecord[] 
   const records = timeline.records as TimelineRecord[];
   const indexById = new Map<string, number>();
   records.forEach((record, index) => {
-    if (record.id !== undefined) indexById.set(record.id, index);
+    if (record.id !== undefined) indexById.set(normalized(record.id), index);
   });
+
   const children = new Map<number, number[]>();
+  const parentByChild = new Map<number, number>();
   const roots: number[] = [];
   const orphanParents = new Map<number, string>();
-
   records.forEach((record, index) => {
-    if (record.parentId === undefined) {
+    if (record.parentId === undefined || record.parentId === null) {
       roots.push(index);
       return;
     }
-    const parentIndex = indexById.get(record.parentId);
+    const parentIndex = indexById.get(normalized(record.parentId));
     if (parentIndex === undefined) {
       roots.push(index);
       orphanParents.set(index, record.parentId);
       return;
     }
+    parentByChild.set(index, parentIndex);
     const entries = children.get(parentIndex) ?? [];
     entries.push(index);
     children.set(parentIndex, entries);
@@ -471,51 +498,54 @@ function orderTimelineRecords(timeline: BuildTimeline): OrderedTimelineRecord[] 
     entries.sort((left, right) => compareRecordIndexes(records, left, right));
   }
 
-  const output: OrderedTimelineRecord[] = [];
-  const visited = new Set<number>();
-  const visiting = new Set<number>();
+  // Each record has at most one parent, so cycle membership can be found iteratively by following
+  // parent links. This avoids recursion overflow on malformed/deep timelines.
+  const fullyScanned = new Set<number>();
   const cycleMembers = new Set<number>();
-
-  function visit(index: number, depth: number): void {
-    if (visiting.has(index)) {
-      cycleMembers.add(index);
-      return;
+  for (let start = 0; start < records.length; start += 1) {
+    if (fullyScanned.has(start)) continue;
+    const path: number[] = [];
+    const position = new Map<number, number>();
+    let current: number | undefined = start;
+    while (current !== undefined && !fullyScanned.has(current) && !position.has(current)) {
+      position.set(current, path.length);
+      path.push(current);
+      current = parentByChild.get(current);
     }
-    if (visited.has(index)) return;
-    visiting.add(index);
-    visited.add(index);
-    const outputIndex = output.length;
-    output.push({
-      record: records[index],
-      index,
-      depth,
-      orphanParent: orphanParents.get(index),
-      cycle: false,
-    });
-    for (const child of children.get(index) ?? []) {
-      if (visiting.has(child)) {
-        cycleMembers.add(index);
-        cycleMembers.add(child);
-      } else {
-        visit(child, depth + 1);
-      }
+    if (current !== undefined && position.has(current)) {
+      for (const member of path.slice(position.get(current))) cycleMembers.add(member);
     }
-    visiting.delete(index);
-    if (cycleMembers.has(index)) output[outputIndex].cycle = true;
+    for (const member of path) fullyScanned.add(member);
   }
 
-  for (const root of roots) visit(root, 0);
+  const output: OrderedTimelineRecord[] = [];
+  const visited = new Set<number>();
+  function appendFrom(start: number): void {
+    const stack: Array<{ index: number; depth: number }> = [{ index: start, depth: 0 }];
+    while (stack.length > 0) {
+      const next = stack.pop() as { index: number; depth: number };
+      if (visited.has(next.index)) continue;
+      visited.add(next.index);
+      output.push({
+        record: records[next.index],
+        index: next.index,
+        depth: next.depth,
+        orphanParent: orphanParents.get(next.index),
+        cycle: cycleMembers.has(next.index),
+      });
+      const entries = children.get(next.index) ?? [];
+      for (let childIndex = entries.length - 1; childIndex >= 0; childIndex -= 1) {
+        stack.push({ index: entries[childIndex], depth: next.depth + 1 });
+      }
+    }
+  }
+
+  for (const root of roots) appendFrom(root);
   const remaining = records
     .map((_record, index) => index)
     .filter((index) => !visited.has(index))
     .sort((left, right) => compareRecordIndexes(records, left, right));
-  for (const index of remaining) {
-    cycleMembers.add(index);
-    visit(index, 0);
-  }
-  for (const entry of output) {
-    if (cycleMembers.has(entry.index)) entry.cycle = true;
-  }
+  for (const index of remaining) appendFrom(index);
   return output;
 }
 
@@ -538,12 +568,14 @@ function buildDefinitionName(build: AzureBuild): string {
 }
 
 function display(value: unknown): string {
-  if (typeof value === "string" && value.length > 0) return stripTerminalControls(value);
+  if (typeof value === "string" && value.length > 0) {
+    return stripTerminalControls(value).replace(/[\r\n]+/g, " ").replace(/\t/g, " ");
+  }
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return "unknown";
 }
 
-/** Removes ANSI/terminal control sequences while preserving printable text, tabs, and newlines. */
+/** Removes ANSI/terminal control sequences while preserving ordinary log tabs and newlines. */
 export function stripTerminalControls(value: string): string {
   return value
     .replace(/\r\n/g, "\n")
@@ -552,7 +584,15 @@ export function stripTerminalControls(value: string): string {
     .replace(/\x1B[P^_][\s\S]*?\x1B\\/g, "")
     .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\x1B[@-_]/g, "")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "");
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g, "");
+}
+
+function finalLines(value: string, maximum: number): string {
+  const trailingNewline = value.endsWith("\n");
+  const lines = value.split("\n");
+  if (trailingNewline) lines.pop();
+  if (lines.length <= maximum) return value;
+  return `${lines.slice(-maximum).join("\n")}${trailingNewline ? "\n" : ""}`;
 }
 
 function sanitizeError(error: unknown): string {
@@ -640,9 +680,10 @@ function formatTimeline(result: BuildShowEnvelope): string[] {
     const anomaly = [
       ...(orphanParent === undefined ? [] : [`orphan parent ${display(orphanParent)}`]),
       ...(cycle ? ["cycle"] : []),
+      ...(depth > MAX_DISPLAY_DEPTH ? [`depth ${depth}`] : []),
     ];
     return (
-      `${"  ".repeat(depth)}- ${display(record.type)}/${display(record.name)}: ` +
+      `${"  ".repeat(Math.min(depth, MAX_DISPLAY_DEPTH))}- ${display(record.type)}/${display(record.name)}: ` +
       `state=${display(record.state)}, result=${display(record.result)}, attempt=${display(record.attempt)}` +
       (anomaly.length === 0 ? "" : ` [${anomaly.join(", ")}]`)
     );
@@ -692,12 +733,25 @@ export function createBuildService({
   pullRequests: PullRequestService;
 }): BuildService {
   async function resolvePullRequest(requestedPrId: number | undefined): Promise<ValidatedPullRequest> {
-    return validatePullRequest(await pullRequests.resolve(requestedPrId), "pull request");
+    const pr = validatePullRequest(await pullRequests.resolve(requestedPrId), "pull request");
+    if (requestedPrId !== undefined && pr.id !== requestedPrId) {
+      throw new Error(
+        `Malformed Azure DevOps response: hydrated pull request ID ${pr.id} did not match selected PR #${requestedPrId}.`,
+      );
+    }
+    return pr;
   }
 
   async function fetchBuild(buildId: number, context = "build"): Promise<AzureBuild> {
     const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
-    return assertFetchedBuild(await azure.request<unknown>(url), buildId, context);
+    return assertFetchedBuild(
+      await azure.request<unknown>(url, {
+        timeoutMs: READ_TIMEOUT_MS,
+        maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+      }),
+      buildId,
+      context,
+    );
   }
 
   async function list(
@@ -713,20 +767,56 @@ export function createBuildService({
     }
 
     const builds: AzureBuild[] = [];
+    const seenBuildIds = new Set<number>();
     const seenContinuationTokens = new Set<string>();
     let continuationToken: string | undefined;
+    let pageCount = 0;
+    let responseBuildCount = 0;
     do {
+      pageCount += 1;
+      if (pageCount > MAX_BUILD_PAGES) {
+        throw new Error(
+          `Azure DevOps build pagination exceeded the safety limit of ${MAX_BUILD_PAGES} pages.`,
+        );
+      }
       const response = await azure.requestWithMetadata<unknown>(
         listUrl(ctx, pr, continuationToken),
+        { timeoutMs: READ_TIMEOUT_MS, maxResponseBytes: MAX_JSON_RESPONSE_BYTES },
       );
-      builds.push(...assertListEnvelope(response.data));
+      const page = assertListEnvelope(response.data);
+      responseBuildCount += page.length;
+      if (responseBuildCount > MAX_BUILD_RESPONSES) {
+        throw new Error(
+          `Azure DevOps build pagination exceeded the safety limit of ${MAX_BUILD_RESPONSES} builds.`,
+        );
+      }
+      for (const build of page) {
+        if (buildAssociationMismatch(build, pr) !== undefined) continue;
+        if (!history && !equalsIdentifier(build.sourceVersion as string, mergeCommit as string)) {
+          continue;
+        }
+        const buildId = build.id as number;
+        if (seenBuildIds.has(buildId)) {
+          throw new Error(
+            `Azure DevOps build pagination returned duplicate build ID ${buildId}; refusing an ambiguous result.`,
+          );
+        }
+        seenBuildIds.add(buildId);
+        builds.push(build);
+      }
+
       const nextToken = response.metadata.headers.get("x-ms-continuationtoken") ?? undefined;
       if (nextToken === undefined || nextToken.length === 0) {
         continuationToken = undefined;
       } else {
+        if (nextToken.length > MAX_CONTINUATION_TOKEN_LENGTH) {
+          throw new Error(
+            `Azure DevOps build pagination returned an oversized continuation token.`,
+          );
+        }
         if (seenContinuationTokens.has(nextToken)) {
           throw new Error(
-            `Azure DevOps build pagination repeated continuation token "${nextToken}"; refusing to loop.`,
+            `Azure DevOps build pagination repeated a continuation token; refusing to loop.`,
           );
         }
         seenContinuationTokens.add(nextToken);
@@ -734,11 +824,27 @@ export function createBuildService({
       }
     } while (continuationToken !== undefined);
 
-    const associated = builds.filter((build) => buildAssociationMismatch(build, pr) === undefined);
-    const filtered = history
-      ? associated
-      : associated.filter((build) => equalsIdentifier(build.sourceVersion as string, mergeCommit as string));
-    return { pullRequest: pr.summary, history, builds: filtered };
+    if (!history) {
+      const refreshed = validatePullRequest(
+        await pullRequests.get(pr.id),
+        "refreshed pull request",
+      );
+      assertActivePullRequest(refreshed, "finish listing current builds");
+      const refreshedMergeCommit = requireCurrentMergeCommit(
+        refreshed,
+        "finish listing current builds",
+      );
+      if (
+        refreshed.id !== pr.id ||
+        !equalsIdentifier(refreshed.repositoryId, pr.repositoryId) ||
+        !equalsIdentifier(refreshedMergeCommit, mergeCommit as string)
+      ) {
+        throw new Error(
+          `PR #${pr.id} changed while current builds were being listed; rerun the command.`,
+        );
+      }
+    }
+    return { pullRequest: pr.summary, history, builds };
   }
 
   async function show(
@@ -750,8 +856,18 @@ export function createBuildService({
     const pr = await resolvePullRequest(requestedPrId);
     const build = await fetchBuild(buildId);
     assertBuildAssociation(build, pr);
-    const timeline = validateTimeline(await azure.request<unknown>(timelineUrl(ctx, buildId)));
-    const logMetadata = validateLogMetadata(await azure.request<unknown>(logsUrl(ctx, buildId)));
+    const timeline = validateTimeline(
+      await azure.request<unknown>(timelineUrl(ctx, buildId), {
+        timeoutMs: READ_TIMEOUT_MS,
+        maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+      }),
+    );
+    const logMetadata = validateLogMetadata(
+      await azure.request<unknown>(logsUrl(ctx, buildId), {
+        timeoutMs: READ_TIMEOUT_MS,
+        maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+      }),
+    );
     const metadataById = new Map(logMetadata.map((metadata) => [metadata.id as number, metadata]));
     const records = timelineProblemRecords(timeline);
     const requestedLogs = new Map<
@@ -769,7 +885,7 @@ export function createBuildService({
       const metadata = metadataById.get(logId);
       if (metadata === undefined) {
         throw new Error(
-          `Build ${buildId} timeline record ${record.id ?? record.name ?? "unknown"} references log ${logId}, but the build-log metadata response did not contain it.`,
+          `Build ${buildId} timeline record ${display(record.id ?? record.name)} references log ${logId}, but the build-log metadata response did not contain it.`,
         );
       }
       if (requestedLogs.has(logId)) continue;
@@ -785,10 +901,8 @@ export function createBuildService({
           metadata,
           mode: "tail",
           range: {
-            startLine:
-              metadata.lineCount === 0
-                ? 0
-                : Math.max(1, metadata.lineCount - DEFAULT_LOG_LINE_COUNT + 1),
+            // Azure's log ranges are zero-based with an exclusive end line.
+            startLine: Math.max(0, metadata.lineCount - DEFAULT_LOG_LINE_COUNT),
             endLine: metadata.lineCount,
           },
         });
@@ -802,11 +916,15 @@ export function createBuildService({
         continue;
       }
       try {
-        const text = await azure.request(
-          logTextUrl(ctx, buildId, logId, request.range),
-          { responseType: "text", accept: "text/plain" },
-        );
-        logResults.set(logId, { text });
+        const text = await azure.request(logTextUrl(ctx, buildId, logId, request.range), {
+          responseType: "text",
+          accept: "text/plain",
+          timeoutMs: READ_TIMEOUT_MS,
+          ...(request.mode === "tail" ? { maxResponseBytes: MAX_DEFAULT_LOG_BYTES } : {}),
+        });
+        logResults.set(logId, {
+          text: request.mode === "tail" ? finalLines(text, DEFAULT_LOG_LINE_COUNT) : text,
+        });
       } catch (error) {
         logResults.set(logId, { error: sanitizeError(error) });
       }
@@ -863,7 +981,7 @@ export function createBuildService({
     }
     if (normalized(build.status) !== "completed") {
       throw new Error(
-        `Cannot ${operation}: build ${build.id as number} status is ${build.status}; it must be completed.`,
+        `Cannot ${operation}: build ${build.id as number} status is ${display(build.status)}; it must be completed.`,
       );
     }
     if (typeof build.result !== "string") {
@@ -871,7 +989,7 @@ export function createBuildService({
     }
     if (!RETRYABLE_RESULTS.has(normalized(build.result))) {
       throw new Error(
-        `Cannot ${operation}: build ${build.id as number} result is ${build.result}; only failed, partiallySucceeded, or canceled builds can be retried.`,
+        `Cannot ${operation}: build ${build.id as number} result is ${display(build.result)}; only failed, partiallySucceeded, or canceled builds can be retried.`,
       );
     }
   }
@@ -900,14 +1018,24 @@ export function createBuildService({
     const url = `${buildBaseUrl(ctx)}/${buildId}?retry=true&api-version=${API_VERSION}`;
     try {
       const returnedBuild = validateBuild(
-        await azure.request<unknown>(url, { method: "PATCH", body: { id: buildId } }),
+        await azure.request<unknown>(url, {
+          method: "PATCH",
+          body: { id: buildId },
+          timeoutMs: RETRY_TIMEOUT_MS,
+          maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+        }),
         "retry response build",
       );
       assertBuildAssociation(returnedBuild, refreshedPr);
+      if (!isCurrentBuild(returnedBuild, refreshedPr)) {
+        throw new Error(
+          `Retry response build ${returnedBuild.id as number} does not match PR #${refreshedPr.id}'s current merge commit.`,
+        );
+      }
       return returnedBuild;
     } catch (error) {
       throw new Error(
-        `Retry request for build ${buildId} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Inspect it with \`pr.sh build show --build ${buildId}\` or \`pr.sh build list\` before trying again.\n${sanitizeError(error)}`,
+        `Retry request for build ${buildId} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Inspect it with \`pr.sh build show --pr ${refreshedPr.id} --build ${buildId}\` or \`pr.sh build list --pr ${refreshedPr.id} --history\` before trying again.\n${sanitizeError(error)}`,
       );
     }
   }
@@ -922,12 +1050,14 @@ export function createBuildService({
       return `No associated ${scope} builds found for PR #${result.pullRequest.id}.`;
     }
     return [
-      `Builds for PR #${result.pullRequest.id}: ${stripTerminalControls(result.pullRequest.title)} (${scope})`,
+      `Builds for PR #${result.pullRequest.id}: ${display(result.pullRequest.title)} (${scope})`,
       "",
       ...result.builds.flatMap((build, index) => [
         formatBuildRow(
           build,
-          result.pullRequest.currentMergeCommit !== null &&
+          result.pullRequest.status !== null &&
+            normalized(result.pullRequest.status) === "active" &&
+            result.pullRequest.currentMergeCommit !== null &&
             equalsIdentifier(
               build.sourceVersion as string,
               result.pullRequest.currentMergeCommit,

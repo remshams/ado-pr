@@ -128,7 +128,10 @@ describe("build discovery", () => {
       history: false,
       builds: [current],
     });
-    assert.deepEqual(pullRequestCalls, [{ method: "resolve", requestedPrId: undefined }]);
+    assert.deepEqual(pullRequestCalls, [
+      { method: "resolve", requestedPrId: undefined },
+      { method: "get", prId: 42 },
+    ]);
     assert.deepEqual(requestShapes(calls), [
       {
         url: listUrl(),
@@ -181,10 +184,51 @@ describe("build discovery", () => {
     ]);
 
     await assert.rejects(service.list(42, { history: true }), {
-      message:
-        'Azure DevOps build pagination repeated continuation token "repeat"; refusing to loop.',
+      message: "Azure DevOps build pagination repeated a continuation token; refusing to loop.",
     });
     assert.equal(calls.length, 2);
+  });
+
+  test("rejects duplicate builds and oversized continuation tokens", async (t) => {
+    const duplicate = setup(t, [
+      {
+        json: { value: [build()] },
+        headers: { "x-ms-continuationtoken": "next" },
+      },
+      { json: { value: [build()] } },
+    ]);
+    await assert.rejects(
+      duplicate.service.list(42, { history: true }),
+      /duplicate build ID 700/,
+    );
+
+    const oversized = setup(t, [
+      {
+        json: { value: [] },
+        headers: { "x-ms-continuationtoken": "x".repeat(8_193) },
+      },
+    ]);
+    await assert.rejects(
+      oversized.service.list(42, { history: true }),
+      /oversized continuation token/,
+    );
+    assert.equal(oversized.calls.length, 1);
+  });
+
+  test("rejects a current-list result if the PR changes during pagination", async (t) => {
+    const changedCommit = setup(
+      t,
+      [{ json: { value: [build()] } }],
+      { getValues: [pullRequest({ lastMergeCommit: { commitId: "new-merge" } })] },
+    );
+    await assert.rejects(changedCommit.service.list(42), /changed while current builds were being listed/);
+
+    const changedStatus = setup(
+      t,
+      [{ json: { value: [build()] } }],
+      { getValues: [pullRequest({ status: "completed" })] },
+    );
+    await assert.rejects(changedStatus.service.list(42), /only active pull requests are eligible/);
   });
 
   test("current listing rejects inactive and merge-less PRs before the Build API", async (t) => {
@@ -281,7 +325,7 @@ describe("build diagnosis", () => {
       ["job", "task-a", "task-b", "canceled", "abandoned"],
     );
     assert.equal(result.problemRecords[1].logText, "\u001b[31merror\u001b[0m\nordinary\tline\n");
-    assert.deepEqual(result.problemRecords[1].logRange, { startLine: 251, endLine: 450 });
+    assert.deepEqual(result.problemRecords[1].logRange, { startLine: 250, endLine: 450 });
     assert.equal(result.problemRecords[2].logText, result.problemRecords[1].logText);
     assert.equal(result.problemRecords[0].noLog, true);
     assert.equal(result.problemRecords[3].noLog, true);
@@ -291,7 +335,7 @@ describe("build diagnosis", () => {
       `${buildBase}/700?api-version=7.1`,
       `${buildBase}/700/timeline?api-version=7.1`,
       `${buildBase}/700/logs?api-version=7.1`,
-      `${buildBase}/700/logs/17?startLine=251&endLine=450&api-version=7.1`,
+      `${buildBase}/700/logs/17?startLine=250&endLine=450&api-version=7.1`,
     ]);
     assert.equal(calls[3].headers.accept, "text/plain");
 
@@ -301,6 +345,14 @@ describe("build diagnosis", () => {
     assert.match(human, /Problem 1: Job\/Linux \[failed\]/);
     assert.match(human, /error\nordinary\tline/);
     assert.doesNotMatch(human, /\u001b/);
+  });
+
+  test("a matching build on a completed PR is still classified as historical", async (t) => {
+    const completed = pullRequest({ status: "completed" });
+    const { service } = setup(t, showResponses(), { resolveValues: [completed] });
+    const result = await service.show(42, 700);
+    assert.equal(result.current, false);
+    assert.match(service.formatShow(result), /PR: #42 \(history\)/);
   });
 
   test("full logs omit bounds and lineCount while retaining raw JSON-compatible text", async (t) => {
@@ -347,17 +399,48 @@ describe("build diagnosis", () => {
     const result = await service.show(42, 700);
 
     assert.deepEqual(result.problemRecords.map(({ logRange }) => logRange), [
-      { startLine: 1, endLine: 199 },
-      { startLine: 1, endLine: 200 },
-      { startLine: 2, endLine: 201 },
+      { startLine: 0, endLine: 199 },
+      { startLine: 0, endLine: 200 },
+      { startLine: 1, endLine: 201 },
       { startLine: 0, endLine: 0 },
     ]);
     assert.equal(result.problemRecords[3].logText, "");
     assert.deepEqual(calls.slice(3).map(({ url }) => url), [
-      `${buildBase}/700/logs/1?startLine=1&endLine=199&api-version=7.1`,
-      `${buildBase}/700/logs/2?startLine=1&endLine=200&api-version=7.1`,
-      `${buildBase}/700/logs/3?startLine=2&endLine=201&api-version=7.1`,
+      `${buildBase}/700/logs/1?startLine=0&endLine=199&api-version=7.1`,
+      `${buildBase}/700/logs/2?startLine=0&endLine=200&api-version=7.1`,
+      `${buildBase}/700/logs/3?startLine=1&endLine=201&api-version=7.1`,
     ]);
+  });
+
+  test("locally enforces the final-200-line and default byte limits", async (t) => {
+    const records = [
+      { id: "problem", type: "Task", name: "Lint", result: "failed", log: { id: 5 } },
+    ];
+    const serverIgnoredRange = setup(
+      t,
+      showResponses({
+        records,
+        logs: [{ id: 5, lineCount: 300 }],
+        texts: [{ body: `${Array.from({ length: 250 }, (_value, index) => `line-${index}`).join("\n")}\n` }],
+      }),
+    );
+    const result = await serverIgnoredRange.service.show(42, 700);
+    const lines = result.problemRecords[0].logText.trimEnd().split("\n");
+    assert.equal(lines.length, 200);
+    assert.equal(lines[0], "line-50");
+    assert.equal(lines.at(-1), "line-249");
+
+    const oversized = setup(
+      t,
+      showResponses({
+        records,
+        logs: [{ id: 5, lineCount: 1 }],
+        texts: [{ body: "x".repeat(2 * 1024 * 1024 + 1) }],
+      }),
+    );
+    const partial = await oversized.service.show(42, 700);
+    assert.equal(oversized.service.hasLogErrors(partial), true);
+    assert.match(partial.problemRecords[0].logError, /response body exceeded 2097152 bytes/);
   });
 
   test("continues after unique log failures, shares errors, and sanitizes terminal controls", async (t) => {
@@ -417,20 +500,43 @@ describe("build diagnosis", () => {
 
   test("timeline formatting is deterministic, includes orphan/cycle records once, and strips controls", async (t) => {
     const records = [
+      { id: "root", parentId: null, type: "Stage", name: "Root", order: 0, result: "succeeded" },
+      { id: "root-child", parentId: "ROOT", type: "Job", name: "Root Child", order: 1, result: "succeeded" },
       { id: "orphan", parentId: "missing", type: "Task", name: "\u001b[31mOrphan\u001b[0m", order: 2, result: "succeeded" },
-      { id: "a", parentId: "b", type: "Stage", name: "A", order: 1, result: "succeeded" },
+      { id: "a", parentId: "B", type: "Stage", name: "A", order: 1, result: "succeeded" },
       { id: "b", parentId: "a", type: "Job", name: "B", order: 1, result: "succeeded" },
     ];
     const { service } = setup(t, showResponses({ records }));
     const result = await service.show(42, 700);
     const human = service.formatShow(result);
 
+    assert.equal((human.match(/Stage\/Root/g) ?? []).length, 1);
+    assert.equal((human.match(/Job\/Root Child/g) ?? []).length, 1);
     assert.equal((human.match(/Stage\/A/g) ?? []).length, 1);
     assert.equal((human.match(/Job\/B/g) ?? []).length, 1);
     assert.equal((human.match(/Task\/Orphan/g) ?? []).length, 1);
     assert.match(human, /orphan parent missing/);
     assert.match(human, /cycle/);
-    assert.equal(stripTerminalControls("a\u001b[2Jb\u0000c\rrewrite\r\nnext\t\nd"), "abcrewrite\nnext\t\nd");
+    assert.equal(
+      stripTerminalControls("a\u001b[2Jb\u0000c\rrewrite\r\nnext\t\nd\u202E"),
+      "abcrewrite\nnext\t\nd",
+    );
+  });
+
+  test("formats a deep timeline iteratively with bounded indentation", async (t) => {
+    const records = Array.from({ length: 10_000 }, (_value, index) => ({
+      id: `node-${index}`,
+      parentId: index === 0 ? null : `NODE-${index - 1}`,
+      type: "Task",
+      name: `Node ${index}`,
+      order: index,
+      result: "succeeded",
+    }));
+    const { service } = setup(t, showResponses({ records }));
+    const result = await service.show(42, 700);
+    const human = service.formatShow(result);
+    assert.equal((human.match(/Task\/Node/g) ?? []).length, records.length);
+    assert.match(human, /\[depth 9999\]/);
   });
 });
 
@@ -523,6 +629,21 @@ describe("safe build retry", () => {
     assert.ok(changedBuild.calls.every(({ method }) => method === "GET"));
   });
 
+  test("treats a stale post-PATCH response as an uncertain outcome", async (t) => {
+    const { service, calls } = setup(t, [
+      { json: build() },
+      { json: build() },
+      { json: build({ sourceVersion: "old-version" }) },
+    ]);
+
+    await assert.rejects(service.retry(42, 700), (error) => {
+      assert.match(error.message, /failed after dispatch/);
+      assert.match(error.message, /does not match PR #42's current merge commit/);
+      return true;
+    });
+    assert.equal(calls.filter(({ method }) => method === "PATCH").length, 1);
+  });
+
   test("does not repeat a failed PATCH and gives uncertain-outcome inspection guidance", async (t) => {
     const { service, calls } = setup(t, [
       { json: build() },
@@ -534,8 +655,8 @@ describe("safe build retry", () => {
       assert.match(error.message, /failed after dispatch/);
       assert.match(error.message, /server outcome may be uncertain/);
       assert.match(error.message, /do not retry automatically/);
-      assert.match(error.message, /pr\.sh build show --build 700/);
-      assert.match(error.message, /pr\.sh build list/);
+      assert.match(error.message, /pr\.sh build show --pr 42 --build 700/);
+      assert.match(error.message, /pr\.sh build list --pr 42 --history/);
       return true;
     });
     assert.equal(calls.filter(({ method }) => method === "PATCH").length, 1);
@@ -543,8 +664,12 @@ describe("safe build retry", () => {
 
   test("rejects non-positive IDs before any resolution or request", async (t) => {
     const { service, calls, pullRequestCalls } = setup(t, []);
-    await assert.rejects(service.show(42, 0), { message: "Build ID must be a positive integer." });
-    await assert.rejects(service.retry(42, -1), { message: "Build ID must be a positive integer." });
+    await assert.rejects(service.show(42, 0), {
+      message: "Build ID must be a positive safe integer.",
+    });
+    await assert.rejects(service.retry(42, -1), {
+      message: "Build ID must be a positive safe integer.",
+    });
     assert.deepEqual(calls, []);
     assert.deepEqual(pullRequestCalls, []);
   });

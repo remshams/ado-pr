@@ -71,6 +71,7 @@ test("build list dispatches through BuildService and prints a normalized JSON en
     responses: [
       { json: pr },
       { json: { count: 0, value: [] } },
+      { json: pr },
     ],
   });
 
@@ -93,7 +94,11 @@ test("build list prints a successful explicit message for an empty current colle
   const cwd = createRepo(t);
   const result = runPr(t, ["build", "list", "--pr", "42"], {
     cwd,
-    responses: [{ json: validationPr() }, { json: { value: [] } }],
+    responses: [
+      { json: validationPr() },
+      { json: { value: [] } },
+      { json: validationPr() },
+    ],
   });
 
   assertSucceeded(result);
@@ -176,7 +181,7 @@ test("build show prints partial JSON and exits nonzero when one problem log fail
   assert.equal(result.stderr, "");
   const output = JSON.parse(result.stdout);
   assert.match(output.problemRecords[0].logError, /503 Unavailable/);
-  assert.deepEqual(output.problemRecords[0].logRange, { startLine: 1, endLine: 12 });
+  assert.deepEqual(output.problemRecords[0].logRange, { startLine: 0, endLine: 12 });
 });
 
 test("build retry double-checks its target and prints Azure's returned build", (t) => {
