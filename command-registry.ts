@@ -498,9 +498,9 @@ ${options}
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
   - AZURE_DEVOPS_PAT exported by the caller or set in .env.
-  - PAT Code (Read & Write) for mutations.
+  - PAT Code (Read & Write) for PR/comment mutations; Code (Read) is sufficient for build commands.
   - Build read, also named vso.build, for build queries; Build execute, also named vso.build_execute,
-    for build retries.
+    additionally for build retries.
   - Build commands support YAML and classic Build API validation runs, not Releases, external status
     checks, or individual stage/job/task retries.
   - Identity (Read), also named vso.identity, only for --reviewer additions on pr create/edit.
