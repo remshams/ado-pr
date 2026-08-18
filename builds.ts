@@ -1,4 +1,9 @@
-import { API_VERSION, orgProjectUrl } from "./azure.ts";
+import {
+  API_VERSION,
+  AzureRequestError,
+  isAzureRequestError,
+  orgProjectUrl,
+} from "./azure.ts";
 import type { AzureRequester } from "./azure.ts";
 import type { AzureDevOpsRepoContext } from "./lib.ts";
 import type { PullRequest, PullRequestService } from "./pull-requests.ts";
@@ -14,6 +19,14 @@ const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_DEFAULT_LOG_BYTES = 2 * 1024 * 1024;
 const READ_TIMEOUT_MS = 30_000;
 const RETRY_TIMEOUT_MS = 60_000;
+const DEFAULT_WAIT_INTERVAL_SECONDS = 60;
+const DEFAULT_WAIT_TIMEOUT_SECONDS = 3_600;
+const MIN_WAIT_INTERVAL_SECONDS = 10;
+const MAX_WAIT_INTERVAL_SECONDS = 3_600;
+const MIN_WAIT_TIMEOUT_SECONDS = 10;
+const MAX_WAIT_TIMEOUT_SECONDS = 86_400;
+const WAIT_HEARTBEAT_MS = 5 * 60_000;
+const MAX_CONSECUTIVE_TRANSIENT_FAILURES = 3;
 const MAX_DISPLAY_DEPTH = 20;
 const PROBLEM_RESULTS = new Set([
   "failed",
@@ -22,6 +35,21 @@ const PROBLEM_RESULTS = new Set([
   "abandoned",
 ]);
 const RETRYABLE_RESULTS = new Set(["failed", "partiallysucceeded", "canceled"]);
+const WAITING_BUILD_STATUSES = new Set([
+  "notstarted",
+  "inprogress",
+  "cancelling",
+  "postponed",
+]);
+const WAIT_OUTCOMES = new Map<
+  string,
+  Exclude<BuildWaitOutcome, "timeout" | "unknown">
+>([
+  ["succeeded", "succeeded"],
+  ["partiallysucceeded", "partiallySucceeded"],
+  ["failed", "failed"],
+  ["canceled", "canceled"],
+]);
 const DISPLAY_RECORD_TYPES = new Set(["stage", "job", "task"]);
 
 interface AzureObject {
@@ -156,6 +184,64 @@ export interface ShowBuildOptions {
   fullLogs?: boolean;
 }
 
+export type BuildWaitOutcome =
+  | "succeeded"
+  | "partiallySucceeded"
+  | "failed"
+  | "canceled"
+  | "unknown"
+  | "timeout";
+
+export interface BuildWaitEnvelope {
+  pullRequest: PullRequestBuildSummary;
+  build: AzureBuild | null;
+  pollCount: number;
+  transientFailureCount: number;
+  elapsedSeconds: number;
+  timedOut: boolean;
+  outcome: BuildWaitOutcome;
+}
+
+interface BuildWaitProgressBase {
+  pullRequest: PullRequestBuildSummary;
+  buildId: number;
+  build: AzureBuild | null;
+  pollCount: number;
+  transientFailureCount: number;
+  elapsedSeconds: number;
+}
+
+export interface BuildWaitStateProgress extends BuildWaitProgressBase {
+  type: "state";
+  change: "initial" | "changed";
+  status: string;
+  result: string | null;
+}
+
+export interface BuildWaitHeartbeatProgress extends BuildWaitProgressBase {
+  type: "heartbeat";
+}
+
+export interface BuildWaitTransientWarningProgress extends BuildWaitProgressBase {
+  type: "transient-warning";
+  attempt: number;
+  consecutiveFailureCount: number;
+  error: string;
+  retryAfterMs?: number;
+}
+
+export type BuildWaitProgress =
+  | BuildWaitStateProgress
+  | BuildWaitHeartbeatProgress
+  | BuildWaitTransientWarningProgress;
+
+export interface WaitBuildOptions {
+  intervalSeconds?: number;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+  onProgress?: (event: BuildWaitProgress) => void;
+}
+
 export interface BuildService {
   list(
     requestedPrId: number | undefined,
@@ -167,10 +253,17 @@ export interface BuildService {
     options?: ShowBuildOptions,
   ): Promise<BuildShowEnvelope>;
   retry(requestedPrId: number | undefined, buildId: number): Promise<AzureBuild>;
+  wait(
+    requestedPrId: number | undefined,
+    buildId: number,
+    options?: WaitBuildOptions,
+  ): Promise<BuildWaitEnvelope>;
   hasLogErrors(result: BuildShowEnvelope): boolean;
   formatList(result: BuildListEnvelope): string;
   formatShow(result: BuildShowEnvelope): string;
   formatRetry(build: AzureBuild): string;
+  formatWaitProgress(event: BuildWaitProgress): string;
+  formatWaitResult(result: BuildWaitEnvelope): string;
 }
 
 interface ValidatedPullRequest {
@@ -600,6 +693,98 @@ function sanitizeError(error: unknown): string {
   return stripTerminalControls(message);
 }
 
+function validateWaitSeconds(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  name: string,
+): number {
+  const seconds = value ?? fallback;
+  if (!Number.isSafeInteger(seconds) || seconds < minimum || seconds > maximum) {
+    throw new Error(`${name} must be a whole number from ${minimum} to ${maximum} seconds.`);
+  }
+  return seconds;
+}
+
+function buildWaitAbortError(): AzureRequestError {
+  return new AzureRequestError("Build wait was aborted by the caller.", "abort");
+}
+
+function throwIfWaitAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw buildWaitAbortError();
+}
+
+function productionSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(buildWaitAbortError());
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(buildWaitAbortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function cancellableSleep(
+  sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>,
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  throwIfWaitAborted(signal);
+  if (signal === undefined) {
+    await sleep(milliseconds);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      action();
+    };
+    const onAbort = (): void => finish(() => reject(buildWaitAbortError()));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void Promise.resolve()
+      .then(() => sleep(milliseconds, signal))
+      .then(
+        () => finish(resolve),
+        (error: unknown) => finish(() => reject(error)),
+      );
+  });
+}
+
+function isTransientWaitError(error: unknown): boolean {
+  if (!isAzureRequestError(error)) return false;
+  if (error.kind === "network" || error.kind === "timeout") return true;
+  return (
+    error.kind === "http" &&
+    error.status !== undefined &&
+    (error.status === 408 ||
+      error.status === 429 ||
+      (error.status >= 500 && error.status <= 599))
+  );
+}
+
+function waitResultOutcome(build: AzureBuild): Exclude<BuildWaitOutcome, "timeout"> {
+  if (typeof build.result !== "string") return "unknown";
+  return WAIT_OUTCOMES.get(normalized(build.result)) ?? "unknown";
+}
+
+function waitStateKey(build: AzureBuild): string {
+  return `${normalized(build.status as string)}\u0000${
+    typeof build.result === "string" ? normalized(build.result) : "<missing>"
+  }`;
+}
+
 function buildBaseUrl(ctx: AzureDevOpsRepoContext): string {
   return `${orgProjectUrl(ctx)}/_apis/build/builds`;
 }
@@ -727,10 +912,14 @@ export function createBuildService({
   azure,
   ctx,
   pullRequests,
+  now = () => performance.now(),
+  sleep = productionSleep,
 }: {
   azure: AzureRequester;
   ctx: AzureDevOpsRepoContext;
   pullRequests: PullRequestService;
+  now?: () => number;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): BuildService {
   async function resolvePullRequest(requestedPrId: number | undefined): Promise<ValidatedPullRequest> {
     const pr = validatePullRequest(await pullRequests.resolve(requestedPrId), "pull request");
@@ -1040,6 +1229,175 @@ export function createBuildService({
     }
   }
 
+  async function wait(
+    requestedPrId: number | undefined,
+    buildId: number,
+    options: WaitBuildOptions = {},
+  ): Promise<BuildWaitEnvelope> {
+    assertRequestedBuildId(buildId);
+    const intervalSeconds = validateWaitSeconds(
+      options.intervalSeconds,
+      DEFAULT_WAIT_INTERVAL_SECONDS,
+      MIN_WAIT_INTERVAL_SECONDS,
+      MAX_WAIT_INTERVAL_SECONDS,
+      "Build wait interval",
+    );
+    const timeoutSeconds = validateWaitSeconds(
+      options.timeoutSeconds,
+      DEFAULT_WAIT_TIMEOUT_SECONDS,
+      MIN_WAIT_TIMEOUT_SECONDS,
+      MAX_WAIT_TIMEOUT_SECONDS,
+      "Build wait timeout",
+    );
+    throwIfWaitAborted(options.signal);
+    const pr = await resolvePullRequest(requestedPrId);
+    throwIfWaitAborted(options.signal);
+
+    const startedAt = now();
+    const deadline = startedAt + timeoutSeconds * 1_000;
+    const intervalMs = intervalSeconds * 1_000;
+    let nextPollAt = startedAt;
+    let nextHeartbeatAt = startedAt + WAIT_HEARTBEAT_MS;
+    let latestBuild: AzureBuild | null = null;
+    let pollCount = 0;
+    let transientFailureCount = 0;
+    let consecutiveTransientFailures = 0;
+    let previousStateKey: string | undefined;
+
+    const elapsedSeconds = (at = now()): number =>
+      Math.max(0, at - startedAt) / 1_000;
+    const timeoutEnvelope = (at = now()): BuildWaitEnvelope => ({
+      pullRequest: pr.summary,
+      build: latestBuild,
+      pollCount,
+      transientFailureCount,
+      elapsedSeconds: elapsedSeconds(at),
+      timedOut: true,
+      outcome: "timeout",
+    });
+    const progressBase = (at = now()): BuildWaitProgressBase => ({
+      pullRequest: pr.summary,
+      buildId,
+      build: latestBuild,
+      pollCount,
+      transientFailureCount,
+      elapsedSeconds: elapsedSeconds(at),
+    });
+    const emit = (event: BuildWaitProgress): void => {
+      options.onProgress?.(event);
+      throwIfWaitAborted(options.signal);
+    };
+
+    while (true) {
+      throwIfWaitAborted(options.signal);
+      let current = now();
+      if (current >= deadline) return timeoutEnvelope(current);
+      if (current >= nextHeartbeatAt) {
+        emit({ type: "heartbeat", ...progressBase(current) });
+        do nextHeartbeatAt += WAIT_HEARTBEAT_MS;
+        while (nextHeartbeatAt <= current);
+        continue;
+      }
+
+      if (current < nextPollAt) {
+        const wakeAt = Math.min(nextPollAt, nextHeartbeatAt, deadline);
+        await cancellableSleep(
+          sleep,
+          Math.max(0, wakeAt - current),
+          options.signal,
+        );
+        throwIfWaitAborted(options.signal);
+        continue;
+      }
+
+      const remainingMs = Math.floor(deadline - current);
+      if (remainingMs < 1) return timeoutEnvelope(current);
+      pollCount += 1;
+      const requestTimeoutMs = Math.min(READ_TIMEOUT_MS, remainingMs);
+      const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
+      let rawBuild: unknown;
+      let completedAt: number;
+      try {
+        rawBuild = await azure.request<unknown>(url, {
+          timeoutMs: requestTimeoutMs,
+          maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+          signal: options.signal,
+        });
+        completedAt = now();
+      } catch (error) {
+        completedAt = now();
+        throwIfWaitAborted(options.signal);
+        if (isAzureRequestError(error) && error.kind === "abort") throw error;
+        if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+        if (!isTransientWaitError(error)) throw error;
+
+        transientFailureCount += 1;
+        consecutiveTransientFailures += 1;
+        const retryAfterMs =
+          isAzureRequestError(error) && error.kind === "http"
+            ? error.retryAfterMs
+            : undefined;
+        emit({
+          type: "transient-warning",
+          ...progressBase(completedAt),
+          attempt: pollCount,
+          consecutiveFailureCount: consecutiveTransientFailures,
+          error: sanitizeError(error),
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        });
+        if (consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
+          throw new Error(
+            `Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${sanitizeError(error)}`,
+          );
+        }
+        nextPollAt =
+          completedAt + Math.max(intervalMs, retryAfterMs ?? 0);
+        continue;
+      }
+
+      throwIfWaitAborted(options.signal);
+      if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+      const observedBuild = assertFetchedBuild(rawBuild, buildId, "wait build");
+      assertBuildAssociation(observedBuild, pr);
+      if (typeof observedBuild.status !== "string") {
+        throw new Error(`Cannot wait for build ${buildId}: Azure returned no build status.`);
+      }
+      const observedStatus = normalized(observedBuild.status);
+      if (observedStatus === "none" ||
+          (observedStatus !== "completed" && !WAITING_BUILD_STATUSES.has(observedStatus))) {
+        throw new Error(
+          `Cannot wait for build ${buildId}: Azure returned unknown build status ${display(observedBuild.status)}.`,
+        );
+      }
+
+      latestBuild = observedBuild;
+      consecutiveTransientFailures = 0;
+      const stateKey = waitStateKey(observedBuild);
+      if (stateKey !== previousStateKey) {
+        emit({
+          type: "state",
+          ...progressBase(completedAt),
+          change: previousStateKey === undefined ? "initial" : "changed",
+          status: observedBuild.status,
+          result: typeof observedBuild.result === "string" ? observedBuild.result : null,
+        });
+        previousStateKey = stateKey;
+      }
+      if (observedStatus === "completed") {
+        return {
+          pullRequest: pr.summary,
+          build: observedBuild,
+          pollCount,
+          transientFailureCount,
+          elapsedSeconds: elapsedSeconds(completedAt),
+          timedOut: false,
+          outcome: waitResultOutcome(observedBuild),
+        };
+      }
+      nextPollAt = completedAt + intervalMs;
+    }
+  }
+
   function hasLogErrors(result: BuildShowEnvelope): boolean {
     return result.problemRecords.some((record) => "logError" in record);
   }
@@ -1105,13 +1463,60 @@ export function createBuildService({
     ].join("\n");
   }
 
+  function formatWaitProgress(event: BuildWaitProgress): string {
+    const state = `${display(event.build?.status)}/${display(event.build?.result)}`;
+    const counters =
+      `${event.elapsedSeconds.toFixed(1)}s elapsed; ${event.pollCount} poll(s); ` +
+      `${event.transientFailureCount} transient failure(s)`;
+    const prefix = `PR #${event.pullRequest.id}, build ${event.buildId}`;
+    if (event.type === "state") {
+      return `${prefix}: ${event.change} state ${state}; ${counters}.`;
+    }
+    if (event.type === "heartbeat") {
+      return `${prefix}: still waiting at ${state}; ${counters}.`;
+    }
+    return (
+      `${prefix}: transient warning on attempt ${event.attempt} ` +
+      `(consecutive ${event.consecutiveFailureCount}): ${display(event.error)}; ` +
+      `${state}; ${counters}.`
+    );
+  }
+
+  function formatWaitResult(result: BuildWaitEnvelope): string {
+    const buildId = result.build?.id;
+    const identifier = buildId === undefined ? "requested build" : `build ${buildId}`;
+    const statusResult = `${display(result.build?.status)}/${display(result.build?.result)}`;
+    const counters =
+      `${result.elapsedSeconds.toFixed(1)}s elapsed; ${result.pollCount} poll(s); ` +
+      `${result.transientFailureCount} transient failure(s)`;
+    if (result.timedOut) {
+      return (
+        `${identifier} for PR #${result.pullRequest.id} timed out. ` +
+        `Latest status/result: ${statusResult}; ${counters}.`
+      );
+    }
+    const lines = [
+      `${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
+      `Status/result: ${statusResult}; ${counters}.`,
+    ];
+    if (result.outcome !== "succeeded" && buildId !== undefined) {
+      lines.push(
+        `Inspect failure details with \`pr.sh build show --pr ${result.pullRequest.id} --build ${buildId}\`.`,
+      );
+    }
+    return lines.join("\n");
+  }
+
   return {
     list,
     show,
     retry,
+    wait,
     hasLogErrors,
     formatList,
     formatShow,
     formatRetry,
+    formatWaitProgress,
+    formatWaitResult,
   };
 }

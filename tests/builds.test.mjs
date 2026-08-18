@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createAzureRequester } from "../azure.ts";
+import { AzureRequestError, createAzureRequester } from "../azure.ts";
 import { createBuildService, stripTerminalControls } from "../builds.ts";
 import { createMockFetch } from "./test-helpers.mjs";
 
@@ -103,6 +103,53 @@ function showResponses({
     { json: { count: logs.length, value: logs } },
     ...texts,
   ];
+}
+
+function transientError(kind, status, retryAfterMs) {
+  return new AzureRequestError(`safe ${kind} failure`, kind, { status, retryAfterMs });
+}
+
+function createWaitHarness(responses, { resolvedPr = pullRequest(), start = 0 } = {}) {
+  const clock = { value: start };
+  const calls = [];
+  const sleeps = [];
+  const pullRequestCalls = [];
+  let responseIndex = 0;
+  const azure = {
+    async request(url, options) {
+      calls.push({ url, options, at: clock.value });
+      if (responseIndex >= responses.length) throw new Error("Unexpected build poll");
+      const response = responses[responseIndex++];
+      if (typeof response === "function") return response({ clock, options, calls });
+      if (response instanceof Error) throw response;
+      return response;
+    },
+    async requestWithMetadata() {
+      throw new Error("wait must not use requestWithMetadata");
+    },
+  };
+  const pullRequests = {
+    async resolve(requestedPrId) {
+      pullRequestCalls.push({ method: "resolve", requestedPrId });
+      return resolvedPr;
+    },
+    async get() {
+      throw new Error("wait must resolve the PR only once");
+    },
+  };
+  const sleep = async (milliseconds, signal) => {
+    if (signal?.aborted) throw new AzureRequestError("sleep aborted", "abort");
+    sleeps.push({ at: clock.value, milliseconds });
+    clock.value += milliseconds;
+  };
+  const service = createBuildService({
+    azure,
+    ctx,
+    pullRequests,
+    now: () => clock.value,
+    sleep,
+  });
+  return { service, clock, calls, sleeps, pullRequestCalls };
 }
 
 describe("build discovery", () => {
@@ -672,5 +719,414 @@ describe("safe build retry", () => {
     });
     assert.deepEqual(calls, []);
     assert.deepEqual(pullRequestCalls, []);
+  });
+});
+
+describe("deterministic build wait", () => {
+  const terminalCases = [
+    ["succeeded", "succeeded"],
+    ["failed", "failed"],
+    ["partiallySucceeded", "partiallySucceeded"],
+    ["canceled", "canceled"],
+    ["unknown Azure result", "abandoned", "unknown"],
+    ["missing Azure result", undefined, "unknown"],
+  ];
+  for (const [name, azureResult, expectedOutcome = name] of terminalCases) {
+    test(`maps immediate completed ${name}`, async () => {
+      const observed = build({ status: "CoMpLeTeD", result: azureResult });
+      const { service, calls, sleeps, pullRequestCalls } = createWaitHarness([observed]);
+
+      const result = await service.wait(undefined, 700);
+
+      assert.equal(result.outcome, expectedOutcome);
+      assert.equal(result.timedOut, false);
+      assert.equal(result.build, observed);
+      assert.equal(result.pollCount, 1);
+      assert.equal(result.transientFailureCount, 0);
+      assert.equal(result.elapsedSeconds, 0);
+      assert.deepEqual(sleeps, []);
+      assert.deepEqual(pullRequestCalls, [{ method: "resolve", requestedPrId: undefined }]);
+      assert.equal(calls[0].options.timeoutMs, 30_000);
+      assert.equal(calls[0].options.maxResponseBytes, 16 * 1024 * 1024);
+    });
+  }
+
+  test("allows a historical associated build on a completed PR", async () => {
+    const historical = build({ sourceVersion: "old-merge", result: "succeeded" });
+    const { service, pullRequestCalls } = createWaitHarness([historical], {
+      resolvedPr: pullRequest({ status: "completed", lastMergeCommit: undefined }),
+    });
+    const result = await service.wait(42, 700);
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(result.build, historical);
+    assert.deepEqual(pullRequestCalls, [{ method: "resolve", requestedPrId: 42 }]);
+  });
+
+  for (const status of ["notStarted", "inProgress", "cancelling", "postponed"]) {
+    test(`accepts ${status} and transitions to terminal without timeline/log calls`, async () => {
+      const first = build({ status: status.toUpperCase(), result: undefined });
+      const completed = build({ status: "completed", result: "SUCCEEDED" });
+      const events = [];
+      const { service, calls, sleeps } = createWaitHarness([first, completed]);
+
+      const result = await service.wait(42, 700, {
+        intervalSeconds: 10,
+        onProgress: (event) => events.push(event),
+      });
+
+      assert.equal(result.outcome, "succeeded");
+      assert.equal(result.pollCount, 2);
+      assert.deepEqual(sleeps, [{ at: 0, milliseconds: 10_000 }]);
+      assert.deepEqual(events.map(({ type, change }) => [type, change]), [
+        ["state", "initial"],
+        ["state", "changed"],
+      ]);
+      assert.deepEqual(calls.map(({ url }) => url), [
+        `${buildBase}/700?api-version=7.1`,
+        `${buildBase}/700?api-version=7.1`,
+      ]);
+      assert.ok(calls.every(({ options }) => options.method === undefined));
+    });
+  }
+
+  test("uses default interval/timeout and validates inclusive service boundaries", async () => {
+    const defaults = createWaitHarness([
+      build({ status: "inProgress", result: undefined }),
+      build({ result: "succeeded" }),
+    ]);
+    const defaultResult = await defaults.service.wait(42, 700);
+    assert.equal(defaultResult.elapsedSeconds, 60);
+    assert.deepEqual(defaults.sleeps, [{ at: 0, milliseconds: 60_000 }]);
+
+    const defaultTimeout = createWaitHarness([
+      ({ clock }) => {
+        clock.value += 3_600_000;
+        return build({ result: "succeeded" });
+      },
+    ]);
+    assert.equal((await defaultTimeout.service.wait(42, 700)).outcome, "timeout");
+
+    for (const [intervalSeconds, timeoutSeconds] of [
+      [10, 10],
+      [3_600, 86_400],
+    ]) {
+      const boundary = createWaitHarness([build({ result: "succeeded" })]);
+      assert.equal(
+        (await boundary.service.wait(42, 700, { intervalSeconds, timeoutSeconds })).outcome,
+        "succeeded",
+      );
+    }
+
+    const invalidId = createWaitHarness([]);
+    await assert.rejects(invalidId.service.wait(42, 0), /positive safe integer/);
+    assert.deepEqual(invalidId.pullRequestCalls, []);
+
+    for (const options of [
+      { intervalSeconds: 9 },
+      { intervalSeconds: 3_601 },
+      { intervalSeconds: 10.5 },
+      { timeoutSeconds: 9 },
+      { timeoutSeconds: 86_401 },
+      { timeoutSeconds: 10.5 },
+    ]) {
+      const invalid = createWaitHarness([]);
+      await assert.rejects(invalid.service.wait(42, 700, options), /whole number from/);
+      assert.deepEqual(invalid.pullRequestCalls, []);
+      assert.deepEqual(invalid.calls, []);
+    }
+  });
+
+  test("times out with the latest valid build and never polls at the deadline", async () => {
+    const observed = build({ status: "inProgress", result: undefined });
+    const { service, calls, sleeps } = createWaitHarness([observed]);
+
+    const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 10 });
+
+    assert.deepEqual(result, {
+      pullRequest: {
+        id: 42,
+        title: "Validate widgets",
+        status: "active",
+        draft: false,
+        currentMergeCommit: "ABCDEF123",
+      },
+      build: observed,
+      pollCount: 1,
+      transientFailureCount: 0,
+      elapsedSeconds: 10,
+      timedOut: true,
+      outcome: "timeout",
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(sleeps, [{ at: 0, milliseconds: 10_000 }]);
+  });
+
+  test("times out with no observation before the third transient failure", async () => {
+    const { service, calls } = createWaitHarness([transientError("network")]);
+    const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 10 });
+    assert.equal(result.build, null);
+    assert.equal(result.outcome, "timeout");
+    assert.equal(result.pollCount, 1);
+    assert.equal(result.transientFailureCount, 1);
+    assert.equal(calls.length, 1);
+  });
+
+  test("treats a completion response received after the deadline as timeout", async () => {
+    const { service, calls } = createWaitHarness([
+      ({ clock }) => {
+        clock.value += 10_001;
+        return build({ result: "succeeded" });
+      },
+    ]);
+    const result = await service.wait(42, 700, { timeoutSeconds: 10 });
+    assert.equal(result.outcome, "timeout");
+    assert.equal(result.build, null);
+    assert.equal(result.pollCount, 1);
+    assert.equal(result.transientFailureCount, 0);
+    assert.equal(calls[0].options.timeoutMs, 10_000);
+  });
+
+  test("counts attempts, keeps cumulative failures, and resets the consecutive count after an observation", async () => {
+    const warningEvents = [];
+    const errors = Array.from({ length: 4 }, () => transientError("network"));
+    const { service } = createWaitHarness([
+      errors[0],
+      errors[1],
+      build({ status: "inProgress", result: undefined }),
+      errors[2],
+      errors[3],
+      build({ result: "succeeded" }),
+    ]);
+    const result = await service.wait(42, 700, {
+      intervalSeconds: 10,
+      timeoutSeconds: 100,
+      onProgress(event) {
+        if (event.type === "transient-warning") warningEvents.push(event);
+      },
+    });
+    assert.equal(result.pollCount, 6);
+    assert.equal(result.transientFailureCount, 4);
+    assert.deepEqual(warningEvents.map(({ attempt, consecutiveFailureCount }) => [attempt, consecutiveFailureCount]), [
+      [1, 1], [2, 2], [4, 1], [5, 2],
+    ]);
+  });
+
+  test("throws a sanitized operational error on the third consecutive transient failure", async () => {
+    const hostile = new AzureRequestError("bad\u001b[31m\u202E detail", "network");
+    const warnings = [];
+    const { service, calls } = createWaitHarness([hostile, hostile, hostile]);
+    await assert.rejects(
+      service.wait(42, 700, {
+        intervalSeconds: 10,
+        timeoutSeconds: 100,
+        onProgress: (event) => warnings.push(event),
+      }),
+      (error) => {
+        assert.match(error.message, /stopped after 3 consecutive transient/);
+        assert.doesNotMatch(error.message, /\u001b|\u202E/);
+        return true;
+      },
+    );
+    assert.equal(calls.length, 3);
+    assert.deepEqual(warnings.map(({ attempt, consecutiveFailureCount }) => [attempt, consecutiveFailureCount]), [
+      [1, 1], [2, 2], [3, 3],
+    ]);
+  });
+
+  test("classifies network, timeout, 408, 429, and 5xx errors as transient", async () => {
+    const cases = [
+      transientError("network"),
+      transientError("timeout"),
+      transientError("http", 408),
+      transientError("http", 429),
+      transientError("http", 500),
+      transientError("http", 503),
+      transientError("http", 599),
+    ];
+    for (const candidate of cases) {
+      const { service } = createWaitHarness([candidate, build({ result: "succeeded" })]);
+      const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 30 });
+      assert.equal(result.outcome, "succeeded");
+      assert.equal(result.transientFailureCount, 1);
+      assert.equal(result.pollCount, 2);
+    }
+  });
+
+  test("fails immediately for non-transient HTTP and response errors", async () => {
+    for (const candidate of [
+      transientError("http", 401),
+      transientError("http", 403),
+      transientError("http", 404),
+      transientError("response"),
+    ]) {
+      const { service, calls, sleeps } = createWaitHarness([candidate]);
+      await assert.rejects(service.wait(42, 700), (error) => error === candidate);
+      assert.equal(calls.length, 1);
+      assert.deepEqual(sleeps, []);
+    }
+  });
+
+  test("schedules from attempt completion and honors HTTP Retry-After with five-minute heartbeats", async () => {
+    const events = [];
+    const scheduling = createWaitHarness([
+      ({ clock }) => {
+        clock.value += 2_000;
+        return build({ status: "inProgress", result: undefined });
+      },
+      build({ result: "succeeded" }),
+    ]);
+    await scheduling.service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 30 });
+    assert.deepEqual(scheduling.calls.map(({ at }) => at), [0, 12_000]);
+
+    const retryAfter = createWaitHarness([
+      transientError("http", 429, 700_000),
+      build({ result: "succeeded" }),
+    ]);
+    const result = await retryAfter.service.wait(42, 700, {
+      intervalSeconds: 10,
+      timeoutSeconds: 1_000,
+      onProgress: (event) => events.push(event),
+    });
+    assert.equal(result.outcome, "succeeded");
+    assert.deepEqual(retryAfter.calls.map(({ at }) => at), [0, 700_000]);
+    assert.deepEqual(retryAfter.sleeps.map(({ milliseconds }) => milliseconds), [300_000, 300_000, 100_000]);
+    assert.equal(events.filter(({ type }) => type === "heartbeat").length, 2);
+    assert.equal(events.filter(({ type }) => type === "transient-warning")[0].retryAfterMs, 700_000);
+  });
+
+  test("clips Retry-After sleep and request timeout to the overall deadline", async () => {
+    const { service, calls, sleeps } = createWaitHarness([
+      transientError("http", 429, 60_000),
+    ]);
+    const result = await service.wait(42, 700, { intervalSeconds: 10, timeoutSeconds: 10 });
+    assert.equal(result.outcome, "timeout");
+    assert.deepEqual(sleeps, [{ at: 0, milliseconds: 10_000 }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.timeoutMs, 10_000);
+  });
+
+  test("cancels promptly during an injected sleep", async () => {
+    const controller = new AbortController();
+    let sleepStarted = false;
+    const azure = {
+      async request() { return build({ status: "inProgress", result: undefined }); },
+      async requestWithMetadata() { throw new Error("unexpected"); },
+    };
+    const sleep = () => new Promise(() => {
+      sleepStarted = true;
+    });
+    const service = createBuildService({
+      azure,
+      ctx,
+      pullRequests: createPullRequestStub().service,
+      now: () => 0,
+      sleep,
+    });
+    const waiting = service.wait(42, 700, { intervalSeconds: 10, signal: controller.signal });
+    while (!sleepStarted) await Promise.resolve();
+    controller.abort();
+    await assert.rejects(waiting, (error) => error.kind === "abort");
+  });
+
+  test("cancels the active request through the caller signal", async () => {
+    const controller = new AbortController();
+    let requestStarted = false;
+    const azure = {
+      request(_url, options) {
+        requestStarted = true;
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(new AzureRequestError("request aborted", "abort")), { once: true });
+        });
+      },
+      async requestWithMetadata() { throw new Error("unexpected"); },
+    };
+    const service = createBuildService({
+      azure,
+      ctx,
+      pullRequests: createPullRequestStub().service,
+      now: () => 0,
+    });
+    const waiting = service.wait(42, 700, { signal: controller.signal });
+    while (!requestStarted) await Promise.resolve();
+    controller.abort();
+    await assert.rejects(waiting, (error) => error.kind === "abort");
+  });
+
+  test("rejects wrong IDs, association changes, and missing/none/unknown statuses immediately", async () => {
+    const changedAssociation = createWaitHarness([
+      build({ status: "inProgress", result: undefined }),
+      build({ repository: { id: "other", type: "TfsGit" } }),
+    ]);
+    await assert.rejects(
+      changedAssociation.service.wait(42, 700, { intervalSeconds: 10 }),
+      /repository ID/,
+    );
+    assert.equal(changedAssociation.calls.length, 2);
+
+    const cases = [
+      [build({ id: 701 }), /expected 700/],
+      [build({ repository: { id: "other", type: "TfsGit" } }), /repository ID/],
+      [build({ repository: { id: "repo-id", type: "GitHub" } }), /repository type/],
+      [build({ reason: "manual" }), /reason/],
+      [build({ sourceBranch: "refs\/pull\/99\/merge" }), /source branch/],
+      [build({ status: undefined }), /no build status/],
+      [build({ status: null }), /no build status/],
+      [build({ status: "none" }), /unknown build status none/],
+      [build({ status: "queued" }), /unknown build status queued/],
+    ];
+    for (const [candidate, expected] of cases) {
+      const { service, calls } = createWaitHarness([candidate]);
+      await assert.rejects(service.wait(42, 700), expected);
+      assert.equal(calls.length, 1);
+    }
+  });
+
+  test("de-duplicates unchanged progress states and sanitizes all human wait text", async () => {
+    const events = [];
+    const hostilePr = pullRequest({ title: "widgets\u001b[31m\u202E" });
+    const { service } = createWaitHarness([
+      build({ status: "inProgress", result: undefined }),
+      build({ status: "INPROGRESS", result: undefined }),
+      build({ status: "postponed", result: "odd\u001b[31m\u202E" }),
+      build({ status: "completed", result: "failed\u202E" }),
+    ], { resolvedPr: hostilePr });
+    const result = await service.wait(42, 700, {
+      intervalSeconds: 10,
+      timeoutSeconds: 40,
+      onProgress: (event) => events.push(event),
+    });
+    const states = events.filter(({ type }) => type === "state");
+    assert.deepEqual(states.map(({ change, status }) => [change, status]), [
+      ["initial", "inProgress"],
+      ["changed", "postponed"],
+      ["changed", "completed"],
+    ]);
+    const formattedProgress = service.formatWaitProgress({
+      ...states[1],
+      status: "bad\u001b[31m\u202E",
+      result: "bad\u001b[0m",
+      build: build({ status: "bad\u001b[31m\u202E", result: "bad\u001b[0m" }),
+    });
+    const formattedResult = service.formatWaitResult(result);
+    assert.doesNotMatch(formattedProgress, /\u001b|\u202E/);
+    assert.doesNotMatch(formattedResult, /\u001b|\u202E/);
+    assert.match(formattedProgress, /PR #42, build 700.*status|PR #42, build 700.*state/);
+    assert.match(formattedResult, /outcome unknown/);
+
+    for (const outcome of ["partiallySucceeded", "failed", "canceled", "unknown"]) {
+      const failureText = service.formatWaitResult({
+        ...result,
+        build: build({ result: outcome }),
+        outcome,
+      });
+      assert.match(failureText, /pr\.sh build show --pr 42 --build 700/);
+    }
+    const timeoutText = service.formatWaitResult({
+      ...result,
+      build: null,
+      timedOut: true,
+      outcome: "timeout",
+    });
+    assert.match(timeoutText, /timed out/);
   });
 });
