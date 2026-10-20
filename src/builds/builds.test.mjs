@@ -829,6 +829,15 @@ describe("build diagnosis", () => {
 		);
 	});
 
+	test("preserves text between ST-terminated and BEL-terminated OSC sequences", () => {
+		assert.equal(
+			stripTerminalControls(
+				"before\u001b]0;first\u001b\\between\u001b]0;second\u0007after",
+			),
+			"beforebetweenafter",
+		);
+	});
+
 	test("formats a deep timeline iteratively with bounded indentation", async (t) => {
 		const records = Array.from({ length: 10_000 }, (_value, index) => ({
 			id: `node-${index}`,

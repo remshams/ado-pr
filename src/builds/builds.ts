@@ -934,7 +934,7 @@ export function stripTerminalControls(value: string): string {
 	return value
 		.replace(/\r\n/g, "\n")
 		.replace(/\r/g, "")
-		.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+		.replace(/\x1B\][^\x07]*?(?:\x07|\x1B\\)/g, "")
 		.replace(/\x1B[P^_][\s\S]*?\x1B\\/g, "")
 		.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/\x1B[@-_]/g, "")
