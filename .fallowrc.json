@@ -6,18 +6,48 @@
 	},
 	"boundaries": {
 		"zones": [
-			{ "name": "shared", "patterns": ["src/shared/**/*.ts"] },
-			{ "name": "pull-requests", "patterns": ["src/pull-requests/**/*.ts"] },
-			{ "name": "comments", "patterns": ["src/comments/**/*.ts"] },
-			{ "name": "builds", "patterns": ["src/builds/**/*.ts"] },
-			{ "name": "cli", "patterns": ["src/cli/**/*.ts"] },
-			{ "name": "entry", "patterns": ["src/pr.ts"] }
+			{
+				"name": "shared",
+				"patterns": ["src/shared/**/*.ts"]
+			},
+			{
+				"name": "pull-requests",
+				"patterns": ["src/pull-requests/**/*.ts"]
+			},
+			{
+				"name": "comments",
+				"patterns": ["src/comments/**/*.ts"]
+			},
+			{
+				"name": "builds",
+				"patterns": ["src/builds/**/*.ts"]
+			},
+			{
+				"name": "cli",
+				"patterns": ["src/cli/**/*.ts"]
+			},
+			{
+				"name": "entry",
+				"patterns": ["src/pr.ts"]
+			}
 		],
 		"rules": [
-			{ "from": "shared", "allow": [] },
-			{ "from": "pull-requests", "allow": ["shared"] },
-			{ "from": "comments", "allow": ["shared"] },
-			{ "from": "builds", "allow": ["shared", "pull-requests"] },
+			{
+				"from": "shared",
+				"allow": []
+			},
+			{
+				"from": "pull-requests",
+				"allow": ["shared"]
+			},
+			{
+				"from": "comments",
+				"allow": ["shared"]
+			},
+			{
+				"from": "builds",
+				"allow": ["shared", "pull-requests"]
+			},
 			{
 				"from": "cli",
 				"allow": ["shared", "pull-requests", "comments", "builds"]
@@ -27,5 +57,9 @@
 				"allow": ["shared", "pull-requests", "comments", "builds", "cli"]
 			}
 		]
+	},
+	"mutation": {
+		"runner": "node-test",
+		"concurrency": 4
 	}
 }
