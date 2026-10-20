@@ -11,6 +11,7 @@ const usageFirstLine = "Usage: pr.sh pr list [--json]";
 const missingPatError =
 	"Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n";
 const childEnvAllowlist = new Set([
+	"NODE_V8_COVERAGE",
 	"HOME",
 	"PATH",
 	"PATHEXT",
