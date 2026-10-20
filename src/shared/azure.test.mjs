@@ -927,3 +927,26 @@ test("URL builders encode each context component and preserve API path syntax ex
 		`${orgProject}/_git/repo%2Fname%20%2B%3F%23/pullrequest/42`,
 	);
 });
+
+test("Azure requester redacts sensitive or malformed URL fragments and preserves ordinary fragments", async (t) => {
+	for (const [fragment, expectedFragment] of [
+		["section-2", "section-2"],
+		[encodeURIComponent(fakePat), "<redacted>"],
+		["password=hidden-value", "<redacted>"],
+		["%invalid", "<redacted>"],
+	]) {
+		const { fetch } = createMockFetch(t, [{ status: 403, body: "denied" }]);
+		const azure = createAzureRequester({ pat: fakePat, fetch });
+		await assert.rejects(
+			azure.request(`https://example.invalid/items#${fragment}`),
+			(error) => {
+				assert.equal(error.kind, "http");
+				assert.equal(
+					error.message,
+					`Azure DevOps API request (GET https://example.invalid/items#${expectedFragment}) failed: 403 \ndenied`,
+				);
+				return true;
+			},
+		);
+	}
+});
