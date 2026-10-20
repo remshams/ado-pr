@@ -30,7 +30,7 @@ flowchart TD
     Services --> Output[Human output or JSON result]
 ```
 
-`src/pr.ts` calls `parseArgs` before reading credentials or Git context, so direct
+`src/pr.ts` parses arguments before reading credentials or Git context, so direct
 Node invocation can show help without authentication. It creates one requester,
 injects it and the repository context into the services, dispatches the command
 and selects output and exit status. PR resolution uses an explicit ID or the
@@ -38,24 +38,16 @@ current branch where the command allows it.
 
 ## Modules and dependencies
 
-- `src/shared/` owns `createAzureRequester`, Azure URL helpers, Git context and
-  subprocess helpers. It also owns command contracts used by CLI parsing, help
-  and comment batch validation, plus shared operation types and exit-code rules.
-- `src/pull-requests/` exports `createPullRequestService` for PR lookup, listing,
-  creation and editing, including description images and reviewers. It provides
-  PR metadata used to associate validation builds with a PR.
-- `src/comments/` exports `createThreadService` for filtering, formatting and
-  changing threads; `createFileAnchorService` for iteration-aware file and line
-  anchors with reusable caches; and `createBatchRunner` for validating stdin JSON
-  operations before executing them sequentially and reporting each result.
-- `src/builds/` exports `createBuildService` for listing associated validations,
-  reading timeline/log diagnostics, retrying eligible builds and waiting for
-  completion. It checks repository, PR and merge association. Support covers
-  YAML/classic Build API validations, excluding Releases and external checks.
-- `src/cli/` owns `parseArgs`, `getPat`, help rendering and typed CLI options.
-  It interprets the shared command registry and validates command-specific flags.
-- `src/pr.ts` composes the services, handles process signals for build wait and
-  routes command output.
+- `src/shared/`: Azure HTTP access, URL helpers, Git repository context and the
+  command contracts and types that several modules use.
+- `src/pull-requests/`: finding, listing, creating and editing pull requests,
+  including description images and reviewers.
+- `src/comments/`: review threads and comments, file and line anchors, and batch
+  operations read from stdin.
+- `src/builds/`: PR validation builds: listing, diagnostics and logs, retries and
+  waiting for completion.
+- `src/cli/`: argument parsing, validation, help and PAT lookup.
+- `src/pr.ts`: wires the modules together, dispatches commands and writes output.
 
 Arrows show permitted imports between modules, including type-only imports.
 They describe dependency permissions, not every current import.
@@ -93,7 +85,7 @@ and cancellation cover body reads as well as the initial fetch. Error excerpts
 have a fixed size limit. There is no general default request timeout or practical
 success-body limit; feature callers select them where needed.
 
-`AzureRequestError` classifies HTTP, network, timeout, caller-abort and response
+Request errors are classified as HTTP, network, timeout, caller-abort or response
 failures, with status and Retry-After metadata when available. Error messages
 redact credentials and sensitive values, strip terminal controls and bound details.
 This sanitisation applies to diagnostics, not all successful API data. Build
