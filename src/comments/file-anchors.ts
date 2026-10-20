@@ -67,6 +67,28 @@ export interface FileAnchorService {
 	): Promise<ResolvedFileAnchor>;
 }
 
+function nextChangesPage(
+	data: IterationChangesPage,
+	skip: number,
+	top: number,
+): { skip: number; top: number } | undefined {
+	const { nextSkip, nextTop } = data;
+	if (nextSkip !== undefined || nextTop !== undefined) {
+		if (
+			(nextSkip !== undefined && nextSkip <= 0) ||
+			(nextTop !== undefined && nextTop <= 0)
+		) {
+			return undefined;
+		}
+		return { skip: nextSkip ?? skip + top, top: nextTop ?? top };
+	} else {
+		if (data.changeEntries.length < top) {
+			return undefined;
+		}
+		return { skip: skip + top, top };
+	}
+}
+
 export function createFileAnchorService({
 	azure,
 	ctx,
@@ -105,22 +127,9 @@ export function createFileAnchorService({
 				return match.changeTrackingId;
 			}
 
-			const { nextSkip, nextTop } = data;
-			if (nextSkip !== undefined || nextTop !== undefined) {
-				if (
-					(nextSkip !== undefined && nextSkip <= 0) ||
-					(nextTop !== undefined && nextTop <= 0)
-				) {
-					return undefined;
-				}
-				skip = nextSkip ?? skip + top;
-				top = nextTop ?? top;
-			} else {
-				if (data.changeEntries.length < top) {
-					return undefined;
-				}
-				skip += top;
-			}
+			const nextPage = nextChangesPage(data, skip, top);
+			if (!nextPage) return undefined;
+			({ skip, top } = nextPage);
 		}
 	}
 
