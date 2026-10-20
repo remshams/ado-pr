@@ -128,8 +128,8 @@ dead code, duplicates, architecture boundaries and a CRAP limit of 12. The exist
 health baseline identifies functions awaiting refactoring; do not add entries.
 
 GitHub Actions checks Node 22 and 24 and runs lint and Fallow. PR mutation checks
-use Fallow's native node:test runner against the PR base, with a minimum score of
-71 and a target of 80. `pnpm mutation` defaults to `origin/main`, overridable with
+use Fallow's native node:test runner against the PR base, with the minimum score
+set in the `mutation` script. `pnpm mutation` defaults to `origin/main`, overridable with
 `MUTATION_BASE`. Full runs use `pnpm mutation:all`, report the score and run in CI
 only through `workflow_dispatch`. See [ADR 0004](adr/0004-quality-gates.md).
 
