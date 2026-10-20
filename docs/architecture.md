@@ -116,8 +116,7 @@ tests use temporary dotenv files, pipes and a fake `op` executable.
 
 `pnpm check` runs TypeScript checking, Biome lint/format checks, tests and Fallow.
 Fallow collects fresh V8 coverage, including CLI subprocess coverage, then checks
-dead code, duplicates, architecture boundaries and a CRAP limit of 12. The existing
-health baseline identifies functions awaiting refactoring; do not add entries.
+dead code, duplicates, architecture boundaries and a CRAP limit of 12.
 
 GitHub Actions checks Node 22 and 24 and runs lint and Fallow. PR mutation checks
 use Fallow's native node:test runner against the PR base, with the minimum score
