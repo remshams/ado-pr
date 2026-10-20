@@ -8,7 +8,13 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "biome lint .",
 		"format": "biome format --write .",
-		"format:check": "biome format ."
+		"format:check": "biome format .",
+		"coverage": "rm -rf coverage && NODE_V8_COVERAGE=coverage node --disable-warning=ExperimentalWarning --experimental-strip-types --test \"src/**/*.test.mjs\" \"tests/*.test.mjs\"",
+		"fallow:dead-code": "fallow dead-code --fail-on-issues",
+		"fallow:dupes": "fallow dupes --fail-on-issues",
+		"fallow:architecture": "fallow architecture --fail-on-issues",
+		"fallow:health": "fallow health --coverage coverage --baseline fallow-health-baseline.json --baseline-mode identity",
+		"fallow": "pnpm coverage && pnpm fallow:dead-code && pnpm fallow:dupes && pnpm fallow:architecture && pnpm fallow:health"
 	},
 	"dependencies": {
 		"minimist": "1.2.8"
@@ -17,6 +23,7 @@
 		"@biomejs/biome": "2.5.15",
 		"@types/minimist": "^1.2.5",
 		"@types/node": "^24.0.0",
+		"fallow": "3.34.1",
 		"typescript": "^5.9.3"
 	},
 	"engines": {

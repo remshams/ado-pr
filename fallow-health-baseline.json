@@ -1,0 +1,208 @@
+{
+	"kind": "health",
+	"finding_counts": {
+		"src/builds/builds.ts": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"complexity_high": {
+				"count": 1
+			},
+			"complexity_moderate": {
+				"count": 2
+			},
+			"crap_critical": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 2
+			}
+		},
+		"src/cli/cli.ts": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/comments/batch.ts": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/comments/file-anchors.ts": {
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/comments/threads.ts": {
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/pr.ts": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/pull-requests/pull-requests.ts": {
+			"complexity_high": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			}
+		},
+		"src/shared/azure.ts": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"complexity_high": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 2
+			}
+		}
+	},
+	"identity_finding_counts": {
+		"src/builds/builds.ts\u0000list": {
+			"complexity_high": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			}
+		},
+		"src/builds/builds.ts\u0000orderTimelineRecords": {
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/builds/builds.ts\u0000show": {
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/builds/builds.ts\u0000wait": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/cli/cli.ts\u0000parseCommandFlags": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/cli/cli.ts\u0000scanFlags": {
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/comments/batch.ts\u0000parseBatchOperation": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/comments/file-anchors.ts\u0000fetchChangeTrackingId": {
+			"complexity_moderate": {
+				"count": 1
+			},
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/comments/threads.ts\u0000formatLocation": {
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/pr.ts\u0000main": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/pull-requests/pull-requests.ts\u0000edit": {
+			"complexity_high": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			}
+		},
+		"src/shared/azure.ts\u0000awaitCancellable": {
+			"crap_moderate": {
+				"count": 1
+			}
+		},
+		"src/shared/azure.ts\u0000readTextWithByteLimit": {
+			"complexity_high": {
+				"count": 1
+			},
+			"crap_high": {
+				"count": 1
+			}
+		},
+		"src/shared/azure.ts\u0000requestWithMetadata": {
+			"complexity_critical": {
+				"count": 1
+			},
+			"crap_critical": {
+				"count": 1
+			}
+		},
+		"src/shared/azure.ts\u0000safeRequestUrl": {
+			"crap_moderate": {
+				"count": 1
+			}
+		}
+	},
+	"runtime_coverage_findings": [],
+	"target_keys": []
+}
