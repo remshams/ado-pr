@@ -398,7 +398,7 @@ describe("build diagnosis", () => {
 
     const human = service.formatShow(result);
     assert.match(human, /PR: #42 \(history\)/);
-    assert.match(human, /- Stage\/Validate:[\s\S]*  - Job\/Linux:[\s\S]*    - Task\/Compile/);
+    assert.match(human, /- Stage\/Validate:[\s\S]* {2}- Job\/Linux:[\s\S]* {4}- Task\/Compile/);
     assert.match(human, /Problem 1: Job\/Linux \[failed\]/);
     assert.match(human, /error\nordinary\tline/);
     assert.doesNotMatch(human, /\u001b/);
@@ -1402,7 +1402,7 @@ describe("deterministic build wait", () => {
       [build({ repository: { id: "other", type: "TfsGit" } }), /repository ID/],
       [build({ repository: { id: "repo-id", type: "GitHub" } }), /repository type/],
       [build({ reason: "manual" }), /reason/],
-      [build({ sourceBranch: "refs\/pull\/99\/merge" }), /source branch/],
+      [build({ sourceBranch: "refs/pull/99/merge" }), /source branch/],
       [build({ status: undefined }), /no build status/],
       [build({ status: null }), /no build status/],
       [build({ status: "none" }), /unknown build status none/],
