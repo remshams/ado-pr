@@ -386,14 +386,15 @@ test("Azure requester gives the first cancellation source precedence", async () 
 });
 
 test("Azure requester exposes parsed Retry-After delays only for valid HTTP values", async (t) => {
-	const futureDate = new Date(Date.now() + 120_000).toUTCString();
+	const now = 1_000;
+	const futureDate = new Date(now + 120_000).toUTCString();
 	const { fetch } = createMockFetch(t, [
 		{ status: 429, headers: { "retry-after": "17" } },
 		{ status: 503, headers: { "retry-after": futureDate } },
 		{ status: 503, headers: { "retry-after": "-4" } },
 		{ status: 503, headers: { "retry-after": "not-a-date" } },
 	]);
-	const azure = createAzureRequester({ pat: fakePat, fetch });
+	const azure = createAzureRequester({ pat: fakePat, fetch, now: () => now });
 
 	const errors = [];
 	for (let index = 0; index < 4; index += 1) {
@@ -410,9 +411,7 @@ test("Azure requester exposes parsed Retry-After delays only for valid HTTP valu
 	assert.equal(errors[0].status, 429);
 	assert.equal(errors[0].retryAfterMs, 17_000);
 	assert.equal(errors[1].status, 503);
-	assert.ok(
-		errors[1].retryAfterMs > 118_000 && errors[1].retryAfterMs <= 120_000,
-	);
+	assert.equal(errors[1].retryAfterMs, 120_000);
 	assert.equal(errors[2].retryAfterMs, undefined);
 	assert.equal(errors[3].retryAfterMs, undefined);
 });
