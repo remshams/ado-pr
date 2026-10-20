@@ -806,9 +806,9 @@ describe("pull request listing, resolution, creation, and updates", () => {
     const oldUrl = "https://attachments.test/old.png?token=old";
     const newUrl = "https://attachments.test/new.png?token=new";
     const oldMarked =
-      `![old.png](<${oldUrl}>)` + "<!-- ado-pr-image:old.png -->";
+      `![old.png](<${oldUrl}>)<!-- ado-pr-image:old.png -->`;
     const newMarked =
-      `![new.png](<${newUrl}>)` + "<!-- ado-pr-image:new.png -->";
+      `![new.png](<${newUrl}>)<!-- ado-pr-image:new.png -->`;
     const placeholder = "{{image:new.png}}";
     const finalDescription = `${"x".repeat(4_000 - newMarked.length)}${newMarked}`;
     const intermediateDescription =
