@@ -297,3 +297,15 @@ describe("Git repository integration", { concurrency: false }, () => {
 		);
 	});
 });
+
+test("runCommand captures stdout from fast concurrent commands", async () => {
+	for (let batch = 0; batch < 4; batch += 1) {
+		const results = await Promise.all(
+			Array.from({ length: 16 }, () => runCommand("git", ["--version"])),
+		);
+		for (const result of results) {
+			assert.equal(result.code, 0);
+			assert.match(result.stdout, /^git version /);
+		}
+	}
+});
