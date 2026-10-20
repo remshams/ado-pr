@@ -48,6 +48,25 @@ function looksLikeOption(token: string): boolean {
 	return token.startsWith("--") || /^-[A-Za-z]/.test(token);
 }
 
+function scanLongFlag(
+	token: string,
+	nextToken: string | undefined,
+): FlagOccurrence {
+	const equalsIndex = token.indexOf("=");
+	const hasInlineValue = equalsIndex !== -1;
+	const name = token.slice(2, hasInlineValue ? equalsIndex : undefined);
+	let value = hasInlineValue ? token.slice(equalsIndex + 1) : undefined;
+	if (
+		STRING_FLAG_SET.has(name) &&
+		!hasInlineValue &&
+		nextToken !== undefined &&
+		!looksLikeOption(nextToken)
+	) {
+		value = nextToken;
+	}
+	return { name, display: `--${name}`, value, hasInlineValue };
+}
+
 function scanFlags(args: string[]): FlagOccurrence[] {
 	const occurrences: FlagOccurrence[] = [];
 
@@ -75,28 +94,10 @@ function scanFlags(args: string[]): FlagOccurrence[] {
 			continue;
 		}
 
-		const equalsIndex = token.indexOf("=");
-		const hasInlineValue = equalsIndex !== -1;
-		const name = token.slice(2, hasInlineValue ? equalsIndex : undefined);
-		const isStringFlag = STRING_FLAG_SET.has(name);
-		let value = hasInlineValue ? token.slice(equalsIndex + 1) : undefined;
-
-		if (
-			isStringFlag &&
-			!hasInlineValue &&
-			args[index + 1] !== undefined &&
-			!looksLikeOption(args[index + 1])
-		) {
-			value = args[index + 1];
+		const occurrence = scanLongFlag(token, args[index + 1]);
+		if (!occurrence.hasInlineValue && occurrence.value !== undefined)
 			index += 1;
-		}
-
-		occurrences.push({
-			name,
-			display: `--${name}`,
-			value,
-			hasInlineValue,
-		});
+		occurrences.push(occurrence);
 	}
 
 	return occurrences;
@@ -186,6 +187,104 @@ function parsePositiveIntFlag(
 	return value;
 }
 
+type FlagValues = Partial<
+	Record<FlagName, string | string[] | number | boolean>
+>;
+
+function parseFlagValue(
+	occurrences: FlagOccurrences,
+	flag: FlagName,
+): FlagValues[FlagName] {
+	const kind = FLAG_DEFINITIONS[flag].kind;
+	if (kind === "boolean") return occurrences.has(flag);
+	if (kind === "positiveInteger")
+		return parsePositiveIntFlag(occurrences, flag as PositiveIntegerFlagName);
+	if (kind === "repeatableString")
+		return parseRepeatedStringFlag(
+			occurrences,
+			flag as RepeatableStringFlagName,
+		);
+	return parseStringFlag(occurrences, flag as TextFlagName);
+}
+
+function validatePullRequestEdit(
+	values: FlagValues,
+	flags: readonly FlagName[],
+	occurrences: FlagOccurrences,
+	enforceRequired: boolean,
+	route: string,
+): void {
+	const setDraft = values.draft === true;
+	const clearDraft = values["no-draft"] === true;
+	if (setDraft && clearDraft) {
+		printUsageAndExit(`--draft and --no-draft cannot be used together`);
+	}
+	const editFlags = flags.filter((flag) => flag !== "pr");
+	if (enforceRequired && !editFlags.some((flag) => occurrences.has(flag))) {
+		const choices = editFlags
+			.map(
+				(flag, index) =>
+					`${index === editFlags.length - 1 ? "or " : ""}--${flag}`,
+			)
+			.join(", ");
+		printUsageAndExit(`${choices} is required for "${route}"`);
+	}
+}
+
+function validateBuildWaitBounds(values: FlagValues): void {
+	const interval = values.interval as number | undefined;
+	const timeout = values.timeout as number | undefined;
+	if (interval !== undefined && (interval < 10 || interval > 3600)) {
+		printUsageAndExit(`--interval must be between 10 and 3600 seconds`);
+	}
+	if (timeout !== undefined && (timeout < 10 || timeout > 86400)) {
+		printUsageAndExit(`--timeout must be between 10 and 86400 seconds`);
+	}
+}
+
+function validateCommentLocation(values: FlagValues): void {
+	const file = values.file as string | undefined;
+	const line = values.line as number | undefined;
+	const endLine = values["end-line"] as number | undefined;
+	if (file === "") {
+		printUsageAndExit(`--file must not be empty`);
+	}
+	if (line !== undefined && file === undefined) {
+		printUsageAndExit(`--line requires --file`);
+	}
+	if (endLine !== undefined && line === undefined) {
+		printUsageAndExit(`--end-line requires --line`);
+	}
+	if (endLine !== undefined && line !== undefined && endLine < line) {
+		printUsageAndExit(`--end-line must be >= --line`);
+	}
+}
+
+function validateRequiredFlag(
+	flag: FlagName,
+	value: FlagValues[FlagName],
+	requiredFlags: ReadonlySet<FlagName>,
+	enforceRequired: boolean,
+	route: string,
+): void {
+	if (enforceRequired && requiredFlags.has(flag) && !value) {
+		printUsageAndExit(`--${flag} is required for "${route}"`);
+	}
+}
+
+function validateSuppliedRequiredFlags(
+	values: FlagValues,
+	requiredFlags: ReadonlySet<FlagName>,
+	occurrences: FlagOccurrences,
+	route: string,
+): void {
+	for (const flag of requiredFlags) {
+		if (occurrences.has(flag) && !values[flag]) {
+			printUsageAndExit(`--${flag} is required for "${route}"`);
+		}
+	}
+}
+
 function parseCommandFlags<Id extends CommandId>(
 	commandId: Id,
 	route: string,
@@ -213,83 +312,32 @@ function parseCommandFlags<Id extends CommandId>(
 	);
 
 	for (const flag of definition.flags) {
-		const kind = FLAG_DEFINITIONS[flag].kind;
-		if (kind === "boolean") {
-			values[flag] = occurrences.has(flag);
-		} else if (kind === "positiveInteger") {
-			values[flag] = parsePositiveIntFlag(
-				occurrences,
-				flag as PositiveIntegerFlagName,
-			);
-		} else if (kind === "repeatableString") {
-			values[flag] = parseRepeatedStringFlag(
-				occurrences,
-				flag as RepeatableStringFlagName,
-			);
-		} else {
-			values[flag] = parseStringFlag(occurrences, flag as TextFlagName);
-		}
-
-		if (enforceRequired && requiredFlags.has(flag) && !values[flag]) {
-			printUsageAndExit(`--${flag} is required for "${route}"`);
-		}
+		values[flag] = parseFlagValue(occurrences, flag);
+		validateRequiredFlag(
+			flag,
+			values[flag],
+			requiredFlags,
+			enforceRequired,
+			route,
+		);
 	}
-
-	if (!enforceRequired) {
-		for (const flag of requiredFlags) {
-			if (occurrences.has(flag) && !values[flag]) {
-				printUsageAndExit(`--${flag} is required for "${route}"`);
-			}
-		}
-	}
+	if (!enforceRequired)
+		validateSuppliedRequiredFlags(values, requiredFlags, occurrences, route);
 
 	const validationRules: readonly CommandValidationRule[] | undefined =
 		"validationRules" in definition ? definition.validationRules : undefined;
-	if (validationRules?.includes("pullRequestEdit")) {
-		const setDraft = values.draft === true;
-		const clearDraft = values["no-draft"] === true;
-		if (setDraft && clearDraft) {
-			printUsageAndExit(`--draft and --no-draft cannot be used together`);
-		}
-		const editFlags = definition.flags.filter((flag) => flag !== "pr");
-		if (enforceRequired && !editFlags.some((flag) => occurrences.has(flag))) {
-			const choices = editFlags
-				.map(
-					(flag, index) =>
-						`${index === editFlags.length - 1 ? "or " : ""}--${flag}`,
-				)
-				.join(", ");
-			printUsageAndExit(`${choices} is required for "${route}"`);
-		}
-	}
-	if (validationRules?.includes("buildWaitBounds")) {
-		const interval = values.interval as number | undefined;
-		const timeout = values.timeout as number | undefined;
-		if (interval !== undefined && (interval < 10 || interval > 3600)) {
-			printUsageAndExit(`--interval must be between 10 and 3600 seconds`);
-		}
-		if (timeout !== undefined && (timeout < 10 || timeout > 86400)) {
-			printUsageAndExit(`--timeout must be between 10 and 86400 seconds`);
-		}
-	}
-
-	if (validationRules?.includes("commentLocation")) {
-		const file = values.file as string | undefined;
-		const line = values.line as number | undefined;
-		const endLine = values["end-line"] as number | undefined;
-		if (file === "") {
-			printUsageAndExit(`--file must not be empty`);
-		}
-		if (line !== undefined && file === undefined) {
-			printUsageAndExit(`--line requires --file`);
-		}
-		if (endLine !== undefined && line === undefined) {
-			printUsageAndExit(`--end-line requires --line`);
-		}
-		if (endLine !== undefined && line !== undefined && endLine < line) {
-			printUsageAndExit(`--end-line must be >= --line`);
-		}
-	}
+	if (validationRules?.includes("pullRequestEdit"))
+		validatePullRequestEdit(
+			values,
+			definition.flags,
+			occurrences,
+			enforceRequired,
+			route,
+		);
+	if (validationRules?.includes("buildWaitBounds"))
+		validateBuildWaitBounds(values);
+	if (validationRules?.includes("commentLocation"))
+		validateCommentLocation(values);
 
 	if (enforceRequired) {
 		return values as ParsedCommandFlags<Id>;
