@@ -47,7 +47,7 @@ export interface ThreadService {
 
 const UNRESOLVED_STATUSES = new Set<string | undefined>(["active", "pending", undefined]);
 
-function isRealComment(comment: Comment): boolean {
+function isRealComment(comment: Comment): comment is Comment & { content: string } {
   return (
     !comment.isDeleted && (comment.commentType ?? "text") === "text" && !!comment.content?.trim()
   );
@@ -182,7 +182,7 @@ export function createThreadService({
     ];
     for (const comment of thread.comments.filter(isRealComment)) {
       lines.push(
-        `- **${comment.author?.displayName ?? "unknown"}** (comment ${comment.id}): ${comment.content!.trim()}`,
+        `- **${comment.author?.displayName ?? "unknown"}** (comment ${comment.id}): ${comment.content.trim()}`,
       );
     }
     return lines.join("\n");

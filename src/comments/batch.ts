@@ -88,7 +88,7 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
     if (endLine !== undefined && line === undefined) {
       throw new Error(`${label} ("${batchCommand}") has "endLine" but no "line".`);
     }
-    if (endLine !== undefined && endLine < line!) {
+    if (endLine !== undefined && line !== undefined && endLine < line) {
       throw new Error(`${label} ("${batchCommand}") has "endLine" < "line".`);
     }
   }
