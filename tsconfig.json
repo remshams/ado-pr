@@ -8,19 +8,11 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
   "include": [
-    "pr.ts",
-    "cli.ts",
-    "command-registry.ts",
-    "operation-types.ts",
-    "lib.ts",
-    "azure.ts",
-    "pull-requests.ts",
-    "builds.ts",
-    "file-anchors.ts",
-    "threads.ts",
-    "batch.ts"
+    "src/**/*.ts"
   ]
 }

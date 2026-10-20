@@ -1,3 +1,4 @@
+import { formatHelp } from "./command-registry.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,10 +9,9 @@ import {
   COMMAND_REGISTRY,
   FLAG_DEFINITIONS,
   REPEATABLE_STRING_FLAG_NAMES,
-  formatHelp,
   getBatchFields,
   getCommandDefinition,
-} from "../command-registry.ts";
+} from "../shared/command-contracts.ts";
 
 test("registry keys, routes, and command-local schemas stay coherent", () => {
   for (const id of COMMAND_IDS) {

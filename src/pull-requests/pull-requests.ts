@@ -8,10 +8,10 @@ import {
   pullRequestApiUrl,
   pullRequestWebUrl,
   reposBaseUrl,
-} from "./azure.ts";
-import type { AzureRequester } from "./azure.ts";
-import { getCurrentBranch as defaultGetCurrentBranch } from "./lib.ts";
-import type { AzureDevOpsRepoContext } from "./lib.ts";
+} from "../shared/azure.ts";
+import type { AzureRequester } from "../shared/azure.ts";
+import { getCurrentBranch as defaultGetCurrentBranch } from "../shared/lib.ts";
+import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
 
 export interface PullRequestRepository {
   id: string;

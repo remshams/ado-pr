@@ -10,8 +10,8 @@ import {
   pullRequestApiUrl,
   pullRequestWebUrl,
   reposBaseUrl,
-} from "../azure.ts";
-import { createMockFetch } from "./test-helpers.mjs";
+} from "./azure.ts";
+import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const fakePat = "test-only-fake-pat";
 const expectedAuthorization = "<redacted>";

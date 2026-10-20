@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { buildWaitExitCode } from "../operation-types.ts";
-import { spawnTestProcess } from "./test-helpers.mjs";
+import { buildWaitExitCode } from "../shared/operation-types.ts";
+import { spawnTestProcess } from "../../tests/test-helpers.mjs";
 
-const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
 const usageFirstLine = "Usage: pr.sh pr list [--json]";
 const missingPatError =

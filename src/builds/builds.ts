@@ -3,14 +3,14 @@ import {
   AzureRequestError,
   isAzureRequestError,
   orgProjectUrl,
-} from "./azure.ts";
-import type { AzureRequester } from "./azure.ts";
-import type { AzureDevOpsRepoContext } from "./lib.ts";
+} from "../shared/azure.ts";
+import type { AzureRequester } from "../shared/azure.ts";
+import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
 import type {
   PullRequest,
   PullRequestReadOptions,
   PullRequestService,
-} from "./pull-requests.ts";
+} from "../pull-requests/pull-requests.ts";
 
 const BUILD_PAGE_SIZE = 100;
 const DEFAULT_LOG_LINE_COUNT = 200;

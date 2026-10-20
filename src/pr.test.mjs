@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createTempGitRepo, runPr, startPr } from "./test-helpers.mjs";
+import { createTempGitRepo, runPr, startPr } from "../tests/test-helpers.mjs";
 
 const origin = "https://dev.azure.com/acme/Test%20Project/_git/widgets";
 const apiBase = "https://dev.azure.com/acme/Test%20Project/_apis/git/repositories/widgets";

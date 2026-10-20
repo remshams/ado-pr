@@ -24,7 +24,7 @@ const launcherTest = process.platform === "win32" ? test.skip : test;
 function createFixture(t, envContents) {
   const path = mkdtempSync(join(tmpdir(), "ado-pr-launcher-test-"));
   const launcherPath = join(path, "pr.sh");
-  const prPath = join(path, "pr.ts");
+  const prPath = join(path, "src", "pr.ts");
   const capturePath = join(path, "capture.json");
   const envPath = join(path, ".env");
   const shellMarkerPath = join(path, "shell-code-ran");
@@ -32,6 +32,7 @@ function createFixture(t, envContents) {
 
   t.after(() => rmSync(path, { recursive: true, force: true }));
   copyFileSync(sourceLauncher, launcherPath);
+  mkdirSync(join(path, "src"));
   writeFileSync(
     prPath,
     `require("node:fs").writeFileSync(process.env.ADO_PR_LAUNCH_CAPTURE, JSON.stringify({ pat: process.env.AZURE_DEVOPS_PAT, marker: process.env.ADO_PR_ENV_MARKER, args: process.argv.slice(2) }));\n`,

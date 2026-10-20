@@ -4,14 +4,14 @@ import {
   pullRequestApiUrl,
   pullRequestWebUrl,
   type AzureRequester,
-} from "./azure.ts";
+} from "../shared/azure.ts";
 import type {
   CommentThreadContext,
   FileAnchorService,
   PullRequestThreadContext,
 } from "./file-anchors.ts";
-import type { AzureDevOpsRepoContext } from "./lib.ts";
-import type { CommentLocation } from "./operation-types.ts";
+import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import type { CommentLocation } from "../shared/operation-types.ts";
 
 interface Comment {
   id: number;

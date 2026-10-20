@@ -1,6 +1,6 @@
-import { API_VERSION, pullRequestApiUrl, type AzureRequester } from "./azure.ts";
-import type { AzureDevOpsRepoContext } from "./lib.ts";
-import type { CommentLocation } from "./operation-types.ts";
+import { API_VERSION, pullRequestApiUrl, type AzureRequester } from "../shared/azure.ts";
+import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import type { CommentLocation } from "../shared/operation-types.ts";
 
 export interface CommentThreadContext {
   filePath?: string;
