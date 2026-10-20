@@ -33,6 +33,7 @@ export const TEST_SUBPROCESS_TIMEOUT_MS = 15_000;
 // Keep subprocesses usable on macOS/Linux/Windows without inheriting credentials, proxy settings,
 // NODE_OPTIONS, or other ambient process configuration from the developer's shell.
 const INHERITED_ENV_ALLOWLIST = [
+	"NODE_V8_COVERAGE",
 	"PATH",
 	"Path",
 	"PATHEXT",
@@ -310,7 +311,7 @@ export function captureConsole(t, methods = ["log", "error", "warn"]) {
  * Runs `pr.ts` in an isolated subprocess using Node's TypeScript stripping and
  * the fetch preload fixture. `responses` uses the same descriptor shape as
  * `createMockFetch` (native `Response` objects are intentionally unsupported across
- * the process boundary). Only cross-platform path/temp/locale/system variables
+ * the process boundary). Only V8 coverage and cross-platform path/temp/locale/system variables
  * are inherited; `env` supplies explicit test-only overrides, after which the
  * Azure PAT and fixture variables are forcibly set. In particular, an ambient
  * `NODE_OPTIONS` or real Azure PAT can never reach the child.
