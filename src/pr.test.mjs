@@ -1214,7 +1214,7 @@ test("comment resolves and dispatches an anchored top-level thread", (t) => {
       body: null,
     },
     {
-      url: `${apiBase}/pullRequests/42/iterations/7/changes?` + "api-version=7.1&$top=500&$skip=0",
+      url: `${apiBase}/pullRequests/42/iterations/7/changes?api-version=7.1&$top=500&$skip=0`,
       method: "GET",
       body: null,
     },
