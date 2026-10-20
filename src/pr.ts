@@ -18,8 +18,9 @@ import { createAzureRequester, pullRequestWebUrl } from "./shared/azure.ts";
 import { createBatchRunner } from "./comments/batch.ts";
 import { createBuildService } from "./builds/builds.ts";
 import { getPat, parseArgs } from "./cli/cli.ts";
+import type { CliOptions } from "./cli/operation-types.ts";
 import { createFileAnchorService } from "./comments/file-anchors.ts";
-import { getRepoContext } from "./shared/lib.ts";
+import { getRepoContext, type AzureDevOpsRepoContext } from "./shared/lib.ts";
 import {
 	buildWaitExitCode,
 	toCommentLocation,
@@ -39,138 +40,146 @@ function safeJson(value: unknown): string {
 	);
 }
 
-async function main(): Promise<void> {
-	const options = parseArgs();
-	const pat = getPat();
-	const ctx = await getRepoContext();
-
-	const azure = createAzureRequester({ pat });
-	const pullRequests = createPullRequestService({ azure, ctx });
-	const fileAnchors = createFileAnchorService({ azure, ctx });
-	const threads = createThreadService({ azure, ctx, fileAnchors });
-	const batch = createBatchRunner({ threads });
-	const builds = createBuildService({ azure, ctx, pullRequests });
-
-	if (options.resource === "build") {
-		switch (options.command) {
-			case "list": {
-				const result = await builds.list(options.pr, {
-					history: options.history,
-				});
-				console.log(
-					options.json
-						? JSON.stringify(result, null, 2)
-						: builds.formatList(result),
-				);
-				return;
-			}
-			case "show": {
-				const result = await builds.show(options.pr, options.build, {
-					fullLogs: options.fullLogs,
-				});
-				console.log(
-					options.json
-						? JSON.stringify(result, null, 2)
-						: builds.formatShow(result),
-				);
-				if (builds.hasLogErrors(result)) process.exitCode = 1;
-				return;
-			}
-			case "retry": {
-				const result = await builds.retry(options.pr, options.build);
-				console.log(builds.formatRetry(result));
-				return;
-			}
-			case "wait": {
-				const controller = new AbortController();
-				let signalNumber: number | undefined;
-				let signalCount = 0;
-				const onSignal = (number: number) => {
-					signalCount += 1;
-					if (signalCount > 1) {
-						process.exit(number);
-					}
-					signalNumber = number;
-					controller.abort();
-				};
-				const onInterrupt = () => onSignal(130);
-				const onTerminate = () => onSignal(143);
-				process.on("SIGINT", onInterrupt);
-				process.on("SIGTERM", onTerminate);
-				try {
-					const result = await builds.wait(options.pr, options.build, {
-						intervalSeconds: options.intervalSeconds,
-						timeoutSeconds: options.timeoutSeconds,
-						signal: controller.signal,
-						onProgress: (event) =>
-							console.error(builds.formatWaitProgress(event)),
-					});
-					if (signalNumber !== undefined) {
-						process.exitCode = signalNumber;
-						return;
-					}
-					console.log(
-						options.json ? safeJson(result) : builds.formatWaitResult(result),
-					);
-					process.exitCode = buildWaitExitCode(result);
-				} catch (error) {
-					if (signalNumber !== undefined || controller.signal.aborted) {
-						process.exitCode = signalNumber ?? 130;
-						return;
-					}
-					throw error;
-				} finally {
-					process.removeListener("SIGINT", onInterrupt);
-					process.removeListener("SIGTERM", onTerminate);
-				}
-				return;
-			}
+async function runBuildWait(
+	options: Extract<CliOptions, { resource: "build"; command: "wait" }>,
+	builds: ReturnType<typeof createBuildService>,
+): Promise<void> {
+	const controller = new AbortController();
+	let signalNumber: number | undefined;
+	let signalCount = 0;
+	const onSignal = (number: number) => {
+		signalCount += 1;
+		if (signalCount > 1) {
+			process.exit(number);
 		}
-		return assertNever(options);
+		signalNumber = number;
+		controller.abort();
+	};
+	const onInterrupt = () => onSignal(130);
+	const onTerminate = () => onSignal(143);
+	process.on("SIGINT", onInterrupt);
+	process.on("SIGTERM", onTerminate);
+	try {
+		const result = await builds.wait(options.pr, options.build, {
+			intervalSeconds: options.intervalSeconds,
+			timeoutSeconds: options.timeoutSeconds,
+			signal: controller.signal,
+			onProgress: (event) => console.error(builds.formatWaitProgress(event)),
+		});
+		if (signalNumber !== undefined) {
+			process.exitCode = signalNumber;
+			return;
+		}
+		console.log(
+			options.json ? safeJson(result) : builds.formatWaitResult(result),
+		);
+		process.exitCode = buildWaitExitCode(result);
+	} catch (error) {
+		if (signalNumber !== undefined || controller.signal.aborted) {
+			process.exitCode = signalNumber ?? 130;
+			return;
+		}
+		throw error;
+	} finally {
+		process.removeListener("SIGINT", onInterrupt);
+		process.removeListener("SIGTERM", onTerminate);
 	}
+}
 
-	if (options.resource === "pr") {
-		switch (options.command) {
-			case "list": {
-				const prs = await pullRequests.list();
-				if (options.json) {
-					console.log(JSON.stringify(prs, null, 2));
-					return;
-				}
-				if (prs.length === 0) {
-					console.log(
-						"No active pull requests created by you in this repository.",
-					);
-					return;
-				}
-				console.log("Active pull requests created by you:\n");
-				console.log(
-					prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"),
-				);
-				return;
-			}
-			case "create": {
-				const pr = await pullRequests.create(options);
-				console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
-				console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
-				return;
-			}
-			case "show": {
-				const pr = await pullRequests.resolve(options.pr);
-				console.log(
-					options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr),
-				);
-				return;
-			}
-			case "edit": {
-				const prId = await pullRequests.edit(options.pr, options);
-				console.log(`Updated PR #${prId}.`);
-				console.log(pullRequestWebUrl(ctx, prId));
-				return;
-			}
+async function runBuildCommand(
+	options: Extract<CliOptions, { resource: "build" }>,
+	builds: ReturnType<typeof createBuildService>,
+): Promise<void> {
+	switch (options.command) {
+		case "list": {
+			const result = await builds.list(options.pr, {
+				history: options.history,
+			});
+			console.log(
+				options.json
+					? JSON.stringify(result, null, 2)
+					: builds.formatList(result),
+			);
+			return;
+		}
+		case "show": {
+			const result = await builds.show(options.pr, options.build, {
+				fullLogs: options.fullLogs,
+			});
+			console.log(
+				options.json
+					? JSON.stringify(result, null, 2)
+					: builds.formatShow(result),
+			);
+			if (builds.hasLogErrors(result)) process.exitCode = 1;
+			return;
+		}
+		case "retry": {
+			const result = await builds.retry(options.pr, options.build);
+			console.log(builds.formatRetry(result));
+			return;
+		}
+		case "wait": {
+			await runBuildWait(options, builds);
+			return;
 		}
 	}
+	return assertNever(options);
+}
 
+async function runPullRequestCommand(
+	options: Extract<CliOptions, { resource: "pr" }>,
+	pullRequests: ReturnType<typeof createPullRequestService>,
+	ctx: AzureDevOpsRepoContext,
+): Promise<void> {
+	switch (options.command) {
+		case "list": {
+			const prs = await pullRequests.list();
+			if (options.json) {
+				console.log(JSON.stringify(prs, null, 2));
+				return;
+			}
+			if (prs.length === 0) {
+				console.log(
+					"No active pull requests created by you in this repository.",
+				);
+				return;
+			}
+			console.log("Active pull requests created by you:\n");
+			console.log(
+				prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"),
+			);
+			return;
+		}
+		case "create": {
+			const pr = await pullRequests.create(options);
+			console.log(`Created PR #${pr.pullRequestId}: ${pr.title}`);
+			console.log(pullRequestWebUrl(ctx, pr.pullRequestId));
+			return;
+		}
+		case "show": {
+			const pr = await pullRequests.resolve(options.pr);
+			console.log(
+				options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr),
+			);
+			return;
+		}
+		case "edit": {
+			const prId = await pullRequests.edit(options.pr, options);
+			console.log(`Updated PR #${prId}.`);
+			console.log(pullRequestWebUrl(ctx, prId));
+			return;
+		}
+	}
+	return assertNever(options);
+}
+
+async function runCommentCommand(
+	options: Extract<CliOptions, { resource: "comment" }>,
+	pullRequests: ReturnType<typeof createPullRequestService>,
+	threads: ReturnType<typeof createThreadService>,
+	batch: ReturnType<typeof createBatchRunner>,
+): Promise<void> {
 	const prId = await pullRequests.resolveId(options.pr);
 
 	switch (options.command) {
@@ -240,6 +249,24 @@ async function main(): Promise<void> {
 	}
 
 	return assertNever(options);
+}
+
+async function main(): Promise<void> {
+	const options = parseArgs();
+	const pat = getPat();
+	const ctx = await getRepoContext();
+
+	const azure = createAzureRequester({ pat });
+	const pullRequests = createPullRequestService({ azure, ctx });
+	const fileAnchors = createFileAnchorService({ azure, ctx });
+	const threads = createThreadService({ azure, ctx, fileAnchors });
+	const batch = createBatchRunner({ threads });
+	const builds = createBuildService({ azure, ctx, pullRequests });
+
+	if (options.resource === "build") return runBuildCommand(options, builds);
+	if (options.resource === "pr")
+		return runPullRequestCommand(options, pullRequests, ctx);
+	return runCommentCommand(options, pullRequests, threads, batch);
 }
 
 main().catch((error) => {
