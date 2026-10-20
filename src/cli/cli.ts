@@ -478,8 +478,7 @@ function buildCliOptions<Id extends CommandId>(
 	return COMMAND_OPTION_BUILDERS[commandId](values);
 }
 
-export function parseArgs(): CliOptions {
-	const args = process.argv.slice(2);
+export function parseArgs(args: string[] = process.argv.slice(2)): CliOptions {
 	const scanned = scanFlags(args);
 	validateKnownFlags(scanned);
 
