@@ -639,6 +639,191 @@ function compareRecordIndexes(
 	return leftOrder - rightOrder || leftIndex - rightIndex;
 }
 
+function findTimelineCycles(
+	parentByChild: ReadonlyMap<number, number>,
+	recordCount: number,
+): Set<number> {
+	// Each record has at most one parent, so cycle membership can be found iteratively by following
+	// parent links. This avoids recursion overflow on malformed/deep timelines.
+	const fullyScanned = new Set<number>();
+	const cycleMembers = new Set<number>();
+	for (let start = 0; start < recordCount; start += 1) {
+		if (fullyScanned.has(start)) continue;
+		const path: number[] = [];
+		const position = new Map<number, number>();
+		let current: number | undefined = start;
+		while (
+			current !== undefined &&
+			!fullyScanned.has(current) &&
+			!position.has(current)
+		) {
+			position.set(current, path.length);
+			path.push(current);
+			current = parentByChild.get(current);
+		}
+		if (current !== undefined && position.has(current)) {
+			for (const member of path.slice(position.get(current)))
+				cycleMembers.add(member);
+		}
+		for (const member of path) fullyScanned.add(member);
+	}
+
+	return cycleMembers;
+}
+
+function appendAssociatedBuilds(
+	builds: AzureBuild[],
+	page: AzureBuild[],
+	pr: ValidatedPullRequest,
+	mergeCommit: string | undefined,
+	seenBuildIds: Set<number>,
+): void {
+	for (const build of page) {
+		if (buildAssociationMismatch(build, pr) !== undefined) continue;
+		if (
+			mergeCommit !== undefined &&
+			!equalsIdentifier(build.sourceVersion as string, mergeCommit as string)
+		) {
+			continue;
+		}
+		const buildId = build.id as number;
+		if (seenBuildIds.has(buildId)) {
+			throw new Error(
+				`Azure DevOps build pagination returned duplicate build ID ${buildId}; refusing an ambiguous result.`,
+			);
+		}
+		seenBuildIds.add(buildId);
+		builds.push(build);
+	}
+}
+
+function nextBuildContinuationToken(
+	headers: Headers,
+	seenContinuationTokens: Set<string>,
+): string | undefined {
+	const nextToken = headers.get("x-ms-continuationtoken") ?? undefined;
+	if (nextToken === undefined || nextToken.length === 0) {
+		return undefined;
+	} else {
+		if (nextToken.length > MAX_CONTINUATION_TOKEN_LENGTH) {
+			throw new Error(
+				`Azure DevOps build pagination returned an oversized continuation token.`,
+			);
+		}
+		if (seenContinuationTokens.has(nextToken)) {
+			throw new Error(
+				`Azure DevOps build pagination repeated a continuation token; refusing to loop.`,
+			);
+		}
+		seenContinuationTokens.add(nextToken);
+		return nextToken;
+	}
+}
+
+interface RequestedBuildLog {
+	metadata: BuildLogMetadata;
+	mode: "tail" | "full";
+	range: BuildLogRange | null;
+}
+
+function selectProblemLogs(
+	buildId: number,
+	records: TimelineRecord[],
+	logMetadata: BuildLogMetadata[],
+	fullLogs: boolean,
+): Map<number, RequestedBuildLog> {
+	const metadataById = new Map(
+		logMetadata.map((metadata) => [metadata.id as number, metadata]),
+	);
+	const requestedLogs = new Map<number, RequestedBuildLog>();
+
+	for (const record of records) {
+		if (record.log === undefined || record.log === null) continue;
+		const logId = record.log.id as number;
+		const metadata = metadataById.get(logId);
+		if (metadata === undefined) {
+			throw new Error(
+				`Build ${buildId} timeline record ${display(record.id ?? record.name)} references log ${logId}, but the build-log metadata response did not contain it.`,
+			);
+		}
+		if (requestedLogs.has(logId)) continue;
+		if (fullLogs) {
+			requestedLogs.set(logId, { metadata, mode: "full", range: null });
+		} else {
+			if (metadata.lineCount === undefined) {
+				throw new Error(
+					`Build log ${logId} has no lineCount metadata; refusing to download an unbounded log. Use --full-logs only when complete, potentially sensitive output is intended.`,
+				);
+			}
+			requestedLogs.set(logId, {
+				metadata,
+				mode: "tail",
+				range: {
+					// Azure's log ranges are zero-based with an exclusive end line.
+					startLine: Math.max(0, metadata.lineCount - DEFAULT_LOG_LINE_COUNT),
+					endLine: metadata.lineCount,
+				},
+			});
+		}
+	}
+	return requestedLogs;
+}
+
+function validateWaitBuild(
+	rawBuild: unknown,
+	buildId: number,
+	pr: ValidatedPullRequest,
+): AzureBuild & { status: string } {
+	const observedBuild = assertFetchedBuild(rawBuild, buildId, "wait build");
+	assertBuildAssociation(observedBuild, pr);
+	if (typeof observedBuild.status !== "string") {
+		throw new Error(
+			`Cannot wait for build ${buildId}: Azure returned no build status.`,
+		);
+	}
+	const observedStatus = normalized(observedBuild.status);
+	if (
+		observedStatus === "none" ||
+		(observedStatus !== "completed" &&
+			!WAITING_BUILD_STATUSES.has(observedStatus))
+	) {
+		throw new Error(
+			`Cannot wait for build ${buildId}: Azure returned unknown build status ${display(observedBuild.status)}.`,
+		);
+	}
+	return observedBuild as AzureBuild & { status: string };
+}
+
+function createWaitProgressEmitter(
+	onProgress: WaitBuildOptions["onProgress"],
+	signal: AbortSignal | undefined,
+): (event: BuildWaitProgress) => Promise<void> {
+	return async (event: BuildWaitProgress): Promise<void> => {
+		if (onProgress !== undefined) {
+			try {
+				const callbackResult = onProgress(structuredClone(event));
+				const callbackOutcome = Promise.resolve(callbackResult).then(
+					() => ({ ok: true as const }),
+					(error: unknown) => ({ ok: false as const, error }),
+				);
+				let outcome: Awaited<typeof callbackOutcome> | undefined;
+				await cancellableSleep(
+					async () => {
+						outcome = await callbackOutcome;
+					},
+					0,
+					signal,
+				);
+				if (outcome?.ok === false) throw outcome.error;
+			} catch (error) {
+				throwIfWaitAborted(signal);
+				throw error;
+			}
+		}
+		throwIfWaitAborted(signal);
+	};
+}
+
 function orderTimelineRecords(
 	timeline: BuildTimeline,
 ): OrderedTimelineRecord[] {
@@ -673,30 +858,7 @@ function orderTimelineRecords(
 		entries.sort((left, right) => compareRecordIndexes(records, left, right));
 	}
 
-	// Each record has at most one parent, so cycle membership can be found iteratively by following
-	// parent links. This avoids recursion overflow on malformed/deep timelines.
-	const fullyScanned = new Set<number>();
-	const cycleMembers = new Set<number>();
-	for (let start = 0; start < records.length; start += 1) {
-		if (fullyScanned.has(start)) continue;
-		const path: number[] = [];
-		const position = new Map<number, number>();
-		let current: number | undefined = start;
-		while (
-			current !== undefined &&
-			!fullyScanned.has(current) &&
-			!position.has(current)
-		) {
-			position.set(current, path.length);
-			path.push(current);
-			current = parentByChild.get(current);
-		}
-		if (current !== undefined && position.has(current)) {
-			for (const member of path.slice(position.get(current)))
-				cycleMembers.add(member);
-		}
-		for (const member of path) fullyScanned.add(member);
-	}
+	const cycleMembers = findTimelineCycles(parentByChild, records.length);
 
 	const output: OrderedTimelineRecord[] = [];
 	const visited = new Set<number>();
@@ -1101,18 +1263,10 @@ export function createBuildService({
 		);
 	}
 
-	async function list(
-		requestedPrId: number | undefined,
-		options: ListBuildOptions = {},
-	): Promise<BuildListEnvelope> {
-		const history = options.history === true;
-		const pr = await resolvePullRequest(requestedPrId);
-		let mergeCommit: string | undefined;
-		if (!history) {
-			assertActivePullRequest(pr, "list current builds");
-			mergeCommit = requireCurrentMergeCommit(pr, "list current builds");
-		}
-
+	async function listAssociatedBuilds(
+		pr: ValidatedPullRequest,
+		mergeCommit: string | undefined,
+	): Promise<AzureBuild[]> {
 		const builds: AzureBuild[] = [];
 		const seenBuildIds = new Set<number>();
 		const seenContinuationTokens = new Set<string>();
@@ -1140,46 +1294,29 @@ export function createBuildService({
 					`Azure DevOps build pagination exceeded the safety limit of ${MAX_BUILD_RESPONSES} builds.`,
 				);
 			}
-			for (const build of page) {
-				if (buildAssociationMismatch(build, pr) !== undefined) continue;
-				if (
-					!history &&
-					!equalsIdentifier(
-						build.sourceVersion as string,
-						mergeCommit as string,
-					)
-				) {
-					continue;
-				}
-				const buildId = build.id as number;
-				if (seenBuildIds.has(buildId)) {
-					throw new Error(
-						`Azure DevOps build pagination returned duplicate build ID ${buildId}; refusing an ambiguous result.`,
-					);
-				}
-				seenBuildIds.add(buildId);
-				builds.push(build);
-			}
+			appendAssociatedBuilds(builds, page, pr, mergeCommit, seenBuildIds);
 
-			const nextToken =
-				response.metadata.headers.get("x-ms-continuationtoken") ?? undefined;
-			if (nextToken === undefined || nextToken.length === 0) {
-				continuationToken = undefined;
-			} else {
-				if (nextToken.length > MAX_CONTINUATION_TOKEN_LENGTH) {
-					throw new Error(
-						`Azure DevOps build pagination returned an oversized continuation token.`,
-					);
-				}
-				if (seenContinuationTokens.has(nextToken)) {
-					throw new Error(
-						`Azure DevOps build pagination repeated a continuation token; refusing to loop.`,
-					);
-				}
-				seenContinuationTokens.add(nextToken);
-				continuationToken = nextToken;
-			}
+			continuationToken = nextBuildContinuationToken(
+				response.metadata.headers,
+				seenContinuationTokens,
+			);
 		} while (continuationToken !== undefined);
+		return builds;
+	}
+
+	async function list(
+		requestedPrId: number | undefined,
+		options: ListBuildOptions = {},
+	): Promise<BuildListEnvelope> {
+		const history = options.history === true;
+		const pr = await resolvePullRequest(requestedPrId);
+		let mergeCommit: string | undefined;
+		if (!history) {
+			assertActivePullRequest(pr, "list current builds");
+			mergeCommit = requireCurrentMergeCommit(pr, "list current builds");
+		}
+
+		const builds = await listAssociatedBuilds(pr, mergeCommit);
 
 		if (!history) {
 			const refreshed = validatePullRequest(
@@ -1204,70 +1341,10 @@ export function createBuildService({
 		return { pullRequest: pr.summary, history, builds };
 	}
 
-	async function show(
-		requestedPrId: number | undefined,
+	async function fetchProblemLogs(
 		buildId: number,
-		options: ShowBuildOptions = {},
-	): Promise<BuildShowEnvelope> {
-		assertRequestedBuildId(buildId);
-		const pr = await resolvePullRequest(requestedPrId);
-		const build = await fetchBuild(buildId);
-		assertBuildAssociation(build, pr);
-		const timeline = validateTimeline(
-			await azure.request<unknown>(timelineUrl(ctx, buildId), {
-				timeoutMs: READ_TIMEOUT_MS,
-				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-			}),
-		);
-		const logMetadata = validateLogMetadata(
-			await azure.request<unknown>(logsUrl(ctx, buildId), {
-				timeoutMs: READ_TIMEOUT_MS,
-				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-			}),
-		);
-		const metadataById = new Map(
-			logMetadata.map((metadata) => [metadata.id as number, metadata]),
-		);
-		const records = timelineProblemRecords(timeline);
-		const requestedLogs = new Map<
-			number,
-			{
-				metadata: BuildLogMetadata;
-				mode: "tail" | "full";
-				range: BuildLogRange | null;
-			}
-		>();
-
-		for (const record of records) {
-			if (record.log === undefined || record.log === null) continue;
-			const logId = record.log.id as number;
-			const metadata = metadataById.get(logId);
-			if (metadata === undefined) {
-				throw new Error(
-					`Build ${buildId} timeline record ${display(record.id ?? record.name)} references log ${logId}, but the build-log metadata response did not contain it.`,
-				);
-			}
-			if (requestedLogs.has(logId)) continue;
-			if (options.fullLogs === true) {
-				requestedLogs.set(logId, { metadata, mode: "full", range: null });
-			} else {
-				if (metadata.lineCount === undefined) {
-					throw new Error(
-						`Build log ${logId} has no lineCount metadata; refusing to download an unbounded log. Use --full-logs only when complete, potentially sensitive output is intended.`,
-					);
-				}
-				requestedLogs.set(logId, {
-					metadata,
-					mode: "tail",
-					range: {
-						// Azure's log ranges are zero-based with an exclusive end line.
-						startLine: Math.max(0, metadata.lineCount - DEFAULT_LOG_LINE_COUNT),
-						endLine: metadata.lineCount,
-					},
-				});
-			}
-		}
-
+		requestedLogs: Map<number, RequestedBuildLog>,
+	): Promise<Map<number, { text?: string; error?: string }>> {
 		const logResults = new Map<number, { text?: string; error?: string }>();
 		for (const [logId, request] of requestedLogs) {
 			if (request.range?.endLine === 0) {
@@ -1296,6 +1373,39 @@ export function createBuildService({
 				logResults.set(logId, { error: sanitizeError(error) });
 			}
 		}
+		return logResults;
+	}
+
+	async function show(
+		requestedPrId: number | undefined,
+		buildId: number,
+		options: ShowBuildOptions = {},
+	): Promise<BuildShowEnvelope> {
+		assertRequestedBuildId(buildId);
+		const pr = await resolvePullRequest(requestedPrId);
+		const build = await fetchBuild(buildId);
+		assertBuildAssociation(build, pr);
+		const timeline = validateTimeline(
+			await azure.request<unknown>(timelineUrl(ctx, buildId), {
+				timeoutMs: READ_TIMEOUT_MS,
+				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+			}),
+		);
+		const logMetadata = validateLogMetadata(
+			await azure.request<unknown>(logsUrl(ctx, buildId), {
+				timeoutMs: READ_TIMEOUT_MS,
+				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+			}),
+		);
+		const records = timelineProblemRecords(timeline);
+		const requestedLogs = selectProblemLogs(
+			buildId,
+			records,
+			logMetadata,
+			options.fullLogs === true,
+		);
+
+		const logResults = await fetchProblemLogs(buildId, requestedLogs);
 
 		const problemRecords: ProblemRecord[] = records.map((record) => {
 			const base: ProblemRecordBase = { record, issues: record.issues ?? [] };
@@ -1481,121 +1591,54 @@ export function createBuildService({
 			transientFailureCount,
 			elapsedSeconds: elapsedSeconds(at),
 		});
-		const emit = async (event: BuildWaitProgress): Promise<void> => {
-			if (onProgress !== undefined) {
-				try {
-					const callbackResult = onProgress(structuredClone(event));
-					const callbackOutcome = Promise.resolve(callbackResult).then(
-						() => ({ ok: true as const }),
-						(error: unknown) => ({ ok: false as const, error }),
-					);
-					let outcome: Awaited<typeof callbackOutcome> | undefined;
-					await cancellableSleep(
-						async () => {
-							outcome = await callbackOutcome;
-						},
-						0,
-						signal,
-					);
-					if (outcome?.ok === false) throw outcome.error;
-				} catch (error) {
-					throwIfWaitAborted(signal);
-					throw error;
-				}
-			}
+		const emit = createWaitProgressEmitter(onProgress, signal);
+
+		async function handlePollError(
+			error: unknown,
+			completedAt: number,
+		): Promise<BuildWaitEnvelope | undefined> {
 			throwIfWaitAborted(signal);
-		};
+			if (isAzureRequestError(error) && error.kind === "abort") throw error;
 
-		while (true) {
-			throwIfWaitAborted(signal);
-			const current = now();
-			if (current >= deadline) return timeoutEnvelope(current);
-			if (current >= nextHeartbeatAt) {
-				await emit({ type: "heartbeat", ...progressBase(current) });
-				do nextHeartbeatAt += WAIT_HEARTBEAT_MS;
-				while (nextHeartbeatAt <= current);
-				continue;
+			const transient = isTransientWaitError(error);
+			if (transient) {
+				transientFailureCount += 1;
+				consecutiveTransientFailures += 1;
 			}
-
-			if (current < nextPollAt) {
-				const wakeAt = Math.min(nextPollAt, nextHeartbeatAt, deadline);
-				await cancellableSleep(sleep, Math.max(0, wakeAt - current), signal);
-				throwIfWaitAborted(signal);
-				continue;
-			}
-
-			const remainingMs = Math.max(1, Math.ceil(deadline - current));
-			pollCount += 1;
-			const requestTimeoutMs = Math.min(READ_TIMEOUT_MS, remainingMs);
-			const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
-			let rawBuild: unknown;
-			let completedAt: number;
-			try {
-				rawBuild = await azure.request<unknown>(url, {
-					timeoutMs: requestTimeoutMs,
-					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-					signal,
-				});
-				completedAt = now();
-			} catch (error) {
-				completedAt = now();
-				throwIfWaitAborted(signal);
-				if (isAzureRequestError(error) && error.kind === "abort") throw error;
-
-				const transient = isTransientWaitError(error);
-				if (transient) {
-					transientFailureCount += 1;
-					consecutiveTransientFailures += 1;
-				}
-				if (completedAt >= deadline) return timeoutEnvelope(completedAt);
-				if (!transient) throw error;
-
-				const retryAfterMs =
-					isAzureRequestError(error) && error.kind === "http"
-						? error.retryAfterMs
-						: undefined;
-				const errorText = sanitizeWaitError(error);
-				await emit({
-					type: "transient-warning",
-					...progressBase(completedAt),
-					attempt: pollCount,
-					consecutiveFailureCount: consecutiveTransientFailures,
-					error: errorText,
-					...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-				});
-				if (
-					consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_FAILURES
-				) {
-					throw new Error(
-						`Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
-					);
-				}
-				nextPollAt = Math.min(
-					deadline,
-					completedAt + Math.max(intervalMs, retryAfterMs ?? 0),
-				);
-				continue;
-			}
-
-			throwIfWaitAborted(signal);
 			if (completedAt >= deadline) return timeoutEnvelope(completedAt);
-			const observedBuild = assertFetchedBuild(rawBuild, buildId, "wait build");
-			assertBuildAssociation(observedBuild, pr);
-			if (typeof observedBuild.status !== "string") {
+			if (!transient) throw error;
+
+			const retryAfterMs =
+				isAzureRequestError(error) && error.kind === "http"
+					? error.retryAfterMs
+					: undefined;
+			const errorText = sanitizeWaitError(error);
+			await emit({
+				type: "transient-warning",
+				...progressBase(completedAt),
+				attempt: pollCount,
+				consecutiveFailureCount: consecutiveTransientFailures,
+				error: errorText,
+				...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+			});
+			if (consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
 				throw new Error(
-					`Cannot wait for build ${buildId}: Azure returned no build status.`,
+					`Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
 				);
 			}
+			nextPollAt = Math.min(
+				deadline,
+				completedAt + Math.max(intervalMs, retryAfterMs ?? 0),
+			);
+			return undefined;
+		}
+
+		async function observeBuild(
+			rawBuild: unknown,
+			completedAt: number,
+		): Promise<BuildWaitEnvelope | undefined> {
+			const observedBuild = validateWaitBuild(rawBuild, buildId, pr);
 			const observedStatus = normalized(observedBuild.status);
-			if (
-				observedStatus === "none" ||
-				(observedStatus !== "completed" &&
-					!WAITING_BUILD_STATUSES.has(observedStatus))
-			) {
-				throw new Error(
-					`Cannot wait for build ${buildId}: Azure returned unknown build status ${display(observedBuild.status)}.`,
-				);
-			}
 
 			latestBuild = observedBuild;
 			consecutiveTransientFailures = 0;
@@ -1626,8 +1669,61 @@ export function createBuildService({
 				});
 				previousStateKey = stateKey;
 			}
-			if (terminalEnvelope !== undefined) return terminalEnvelope;
-			nextPollAt = Math.min(deadline, completedAt + intervalMs);
+			return terminalEnvelope;
+		}
+
+		async function emitHeartbeat(current: number): Promise<void> {
+			await emit({ type: "heartbeat", ...progressBase(current) });
+			do nextHeartbeatAt += WAIT_HEARTBEAT_MS;
+			while (nextHeartbeatAt <= current);
+		}
+
+		async function pollBuild(
+			current: number,
+		): Promise<BuildWaitEnvelope | undefined> {
+			const remainingMs = Math.max(1, Math.ceil(deadline - current));
+			pollCount += 1;
+			const requestTimeoutMs = Math.min(READ_TIMEOUT_MS, remainingMs);
+			const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
+			let rawBuild: unknown;
+			let completedAt: number;
+			try {
+				rawBuild = await azure.request<unknown>(url, {
+					timeoutMs: requestTimeoutMs,
+					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+					signal,
+				});
+				completedAt = now();
+			} catch (error) {
+				completedAt = now();
+				return handlePollError(error, completedAt);
+			}
+
+			throwIfWaitAborted(signal);
+			if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+			const result = await observeBuild(rawBuild, completedAt);
+			if (!result) nextPollAt = Math.min(deadline, completedAt + intervalMs);
+			return result;
+		}
+
+		while (true) {
+			throwIfWaitAborted(signal);
+			const current = now();
+			if (current >= deadline) return timeoutEnvelope(current);
+			if (current >= nextHeartbeatAt) {
+				await emitHeartbeat(current);
+				continue;
+			}
+
+			if (current < nextPollAt) {
+				const wakeAt = Math.min(nextPollAt, nextHeartbeatAt, deadline);
+				await cancellableSleep(sleep, Math.max(0, wakeAt - current), signal);
+				throwIfWaitAborted(signal);
+				continue;
+			}
+
+			const result = await pollBuild(current);
+			if (result) return result;
 		}
 	}
 
