@@ -23,8 +23,7 @@ things. Handle realistic failure modes only; avoid speculative edge-case and
 race-condition hardening.
 
 Use pnpm. Run `pnpm check` before committing. It covers typecheck, lint, formatting,
-tests and all Fallow gates with fresh V8 coverage. Do not add entries to
-`fallow-health-baseline.json`; it only lists existing functions awaiting refactoring. Mutation testing is optional locally:
+tests and all Fallow gates with fresh V8 coverage. Mutation testing is optional locally:
 `pnpm mutation` checks changed code against `origin/main`, configurable through
 `MUTATION_BASE`; `pnpm mutation:all` reports the full score.
 
