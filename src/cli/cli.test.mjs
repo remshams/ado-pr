@@ -106,8 +106,8 @@ test("bare --help and -h document every resource-first command and the batch con
   assert.match(result.stderr, /maximum 4,000 characters/);
   assert.match(result.stderr, /\{\{image:<basename>\}\}/);
   assert.match(result.stderr, /every\s+such placeholder needs a corresponding --image/);
-  assert.match(result.stderr, /  --no-draft\s+Mark an existing PR as ready/);
-  assert.match(result.stderr, /  -h, --help\s+Show this help\./);
+  assert.match(result.stderr, / {2}--no-draft\s+Mark an existing PR as ready/);
+  assert.match(result.stderr, / {2}-h, --help\s+Show this help\./);
 
   for (const shape of [
     '{"command":"comment.create","message":"...","pr"?:n,"file"?:"...","line"?:n,"endLine"?:n}',
