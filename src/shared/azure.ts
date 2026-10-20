@@ -400,7 +400,7 @@ export function createAzureRequester({
   async function requestWithMetadata<T>(
     url: string,
     options: AzureRequestOptions = {},
-  ): Promise<AzureResponse<T | void>> {
+  ): Promise<AzureResponse<T | undefined>> {
     assertPositiveSafeInteger(options.timeoutMs, "Azure request timeoutMs", MAX_TIMER_DELAY_MS);
     assertPositiveSafeInteger(options.maxResponseBytes, "Azure request maxResponseBytes");
     const method = options.method ?? "GET";
@@ -633,7 +633,7 @@ export function createAzureRequester({
     }
   }
 
-  async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | void> {
+  async function request<T>(url: string, options: AzureRequestOptions = {}): Promise<T | undefined> {
     return (await requestWithMetadata<T>(url, options)).data;
   }
 

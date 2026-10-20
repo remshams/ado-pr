@@ -1,7 +1,7 @@
 /**
  * Shared helpers for parsing Azure DevOps remotes and running Git commands.
  */
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 
 export interface AzureDevOpsRepoContext {
   organization: string;
