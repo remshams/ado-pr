@@ -80,6 +80,6 @@ export function runCommand(
 		let stdout = "";
 		child.stdout?.on("data", (chunk) => (stdout += chunk.toString()));
 		child.once("error", reject);
-		child.once("exit", (code) => resolve({ code: code ?? 1, stdout }));
+		child.once("close", (code) => resolve({ code: code ?? 1, stdout }));
 	});
 }
