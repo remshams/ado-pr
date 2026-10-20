@@ -199,7 +199,7 @@ function parseCommandFlags<Id extends CommandId>(
   route: string,
   occurrences: FlagOccurrences,
   enforceRequired: boolean,
-): ParsedCommandFlags<Id> | void {
+): ParsedCommandFlags<Id> | undefined {
   const definition = COMMAND_REGISTRY[commandId];
   const values: Partial<Record<FlagName, string | string[] | number | boolean>> = {};
   const requiredFlags = new Set<FlagName>(

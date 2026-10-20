@@ -78,7 +78,7 @@ test("help is generated from every registered command and batch schema", () => {
     assert.ok(help.includes(definition.summary));
   }
   for (const command of BATCH_COMMANDS) {
-    assert.ok(help.includes(`\"command\":\"${command}\"`));
+    assert.ok(help.includes(`"command":"${command}"`));
   }
 
   const optionWidth = Math.max(
