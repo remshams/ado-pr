@@ -10,44 +10,51 @@ const responsesJson = process.env[responsesEnv];
 const callsPath = process.env[callsFileEnv];
 
 if (responsesJson === undefined || callsPath === undefined) {
-  throw new Error(`Fetch preload requires ${responsesEnv} and ${callsFileEnv}`);
+	throw new Error(`Fetch preload requires ${responsesEnv} and ${callsFileEnv}`);
 }
 
 const responses = JSON.parse(responsesJson);
 const envProbeNames = JSON.parse(process.env[envProbeNamesEnv] ?? "[]");
 const envProbePath = process.env[envProbeFileEnv];
 
-if (!Array.isArray(envProbeNames) || envProbeNames.some((name) => typeof name !== "string")) {
-  throw new TypeError(`${envProbeNamesEnv} must contain a JSON array of strings`);
+if (
+	!Array.isArray(envProbeNames) ||
+	envProbeNames.some((name) => typeof name !== "string")
+) {
+	throw new TypeError(
+		`${envProbeNamesEnv} must contain a JSON array of strings`,
+	);
 }
 if (envProbeNames.length > 0 && envProbePath === undefined) {
-  throw new Error(`${envProbeFileEnv} is required when environment names are requested`);
+	throw new Error(
+		`${envProbeFileEnv} is required when environment names are requested`,
+	);
 }
 if (envProbePath !== undefined) {
-  const environment = Object.fromEntries(
-    envProbeNames.map((name) => [name, process.env[name] ?? null]),
-  );
-  writeFileSync(envProbePath, `${JSON.stringify(environment, null, 2)}\n`);
+	const environment = Object.fromEntries(
+		envProbeNames.map((name) => [name, process.env[name] ?? null]),
+	);
+	writeFileSync(envProbePath, `${JSON.stringify(environment, null, 2)}\n`);
 }
 
 function persistCalls(calls) {
-  writeFileSync(callsPath, `${JSON.stringify(calls, null, 2)}\n`);
+	writeFileSync(callsPath, `${JSON.stringify(calls, null, 2)}\n`);
 }
 
 const queue = createFetchQueue(responses, {
-  onCall(_call, calls) {
-    persistCalls(calls);
-  },
+	onCall(_call, calls) {
+		persistCalls(calls);
+	},
 });
 
 globalThis.fetch = queue.fetch;
 
 process.on("exit", () => {
-  persistCalls(queue.calls);
-  if (queue.remainingResponses > 0) {
-    process.stderr.write(
-      `${queue.remainingResponses} queued fetch response(s) were not consumed\n`,
-    );
-    process.exitCode ||= 1;
-  }
+	persistCalls(queue.calls);
+	if (queue.remainingResponses > 0) {
+		process.stderr.write(
+			`${queue.remainingResponses} queued fetch response(s) were not consumed\n`,
+		);
+		process.exitCode ||= 1;
+	}
 });

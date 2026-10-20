@@ -1,125 +1,126 @@
 import type { CommandId } from "../shared/command-contracts.ts";
 
 interface PullRequestTarget {
-  pr?: number;
+	pr?: number;
 }
 
 type CliOptionsShape =
-  | {
-      resource: "pr";
-      command: "list";
-      json: boolean;
-    }
-  | (PullRequestTarget & {
-      resource: "pr";
-      command: "show";
-      json: boolean;
-    })
-  | {
-      resource: "pr";
-      command: "create";
-      title: string;
-      description?: string;
-      sourceBranch?: string;
-      targetBranch?: string;
-      draft: boolean;
-      images?: string[];
-      reviewers?: string[];
-    }
-  | (PullRequestTarget & {
-      resource: "pr";
-      command: "edit";
-      description?: string;
-      draft?: boolean;
-      images?: string[];
-      removeImages?: string[];
-      reviewers?: string[];
-      removeReviewers?: string[];
-    })
-  | (PullRequestTarget & {
-      resource: "build";
-      command: "list";
-      history: boolean;
-      json: boolean;
-    })
-  | (PullRequestTarget & {
-      resource: "build";
-      command: "show";
-      build: number;
-      fullLogs: boolean;
-      json: boolean;
-    })
-  | (PullRequestTarget & {
-      resource: "build";
-      command: "retry";
-      build: number;
-    })
-  | (PullRequestTarget & {
-      resource: "build";
-      command: "wait";
-      build: number;
-      intervalSeconds: number;
-      timeoutSeconds: number;
-      json: boolean;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "list";
-      json: boolean;
-      excludeOwn: boolean;
-      excludeResolved: boolean;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "create";
-      message: string;
-      file?: string;
-      line?: number;
-      endLine?: number;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "reply";
-      thread: number;
-      message: string;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "edit";
-      thread: number;
-      comment: number;
-      message: string;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "delete";
-      thread: number;
-      comment: number;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "resolve";
-      thread: number;
-    })
-  | (PullRequestTarget & {
-      resource: "comment";
-      command: "batch";
-    });
+	| {
+			resource: "pr";
+			command: "list";
+			json: boolean;
+	  }
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "show";
+			json: boolean;
+	  })
+	| {
+			resource: "pr";
+			command: "create";
+			title: string;
+			description?: string;
+			sourceBranch?: string;
+			targetBranch?: string;
+			draft: boolean;
+			images?: string[];
+			reviewers?: string[];
+	  }
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "edit";
+			description?: string;
+			draft?: boolean;
+			images?: string[];
+			removeImages?: string[];
+			reviewers?: string[];
+			removeReviewers?: string[];
+	  })
+	| (PullRequestTarget & {
+			resource: "build";
+			command: "list";
+			history: boolean;
+			json: boolean;
+	  })
+	| (PullRequestTarget & {
+			resource: "build";
+			command: "show";
+			build: number;
+			fullLogs: boolean;
+			json: boolean;
+	  })
+	| (PullRequestTarget & {
+			resource: "build";
+			command: "retry";
+			build: number;
+	  })
+	| (PullRequestTarget & {
+			resource: "build";
+			command: "wait";
+			build: number;
+			intervalSeconds: number;
+			timeoutSeconds: number;
+			json: boolean;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "list";
+			json: boolean;
+			excludeOwn: boolean;
+			excludeResolved: boolean;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "create";
+			message: string;
+			file?: string;
+			line?: number;
+			endLine?: number;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "reply";
+			thread: number;
+			message: string;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "edit";
+			thread: number;
+			comment: number;
+			message: string;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "delete";
+			thread: number;
+			comment: number;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "resolve";
+			thread: number;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "batch";
+	  });
 
 type CommandIdFor<Option> = Option extends {
-  resource: infer Resource extends string;
-  command: infer Command extends string;
+	resource: infer Resource extends string;
+	command: infer Command extends string;
 }
-  ? `${Resource}.${Command}`
-  : never;
+	? `${Resource}.${Command}`
+	: never;
 type CliOptionCommandId = CommandIdFor<CliOptionsShape>;
 type Assert<T extends true> = T;
 type RegistryMatchesCliOptions = Assert<
-  [CommandId] extends [CliOptionCommandId]
-    ? [CliOptionCommandId] extends [CommandId]
-      ? true
-      : false
-    : false
+	[CommandId] extends [CliOptionCommandId]
+		? [CliOptionCommandId] extends [CommandId]
+			? true
+			: false
+		: false
 >;
-export type CliOptions = RegistryMatchesCliOptions extends true ? CliOptionsShape : never;
-
+export type CliOptions = RegistryMatchesCliOptions extends true
+	? CliOptionsShape
+	: never;

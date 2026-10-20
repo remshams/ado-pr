@@ -1,16 +1,27 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { createFetchQueue, validateFetchResponses } from "./support/fetch-harness.mjs";
+import {
+	createFetchQueue,
+	validateFetchResponses,
+} from "./support/fetch-harness.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const prPath = fileURLToPath(new URL("../src/pr.ts", import.meta.url));
-const fetchPreloadPath = fileURLToPath(new URL("./fixtures/fetch-preload.mjs", import.meta.url));
+const fetchPreloadPath = fileURLToPath(
+	new URL("./fixtures/fetch-preload.mjs", import.meta.url),
+);
 const FETCH_RESPONSES_ENV = "ADO_PR_TEST_FETCH_RESPONSES";
 const FETCH_CALLS_FILE_ENV = "ADO_PR_TEST_FETCH_CALLS_FILE";
 const ENV_PROBE_NAMES_ENV = "ADO_PR_TEST_ENV_PROBE_NAMES";
@@ -22,47 +33,50 @@ export const TEST_SUBPROCESS_TIMEOUT_MS = 15_000;
 // Keep subprocesses usable on macOS/Linux/Windows without inheriting credentials, proxy settings,
 // NODE_OPTIONS, or other ambient process configuration from the developer's shell.
 const INHERITED_ENV_ALLOWLIST = [
-  "PATH",
-  "Path",
-  "PATHEXT",
-  "HOME",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "TEMP",
-  "TMP",
-  "TMPDIR",
-  "SystemRoot",
-  "SYSTEMROOT",
-  "WINDIR",
-  "COMSPEC",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "LANG",
-  "LANGUAGE",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TZ",
-  "__CF_USER_TEXT_ENCODING",
+	"PATH",
+	"Path",
+	"PATHEXT",
+	"HOME",
+	"USERPROFILE",
+	"HOMEDRIVE",
+	"HOMEPATH",
+	"TEMP",
+	"TMP",
+	"TMPDIR",
+	"SystemRoot",
+	"SYSTEMROOT",
+	"WINDIR",
+	"COMSPEC",
+	"APPDATA",
+	"LOCALAPPDATA",
+	"LANG",
+	"LANGUAGE",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TZ",
+	"__CF_USER_TEXT_ENCODING",
 ];
 
 function inheritedTestEnvironment() {
-  return Object.fromEntries(
-    INHERITED_ENV_ALLOWLIST.flatMap((name) =>
-      process.env[name] === undefined ? [] : [[name, process.env[name]]],
-    ),
-  );
+	return Object.fromEntries(
+		INHERITED_ENV_ALLOWLIST.flatMap((name) =>
+			process.env[name] === undefined ? [] : [[name, process.env[name]]],
+		),
+	);
 }
 
-const NON_GIT_CREDENTIAL_ENV_NAMES = new Set(["SSH_ASKPASS", "SSH_ASKPASS_REQUIRE"]);
+const NON_GIT_CREDENTIAL_ENV_NAMES = new Set([
+	"SSH_ASKPASS",
+	"SSH_ASKPASS_REQUIRE",
+]);
 
 function isGitEnvironmentName(name) {
-  const normalized = name.toUpperCase();
-  return (
-    normalized.startsWith("GIT_") ||
-    normalized.startsWith("GCM_") ||
-    NON_GIT_CREDENTIAL_ENV_NAMES.has(normalized)
-  );
+	const normalized = name.toUpperCase();
+	return (
+		normalized.startsWith("GIT_") ||
+		normalized.startsWith("GCM_") ||
+		NON_GIT_CREDENTIAL_ENV_NAMES.has(normalized)
+	);
 }
 
 /**
@@ -71,15 +85,15 @@ function isGitEnvironmentName(name) {
  * askpass, SSH, and credential-manager injection are omitted by construction.
  */
 export function gitTestEnvironment() {
-  return {
-    ...inheritedTestEnvironment(),
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_SYSTEM: devNull,
-    GIT_CONFIG_GLOBAL: devNull,
-    GIT_CONFIG_COUNT: "0",
-    GIT_TERMINAL_PROMPT: "0",
-    GCM_INTERACTIVE: "Never",
-  };
+	return {
+		...inheritedTestEnvironment(),
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_SYSTEM: devNull,
+		GIT_CONFIG_GLOBAL: devNull,
+		GIT_CONFIG_COUNT: "0",
+		GIT_TERMINAL_PROMPT: "0",
+		GCM_INTERACTIVE: "Never",
+	};
 }
 
 /**
@@ -89,35 +103,37 @@ export function gitTestEnvironment() {
  * when isolation began.
  */
 export function isolateGitEnvironment(t) {
-  const cleanEnvironment = gitTestEnvironment();
-  const affectedNames = new Set([
-    ...Object.keys(process.env).filter(isGitEnvironmentName),
-    ...Object.keys(cleanEnvironment).filter(isGitEnvironmentName),
-  ]);
-  const previousValues = new Map([...affectedNames].map((name) => [name, process.env[name]]));
+	const cleanEnvironment = gitTestEnvironment();
+	const affectedNames = new Set([
+		...Object.keys(process.env).filter(isGitEnvironmentName),
+		...Object.keys(cleanEnvironment).filter(isGitEnvironmentName),
+	]);
+	const previousValues = new Map(
+		[...affectedNames].map((name) => [name, process.env[name]]),
+	);
 
-  for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
-    delete process.env[name];
-  }
-  for (const [name, value] of Object.entries(cleanEnvironment)) {
-    if (isGitEnvironmentName(name)) process.env[name] = value;
-  }
+	for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
+		delete process.env[name];
+	}
+	for (const [name, value] of Object.entries(cleanEnvironment)) {
+		if (isGitEnvironmentName(name)) process.env[name] = value;
+	}
 
-  t.after(() => {
-    for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
-      delete process.env[name];
-    }
-    for (const [name, value] of previousValues) {
-      if (value !== undefined) process.env[name] = value;
-    }
-  });
+	t.after(() => {
+		for (const name of Object.keys(process.env).filter(isGitEnvironmentName)) {
+			delete process.env[name];
+		}
+		for (const [name, value] of previousValues) {
+			if (value !== undefined) process.env[name] = value;
+		}
+	});
 }
 
 function capturedOutput(result) {
-  return (
-    `${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
-    `${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`
-  );
+	return (
+		`${result.stdout ? `\nstdout:\n${result.stdout}` : ""}` +
+		`${result.stderr ? `\nstderr:\n${result.stderr}` : ""}`
+	);
 }
 
 /**
@@ -127,35 +143,37 @@ function capturedOutput(result) {
  * immediately with the command description and any captured output.
  */
 export function spawnTestProcess(
-  command,
-  args,
-  {
-    description = `${command} subprocess`,
-    timeout = TEST_SUBPROCESS_TIMEOUT_MS,
-    killSignal = "SIGKILL",
-    ...options
-  } = {},
+	command,
+	args,
+	{
+		description = `${command} subprocess`,
+		timeout = TEST_SUBPROCESS_TIMEOUT_MS,
+		killSignal = "SIGKILL",
+		...options
+	} = {},
 ) {
-  assert.ok(
-    Number.isFinite(timeout) && timeout > 0,
-    "test subprocess timeout must be a positive number",
-  );
-  const result = spawnSync(command, args, { ...options, timeout, killSignal });
+	assert.ok(
+		Number.isFinite(timeout) && timeout > 0,
+		"test subprocess timeout must be a positive number",
+	);
+	const result = spawnSync(command, args, { ...options, timeout, killSignal });
 
-  if (result.error?.code === "ETIMEDOUT") {
-    assert.fail(`${description} timed out after ${timeout}ms${capturedOutput(result)}`);
-  }
-  assert.equal(
-    result.error,
-    undefined,
-    `${description} failed to spawn: ${result.error?.message}${capturedOutput(result)}`,
-  );
-  assert.equal(
-    result.signal,
-    null,
-    `${description} terminated by ${result.signal}${capturedOutput(result)}`,
-  );
-  return result;
+	if (result.error?.code === "ETIMEDOUT") {
+		assert.fail(
+			`${description} timed out after ${timeout}ms${capturedOutput(result)}`,
+		);
+	}
+	assert.equal(
+		result.error,
+		undefined,
+		`${description} failed to spawn: ${result.error?.message}${capturedOutput(result)}`,
+	);
+	assert.equal(
+		result.signal,
+		null,
+		`${description} terminated by ${result.signal}${capturedOutput(result)}`,
+	);
+	return result;
 }
 
 /**
@@ -173,17 +191,17 @@ export function spawnTestProcess(
  * responses fail the test during teardown.
  */
 export function createMockFetch(t, responses = []) {
-  const queue = createFetchQueue(responses);
+	const queue = createFetchQueue(responses);
 
-  t.after(() => {
-    assert.equal(
-      queue.remainingResponses,
-      0,
-      `${queue.remainingResponses} queued fetch response(s) were not consumed`,
-    );
-  });
+	t.after(() => {
+		assert.equal(
+			queue.remainingResponses,
+			0,
+			`${queue.remainingResponses} queued fetch response(s) were not consumed`,
+		);
+	});
 
-  return { fetch: queue.fetch, calls: queue.calls };
+	return { fetch: queue.fetch, calls: queue.calls };
 }
 
 /**
@@ -192,42 +210,46 @@ export function createMockFetch(t, responses = []) {
  * repository context used by CLI tests; the default branch is `main`.
  */
 export function createTempGitRepo(t, { origin, branch = "main" } = {}) {
-  const path = mkdtempSync(join(tmpdir(), "ado-pr-test-repo-"));
-  const hooksPath = join(path, "disabled-hooks");
-  mkdirSync(hooksPath);
-  t.after(() => rmSync(path, { recursive: true, force: true }));
+	const path = mkdtempSync(join(tmpdir(), "ado-pr-test-repo-"));
+	const hooksPath = join(path, "disabled-hooks");
+	mkdirSync(hooksPath);
+	t.after(() => rmSync(path, { recursive: true, force: true }));
 
-  // The shared policy strips GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_*/VALUE_* entries,
-  // repository redirection, template injection, signing, askpass, and credential settings.
-  const gitEnv = gitTestEnvironment();
+	// The shared policy strips GIT_CONFIG_PARAMETERS, GIT_CONFIG_KEY_*/VALUE_* entries,
+	// repository redirection, template injection, signing, askpass, and credential settings.
+	const gitEnv = gitTestEnvironment();
 
-  const git = (...args) => {
-    const commandArgs = [
-      "-c",
-      `core.hooksPath=${hooksPath}`,
-      "-c",
-      "commit.gpgSign=false",
-      ...args,
-    ];
-    const result = spawnTestProcess("git", commandArgs, {
-      cwd: path,
-      env: gitEnv,
-      encoding: "utf8",
-      description: `git ${args.join(" ")}`,
-    });
-    assert.equal(result.status, 0, `git ${args.join(" ")} failed:\n${result.stderr}`);
-    return result.stdout.trim();
-  };
+	const git = (...args) => {
+		const commandArgs = [
+			"-c",
+			`core.hooksPath=${hooksPath}`,
+			"-c",
+			"commit.gpgSign=false",
+			...args,
+		];
+		const result = spawnTestProcess("git", commandArgs, {
+			cwd: path,
+			env: gitEnv,
+			encoding: "utf8",
+			description: `git ${args.join(" ")}`,
+		});
+		assert.equal(
+			result.status,
+			0,
+			`git ${args.join(" ")} failed:\n${result.stderr}`,
+		);
+		return result.stdout.trim();
+	};
 
-  git("init", "--initial-branch", branch);
-  git("config", "user.name", "ado-pr tests");
-  git("config", "user.email", "ado-pr-tests@example.invalid");
-  writeFileSync(join(path, "README.md"), "# Test repository\n");
-  git("add", "README.md");
-  git("commit", "--no-gpg-sign", "-m", "Initial commit");
-  if (origin !== undefined) git("remote", "add", "origin", origin);
+	git("init", "--initial-branch", branch);
+	git("config", "user.name", "ado-pr tests");
+	git("config", "user.email", "ado-pr-tests@example.invalid");
+	writeFileSync(join(path, "README.md"), "# Test repository\n");
+	git("add", "README.md");
+	git("commit", "--no-gpg-sign", "-m", "Initial commit");
+	if (origin !== undefined) git("remote", "add", "origin", origin);
 
-  return path;
+	return path;
 }
 
 /**
@@ -235,21 +257,24 @@ export function createTempGitRepo(t, { origin, branch = "main" } = {}) {
  * Do not use concurrently with another global-state helper in the same process.
  */
 export function mockStdin(t, input) {
-  const descriptor = Object.getOwnPropertyDescriptor(process, "stdin");
-  assert.ok(descriptor?.configurable, "process.stdin cannot be safely replaced");
+	const descriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+	assert.ok(
+		descriptor?.configurable,
+		"process.stdin cannot be safely replaced",
+	);
 
-  const stream = Readable.from([input]);
-  Object.defineProperty(process, "stdin", {
-    configurable: descriptor.configurable,
-    enumerable: descriptor.enumerable,
-    writable: true,
-    value: stream,
-  });
-  t.after(() => {
-    stream.destroy();
-    Object.defineProperty(process, "stdin", descriptor);
-  });
-  return stream;
+	const stream = Readable.from([input]);
+	Object.defineProperty(process, "stdin", {
+		configurable: descriptor.configurable,
+		enumerable: descriptor.enumerable,
+		writable: true,
+		value: stream,
+	});
+	t.after(() => {
+		stream.destroy();
+		Object.defineProperty(process, "stdin", descriptor);
+	});
+	return stream;
 }
 
 /**
@@ -257,11 +282,11 @@ export function mockStdin(t, input) {
  * Do not use concurrently with another global-state helper in the same process.
  */
 export function isolateExitCode(t) {
-  const previous = process.exitCode;
-  process.exitCode = undefined;
-  t.after(() => {
-    process.exitCode = previous;
-  });
+	const previous = process.exitCode;
+	process.exitCode = undefined;
+	t.after(() => {
+		process.exitCode = previous;
+	});
 }
 
 /**
@@ -269,12 +294,16 @@ export function isolateExitCode(t) {
  * Do not use concurrently with another console capture in the same process.
  */
 export function captureConsole(t, methods = ["log", "error", "warn"]) {
-  const calls = [];
-  for (const method of methods) {
-    assert.equal(typeof console[method], "function", `console.${method} is not a function`);
-    t.mock.method(console, method, (...args) => calls.push({ method, args }));
-  }
-  return calls;
+	const calls = [];
+	for (const method of methods) {
+		assert.equal(
+			typeof console[method],
+			"function",
+			`console.${method} is not a function`,
+		);
+		t.mock.method(console, method, (...args) => calls.push({ method, args }));
+	}
+	return calls;
 }
 
 /**
@@ -296,193 +325,209 @@ export function captureConsole(t, methods = ["log", "error", "warn"]) {
  * Returns the normal `spawnSync` result plus parsed `calls` and `environment`.
  */
 export function startPr(
-  t,
-  args = [],
-  {
-    cwd = projectRoot,
-    responses = [],
-    env = {},
-    fakePat = "test-only-fake-pat",
-    timeout = 5_000,
-  } = {},
+	t,
+	args = [],
+	{
+		cwd = projectRoot,
+		responses = [],
+		env = {},
+		fakePat = "test-only-fake-pat",
+		timeout = 5_000,
+	} = {},
 ) {
-  assert.ok(Array.isArray(args), "startPr args must be an array");
-  validateFetchResponses(responses);
-  assert.ok(
-    responses.every((response) => !(response instanceof Response)),
-    "startPr responses must be serializable descriptors, not Response objects",
-  );
-  assert.ok(Number.isFinite(timeout) && timeout > 0, "startPr timeout must be positive");
+	assert.ok(Array.isArray(args), "startPr args must be an array");
+	validateFetchResponses(responses);
+	assert.ok(
+		responses.every((response) => !(response instanceof Response)),
+		"startPr responses must be serializable descriptors, not Response objects",
+	);
+	assert.ok(
+		Number.isFinite(timeout) && timeout > 0,
+		"startPr timeout must be positive",
+	);
 
-  const tempPath = mkdtempSync(join(tmpdir(), "ado-pr-test-async-run-"));
-  const callsPath = join(tempPath, "fetch-calls.json");
-  const environmentPath = join(tempPath, "environment.json");
-  writeFileSync(callsPath, "[]\n");
-  writeFileSync(environmentPath, "{}\n");
+	const tempPath = mkdtempSync(join(tmpdir(), "ado-pr-test-async-run-"));
+	const callsPath = join(tempPath, "fetch-calls.json");
+	const environmentPath = join(tempPath, "environment.json");
+	writeFileSync(callsPath, "[]\n");
+	writeFileSync(environmentPath, "{}\n");
 
-  const childEnv = { ...inheritedTestEnvironment(), ...env };
-  childEnv.AZURE_DEVOPS_PAT = fakePat;
-  childEnv[FETCH_RESPONSES_ENV] = JSON.stringify(responses);
-  childEnv[FETCH_CALLS_FILE_ENV] = callsPath;
-  childEnv[ENV_PROBE_NAMES_ENV] = "[]";
-  childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
+	const childEnv = { ...inheritedTestEnvironment(), ...env };
+	childEnv.AZURE_DEVOPS_PAT = fakePat;
+	childEnv[FETCH_RESPONSES_ENV] = JSON.stringify(responses);
+	childEnv[FETCH_CALLS_FILE_ENV] = callsPath;
+	childEnv[ENV_PROBE_NAMES_ENV] = "[]";
+	childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
 
-  const child = spawn(
-    process.execPath,
-    [
-      "--disable-warning=ExperimentalWarning",
-      "--experimental-strip-types",
-      "--import",
-      fetchPreloadPath,
-      prPath,
-      ...args,
-    ],
-    { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  let stdout = "";
-  let stderr = "";
-  let closed = false;
-  child.stdout.on("data", (chunk) => { stdout += chunk; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
+	const child = spawn(
+		process.execPath,
+		[
+			"--disable-warning=ExperimentalWarning",
+			"--experimental-strip-types",
+			"--import",
+			fetchPreloadPath,
+			prPath,
+			...args,
+		],
+		{ cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
+	);
+	child.stdout.setEncoding("utf8");
+	child.stderr.setEncoding("utf8");
+	let stdout = "";
+	let stderr = "";
+	let closed = false;
+	child.stdout.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	child.stderr.on("data", (chunk) => {
+		stderr += chunk;
+	});
 
-  let timeoutHandle;
-  let timedOut = false;
-  const completion = new Promise((resolve, reject) => {
-    let spawnError;
-    child.once("error", (error) => { spawnError = error; });
-    child.once("close", (status, signal) => {
-      closed = true;
-      clearTimeout(timeoutHandle);
-      if (spawnError !== undefined) {
-        reject(spawnError);
-        return;
-      }
-      if (timedOut) {
-        reject(
-          new Error(
-            `pr.ts async subprocess timed out after ${timeout}ms` +
-              `${stdout ? `\nstdout:\n${stdout}` : ""}` +
-              `${stderr ? `\nstderr:\n${stderr}` : ""}`,
-          ),
-        );
-        return;
-      }
-      resolve({
-        status,
-        signal,
-        stdout,
-        stderr,
-        calls: JSON.parse(readFileSync(callsPath, "utf8")),
-      });
-    });
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeout);
-  });
+	let timeoutHandle;
+	let timedOut = false;
+	const completion = new Promise((resolve, reject) => {
+		let spawnError;
+		child.once("error", (error) => {
+			spawnError = error;
+		});
+		child.once("close", (status, signal) => {
+			closed = true;
+			clearTimeout(timeoutHandle);
+			if (spawnError !== undefined) {
+				reject(spawnError);
+				return;
+			}
+			if (timedOut) {
+				reject(
+					new Error(
+						`pr.ts async subprocess timed out after ${timeout}ms` +
+							`${stdout ? `\nstdout:\n${stdout}` : ""}` +
+							`${stderr ? `\nstderr:\n${stderr}` : ""}`,
+					),
+				);
+				return;
+			}
+			resolve({
+				status,
+				signal,
+				stdout,
+				stderr,
+				calls: JSON.parse(readFileSync(callsPath, "utf8")),
+			});
+		});
+		timeoutHandle = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGKILL");
+		}, timeout);
+	});
 
-  void completion.catch(() => undefined);
+	void completion.catch(() => undefined);
 
-  const waitUntil = async (predicate, description) => {
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-      let value;
-      try {
-        value = predicate();
-      } catch {
-        // The preload rewrites files synchronously; retry a transient partial read.
-      }
-      if (value) return value;
-      if (closed) throw new Error(`pr.ts exited before ${description}:\n${stderr}`);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    throw new Error(`Timed out waiting for ${description}`);
-  };
+	const waitUntil = async (predicate, description) => {
+		const deadline = Date.now() + timeout;
+		while (Date.now() < deadline) {
+			let value;
+			try {
+				value = predicate();
+			} catch {
+				// The preload rewrites files synchronously; retry a transient partial read.
+			}
+			if (value) return value;
+			if (closed)
+				throw new Error(`pr.ts exited before ${description}:\n${stderr}`);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		throw new Error(`Timed out waiting for ${description}`);
+	};
 
-  t.after(async () => {
-    if (!closed) child.kill("SIGKILL");
-    await completion.catch(() => undefined);
-    rmSync(tempPath, { recursive: true, force: true });
-  });
+	t.after(async () => {
+		if (!closed) child.kill("SIGKILL");
+		await completion.catch(() => undefined);
+		rmSync(tempPath, { recursive: true, force: true });
+	});
 
-  return {
-    child,
-    completion,
-    waitForCalls(count) {
-      return waitUntil(() => {
-        const calls = JSON.parse(readFileSync(callsPath, "utf8"));
-        return calls.length >= count ? calls : undefined;
-      }, `${count} fetch call(s)`);
-    },
-    waitForStderr(pattern) {
-      return waitUntil(() => pattern.test(stderr), `stderr matching ${pattern}`);
-    },
-  };
+	return {
+		child,
+		completion,
+		waitForCalls(count) {
+			return waitUntil(() => {
+				const calls = JSON.parse(readFileSync(callsPath, "utf8"));
+				return calls.length >= count ? calls : undefined;
+			}, `${count} fetch call(s)`);
+		},
+		waitForStderr(pattern) {
+			return waitUntil(
+				() => pattern.test(stderr),
+				`stderr matching ${pattern}`,
+			);
+		},
+	};
 }
 
 export function runPr(
-  t,
-  args = [],
-  {
-    cwd = projectRoot,
-    responses = [],
-    stdin,
-    env = {},
-    fakePat = "test-only-fake-pat",
-    inspectEnv = [],
-    timeout = TEST_SUBPROCESS_TIMEOUT_MS,
-  } = {},
+	t,
+	args = [],
+	{
+		cwd = projectRoot,
+		responses = [],
+		stdin,
+		env = {},
+		fakePat = "test-only-fake-pat",
+		inspectEnv = [],
+		timeout = TEST_SUBPROCESS_TIMEOUT_MS,
+	} = {},
 ) {
-  assert.ok(Array.isArray(args), "runPr args must be an array");
-  validateFetchResponses(responses);
-  assert.ok(
-    responses.every((response) => !(response instanceof Response)),
-    "runPr responses must be serializable descriptors, not Response objects",
-  );
-  assert.ok(Number.isFinite(timeout) && timeout > 0, "runPr timeout must be a positive number");
-  assert.ok(
-    inspectEnv.every((name) => typeof name === "string"),
-    "runPr inspectEnv entries must be strings",
-  );
+	assert.ok(Array.isArray(args), "runPr args must be an array");
+	validateFetchResponses(responses);
+	assert.ok(
+		responses.every((response) => !(response instanceof Response)),
+		"runPr responses must be serializable descriptors, not Response objects",
+	);
+	assert.ok(
+		Number.isFinite(timeout) && timeout > 0,
+		"runPr timeout must be a positive number",
+	);
+	assert.ok(
+		inspectEnv.every((name) => typeof name === "string"),
+		"runPr inspectEnv entries must be strings",
+	);
 
-  const tempPath = mkdtempSync(join(tmpdir(), "ado-pr-test-run-"));
-  const callsPath = join(tempPath, "fetch-calls.json");
-  const environmentPath = join(tempPath, "environment.json");
-  writeFileSync(callsPath, "[]\n");
-  writeFileSync(environmentPath, "{}\n");
-  t.after(() => rmSync(tempPath, { recursive: true, force: true }));
+	const tempPath = mkdtempSync(join(tmpdir(), "ado-pr-test-run-"));
+	const callsPath = join(tempPath, "fetch-calls.json");
+	const environmentPath = join(tempPath, "environment.json");
+	writeFileSync(callsPath, "[]\n");
+	writeFileSync(environmentPath, "{}\n");
+	t.after(() => rmSync(tempPath, { recursive: true, force: true }));
 
-  const childEnv = { ...inheritedTestEnvironment(), ...env };
-  childEnv.AZURE_DEVOPS_PAT = fakePat;
-  childEnv[FETCH_RESPONSES_ENV] = JSON.stringify(responses);
-  childEnv[FETCH_CALLS_FILE_ENV] = callsPath;
-  childEnv[ENV_PROBE_NAMES_ENV] = JSON.stringify(inspectEnv);
-  childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
+	const childEnv = { ...inheritedTestEnvironment(), ...env };
+	childEnv.AZURE_DEVOPS_PAT = fakePat;
+	childEnv[FETCH_RESPONSES_ENV] = JSON.stringify(responses);
+	childEnv[FETCH_CALLS_FILE_ENV] = callsPath;
+	childEnv[ENV_PROBE_NAMES_ENV] = JSON.stringify(inspectEnv);
+	childEnv[ENV_PROBE_FILE_ENV] = environmentPath;
 
-  const result = spawnTestProcess(
-    process.execPath,
-    [
-      "--disable-warning=ExperimentalWarning",
-      "--experimental-strip-types",
-      "--import",
-      fetchPreloadPath,
-      prPath,
-      ...args,
-    ],
-    {
-      cwd,
-      env: childEnv,
-      encoding: "utf8",
-      input: stdin,
-      timeout,
-      description: "pr.ts",
-    },
-  );
-  return {
-    ...result,
-    calls: JSON.parse(readFileSync(callsPath, "utf8")),
-    environment: JSON.parse(readFileSync(environmentPath, "utf8")),
-  };
+	const result = spawnTestProcess(
+		process.execPath,
+		[
+			"--disable-warning=ExperimentalWarning",
+			"--experimental-strip-types",
+			"--import",
+			fetchPreloadPath,
+			prPath,
+			...args,
+		],
+		{
+			cwd,
+			env: childEnv,
+			encoding: "utf8",
+			input: stdin,
+			timeout,
+			description: "pr.ts",
+		},
+	);
+	return {
+		...result,
+		calls: JSON.parse(readFileSync(callsPath, "utf8")),
+		environment: JSON.parse(readFileSync(environmentPath, "utf8")),
+	};
 }
