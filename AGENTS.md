@@ -9,20 +9,12 @@ Run `./pr.sh --help` from an Azure Repos checkout. Export `AZURE_DEVOPS_PAT` or 
 an `op://` reference with the 1Password CLI. For help without authentication, run
 `node --experimental-strip-types src/pr.ts --help`.
 
-## Layout
+## Architecture documentation
 
-- `src/shared/`: Azure HTTP, Git context, shared command contracts and types.
-- `src/pull-requests/`: PRs, attachments and reviewers.
-- `src/comments/`: threads, file anchors and batch operations.
-- `src/builds/`: PR validation pipelines and build diagnostics.
-- `src/cli/`: argument parsing, help and CLI option types.
-- `src/pr.ts`: entrypoint that wires services together.
-- Tests live beside each feature as `.test.mjs`. Shared helpers, fixtures and
-  launcher tests live in `tests/`.
-
-Features import shared code. Builds may also import pull requests. Only the CLI
-and entrypoint wire features together. Features must never import the CLI, and
-shared code must never import a feature.
+Start with [the architecture document](docs/architecture.md) for module ownership,
+dependency rules, runtime flow and tests. Update it in the same change when
+components, dependencies or ownership change. The [ADR index](docs/adr/README.md)
+records decisions and explains when to add or supersede a record.
 
 ## Development
 
@@ -35,6 +27,17 @@ tests and all Fallow gates with fresh V8 coverage. Do not add entries to
 `fallow-health-baseline.json`; it only lists existing functions awaiting refactoring. Mutation testing is optional locally:
 `pnpm mutation` checks changed code against `origin/main`, configurable through
 `MUTATION_BASE`; `pnpm mutation:all` reports the full score.
+
+## GitHub issues
+
+Follow the [GitHub issue guide](docs/github-issues.md) when creating or updating an
+issue. Apply the `unslop` skill to the title and body before publishing.
+
+## Pull request descriptions
+
+Follow the [pull request description guide](docs/pull-request-descriptions.md)
+when creating or updating a PR description. Apply the `unslop` skill before
+publishing it.
 
 ## Commits
 
