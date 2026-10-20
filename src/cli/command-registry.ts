@@ -1,47 +1,63 @@
-import { BATCH_COMMANDS, BATCH_FIELD_DEFINITIONS, COMMAND_IDS, COMMAND_REGISTRY, FLAG_DEFINITIONS, getBatchFields, type BatchCommand } from "../shared/command-contracts.ts";
+import {
+	BATCH_COMMANDS,
+	BATCH_FIELD_DEFINITIONS,
+	COMMAND_IDS,
+	COMMAND_REGISTRY,
+	FLAG_DEFINITIONS,
+	getBatchFields,
+	type BatchCommand,
+} from "../shared/command-contracts.ts";
 
 function formatBatchShape(command: BatchCommand): string {
-  const fields = getBatchFields(command).map((field) => {
-    if (field === "command") {
-      return `"command":"${command}"`;
-    }
-    const definition = BATCH_FIELD_DEFINITIONS[field];
-    return `"${field}"${definition.required ? "" : "?"}:${definition.example}`;
-  });
-  return `{${fields.join(",")}}`;
+	const fields = getBatchFields(command).map((field) => {
+		if (field === "command") {
+			return `"command":"${command}"`;
+		}
+		const definition = BATCH_FIELD_DEFINITIONS[field];
+		return `"${field}"${definition.required ? "" : "?"}:${definition.example}`;
+	});
+	return `{${fields.join(",")}}`;
 }
 
-function formatHelpRows(rows: readonly (readonly [string, string])[], minimumWidth = 0): string {
-  const width = Math.max(minimumWidth, ...rows.map(([label]) => label.length + 2));
-  return rows
-    .map(([label, description]) => `  ${label.padEnd(width)}${description}`)
-    .join("\n");
+function formatHelpRows(
+	rows: readonly (readonly [string, string])[],
+	minimumWidth = 0,
+): string {
+	const width = Math.max(
+		minimumWidth,
+		...rows.map(([label]) => label.length + 2),
+	);
+	return rows
+		.map(([label, description]) => `  ${label.padEnd(width)}${description}`)
+		.join("\n");
 }
 
 export function formatHelp(): string {
-  const commands = COMMAND_IDS.map((id) => COMMAND_REGISTRY[id]);
-  const usage = commands
-    .map((definition, index) => `${index === 0 ? "Usage:" : "      "} pr.sh ${definition.usage}`)
-    .join("\n");
-  const commandList = formatHelpRows(
-    commands.map(
-      (definition): [string, string] => [
-        `${definition.resource} ${definition.command}`,
-        definition.summary,
-      ],
-    ),
-    25,
-  );
-  const batchShapes = BATCH_COMMANDS.map((command) => `    ${formatBatchShape(command)}`).join(
-    "\n",
-  );
-  const options = formatHelpRows(
-    Object.values(FLAG_DEFINITIONS).map(
-      (definition): [string, string] => [definition.usage, definition.description],
-    ),
-  );
+	const commands = COMMAND_IDS.map((id) => COMMAND_REGISTRY[id]);
+	const usage = commands
+		.map(
+			(definition, index) =>
+				`${index === 0 ? "Usage:" : "      "} pr.sh ${definition.usage}`,
+		)
+		.join("\n");
+	const commandList = formatHelpRows(
+		commands.map((definition): [string, string] => [
+			`${definition.resource} ${definition.command}`,
+			definition.summary,
+		]),
+		25,
+	);
+	const batchShapes = BATCH_COMMANDS.map(
+		(command) => `    ${formatBatchShape(command)}`,
+	).join("\n");
+	const options = formatHelpRows(
+		Object.values(FLAG_DEFINITIONS).map((definition): [string, string] => [
+			definition.usage,
+			definition.description,
+		]),
+	);
 
-  return `${usage}
+	return `${usage}
 
 Commands:
 ${commandList}
