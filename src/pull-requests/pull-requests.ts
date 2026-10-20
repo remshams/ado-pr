@@ -298,6 +298,59 @@ function toFullRef(branch: string): string {
 	return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
 }
 
+function editStartingDescription(
+	options: EditPullRequestOptions,
+	current: PullRequest | undefined,
+	images: PreparedImage[],
+	removeImageNames: string[],
+): string {
+	const description = options.description ?? current?.description ?? "";
+	if (images.length > 0 && options.description === undefined) {
+		validateImagePlaceholders(description, images);
+		if (removeImageNames.length === 0) {
+			assertDescriptionLength(description);
+		}
+	}
+	return description;
+}
+
+async function prepareEditImages(
+	options: EditPullRequestOptions,
+): Promise<{ images: PreparedImage[]; removeImageNames: string[] }> {
+	const removeImageNames = options.removeImages ?? [];
+	assertUniqueValues(removeImageNames, "attachment filename");
+	for (const filename of removeImageNames) {
+		if (
+			basename(filename) !== filename ||
+			filename === "." ||
+			filename === ".."
+		) {
+			throw new Error(
+				`--remove-image requires a filename, not a path: "${filename}".`,
+			);
+		}
+	}
+
+	const images = await prepareImages(options.images ?? []);
+	const removeImageSet = new Set(removeImageNames);
+	const imageConflict = images.find((image) =>
+		removeImageSet.has(image.filename),
+	);
+	if (imageConflict) {
+		throw new Error(
+			`Cannot add and remove image "${imageConflict.filename}" in the same command.`,
+		);
+	}
+	if (options.description !== undefined) {
+		validateImagePlaceholders(options.description, images);
+		if (removeImageNames.length === 0) {
+			assertDescriptionLength(options.description);
+		}
+	}
+
+	return { images, removeImageNames };
+}
+
 export function createPullRequestService({
 	azure,
 	ctx,
@@ -638,54 +691,14 @@ export function createPullRequestService({
 		);
 	}
 
-	async function edit(
-		requestedPrId: number | undefined,
-		options: EditPullRequestOptions,
-	): Promise<number> {
-		const removeImageNames = options.removeImages ?? [];
-		assertUniqueValues(removeImageNames, "attachment filename");
-		for (const filename of removeImageNames) {
-			if (
-				basename(filename) !== filename ||
-				filename === "." ||
-				filename === ".."
-			) {
-				throw new Error(
-					`--remove-image requires a filename, not a path: "${filename}".`,
-				);
-			}
-		}
-
-		const images = await prepareImages(options.images ?? []);
-		const removeImageSet = new Set(removeImageNames);
-		const imageConflict = images.find((image) =>
-			removeImageSet.has(image.filename),
-		);
-		if (imageConflict) {
-			throw new Error(
-				`Cannot add and remove image "${imageConflict.filename}" in the same command.`,
-			);
-		}
-		if (options.description !== undefined) {
-			validateImagePlaceholders(options.description, images);
-			if (removeImageNames.length === 0) {
-				assertDescriptionLength(options.description);
-			}
-		}
-
-		const requestedReviewerRemovals = options.removeReviewers ?? [];
-		const resolvedAdditions = await resolveReviewers(options.reviewers ?? []);
-
-		const needsCurrentDescription =
-			(images.length > 0 || removeImageNames.length > 0) &&
-			options.description === undefined;
-		const current = needsCurrentDescription
-			? await resolve(requestedPrId)
-			: undefined;
-		const prId = current
-			? current.pullRequestId
-			: await resolveId(requestedPrId);
-
+	async function prepareReviewerEdits(
+		prId: number,
+		resolvedAdditions: AzureIdentity[],
+		requestedReviewerRemovals: string[],
+	): Promise<{
+		reviewers: AzureIdentity[];
+		removedReviewers: PullRequestReviewer[];
+	}> {
 		const currentReviewers =
 			resolvedAdditions.length > 0 || requestedReviewerRemovals.length > 0
 				? await listReviewers(prId)
@@ -712,14 +725,22 @@ export function createPullRequestService({
 		const reviewers = resolvedAdditions.filter(
 			(identity) => !currentReviewerIds.has(identity.id.toLowerCase()),
 		);
+		return { reviewers, removedReviewers };
+	}
 
-		let description = options.description ?? current?.description ?? "";
-		if (images.length > 0 && options.description === undefined) {
-			validateImagePlaceholders(description, images);
-			if (removeImageNames.length === 0) {
-				assertDescriptionLength(description);
-			}
-		}
+	async function editDescription(
+		prId: number,
+		options: EditPullRequestOptions,
+		current: PullRequest | undefined,
+		images: PreparedImage[],
+		removeImageNames: string[],
+	): Promise<PullRequestAttachment[]> {
+		let description = editStartingDescription(
+			options,
+			current,
+			images,
+			removeImageNames,
+		);
 
 		const attachments =
 			removeImageNames.length > 0 || images.length > 0
@@ -748,6 +769,23 @@ export function createPullRequestService({
 			);
 		}
 
+		await applyDescriptionEdit(
+			prId,
+			options,
+			images,
+			description,
+			originalDescription,
+		);
+		return removals;
+	}
+
+	async function applyDescriptionEdit(
+		prId: number,
+		options: EditPullRequestOptions,
+		images: PreparedImage[],
+		description: string,
+		originalDescription: string,
+	): Promise<void> {
 		const shouldUpdateDescription =
 			options.description !== undefined ||
 			images.length > 0 ||
@@ -763,6 +801,41 @@ export function createPullRequestService({
 				"The PR update outcome is uncertain. Newly uploaded attachments were left in place to avoid breaking a possibly applied description.",
 			);
 		}
+	}
+
+	async function edit(
+		requestedPrId: number | undefined,
+		options: EditPullRequestOptions,
+	): Promise<number> {
+		const { images, removeImageNames } = await prepareEditImages(options);
+
+		const requestedReviewerRemovals = options.removeReviewers ?? [];
+		const resolvedAdditions = await resolveReviewers(options.reviewers ?? []);
+
+		const needsCurrentDescription =
+			(images.length > 0 || removeImageNames.length > 0) &&
+			options.description === undefined;
+		const current = needsCurrentDescription
+			? await resolve(requestedPrId)
+			: undefined;
+		const prId = current
+			? current.pullRequestId
+			: await resolveId(requestedPrId);
+
+		const { reviewers, removedReviewers } = await prepareReviewerEdits(
+			prId,
+			resolvedAdditions,
+			requestedReviewerRemovals,
+		);
+
+		const removals = await editDescription(
+			prId,
+			options,
+			current,
+			images,
+			removeImageNames,
+		);
+
 		for (const attachment of removals) {
 			await deleteAttachment(prId, attachment.displayName);
 		}
