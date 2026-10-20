@@ -16,7 +16,8 @@
 		"fallow:health": "fallow health --coverage coverage --baseline fallow-health-baseline.json --baseline-mode identity",
 		"fallow": "pnpm coverage && pnpm fallow:dead-code && pnpm fallow:dupes && pnpm fallow:architecture && pnpm fallow:health",
 		"mutation": "fallow mutation --changed-since \"${MUTATION_BASE:-origin/main}\"",
-		"mutation:all": "fallow mutation --all"
+		"mutation:all": "fallow mutation --all",
+		"check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm fallow"
 	},
 	"dependencies": {
 		"minimist": "1.2.8"
