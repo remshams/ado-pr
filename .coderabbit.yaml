@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  # Approve once all review comments are resolved. The main branch ruleset
+  # requires this approval before merging.
+  request_changes_workflow: true
+  auto_review:
+    # Also review stacked pull requests that target another feature branch.
+    base_branches:
+      - ".*"
