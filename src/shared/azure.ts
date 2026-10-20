@@ -48,7 +48,7 @@ export type AzureNoContentRequestOptions = AzureRequestBaseOptions &
 		responseType: "none";
 	};
 
-export type AzureRequestOptions =
+type AzureRequestOptions =
 	| AzureJsonRequestOptions
 	| AzureTextRequestOptions
 	| AzureNoContentRequestOptions;
