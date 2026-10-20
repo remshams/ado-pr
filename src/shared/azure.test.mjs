@@ -950,3 +950,205 @@ test("Azure requester redacts sensitive or malformed URL fragments and preserves
 		);
 	}
 });
+
+test("HTTP error bodies preserve JSON structure while redacting nested credential values", async () => {
+	const body = {
+		message: "kept",
+		items: [
+			null,
+			0,
+			false,
+			"plain",
+			{
+				access_token: ["secret"],
+				value: "visible",
+				credentials: { password: "hidden" },
+			},
+		],
+		password: null,
+	};
+	const azure = createAzureRequester({
+		pat: fakePat,
+		fetch: async () => new Response(JSON.stringify(body), { status: 403 }),
+	});
+	await assert.rejects(
+		azure.request("https://example.invalid/json-error"),
+		(error) => {
+			assert.equal(error.kind, "http");
+			assert.equal(
+				error.message,
+				'Azure DevOps API request (GET https://example.invalid/json-error) failed: 403 \n{"message":"kept","items":[null,0,false,"plain",{"access_token":"<redacted>","value":"visible","credentials":"<redacted>"}],"password":"<redacted>"}',
+			);
+			return true;
+		},
+	);
+});
+
+test("request diagnostics redact URL credentials, sensitive queries, and credential-bearing path segments", async () => {
+	const pat = "test+only/pat";
+	for (const [url, safeUrl] of [
+		[
+			"https://user:pass@example.invalid/items?label=visible&client_secret=hidden",
+			"https://<redacted>:<redacted>@example.invalid/items?label=visible&client_secret=<redacted>",
+		],
+		[
+			`https://example.invalid/${encodeURIComponent(pat)}/items?label=${encodeURIComponent(pat)}`,
+			"https://example.invalid/<redacted>/items?label=<redacted>",
+		],
+		[
+			"https://example.invalid/%invalid/items",
+			"https://example.invalid/<redacted>/items",
+		],
+	]) {
+		const azure = createAzureRequester({
+			pat,
+			fetch: async () => new Response("denied", { status: 403 }),
+		});
+		await assert.rejects(azure.request(url), {
+			message: `Azure DevOps API request (GET ${safeUrl}) failed: 403 \ndenied`,
+		});
+	}
+});
+
+test("request errors retain useful empty, string, and unknown failure details", async () => {
+	for (const [failure, detail] of [
+		[new Error(""), ""],
+		["plain failure", " (plain failure)"],
+		[null, " (Unknown error)"],
+	]) {
+		const azure = createAzureRequester({
+			pat: fakePat,
+			fetch: async () => {
+				throw failure;
+			},
+		});
+		await assert.rejects(azure.request("https://example.invalid/network"), {
+			kind: "network",
+			message: `Azure DevOps API request (GET https://example.invalid/network) failed: network request failed${detail}.`,
+		});
+	}
+});
+
+test("unstreamed responses enforce byte limits and mark truncated HTTP bodies", async () => {
+	for (const [text, maxResponseBytes, expected] of [
+		["é", 2, "é"],
+		["ab", 2, "ab"],
+		["", 1, ""],
+	]) {
+		const azure = createAzureRequester({
+			pat: fakePat,
+			fetch: async () => ({
+				status: 200,
+				ok: true,
+				headers: new Headers(),
+				body: null,
+				text: async () => text,
+			}),
+		});
+		assert.equal(
+			await azure.request("https://example.invalid/text", {
+				responseType: "text",
+				maxResponseBytes,
+			}),
+			expected,
+		);
+	}
+	const oversized = createAzureRequester({
+		pat: fakePat,
+		fetch: async () => ({
+			status: 200,
+			ok: true,
+			headers: new Headers(),
+			body: null,
+			text: async () => "éé",
+		}),
+	});
+	await assert.rejects(
+		oversized.request("https://example.invalid/text", {
+			responseType: "text",
+			maxResponseBytes: 3,
+		}),
+		{
+			kind: "response",
+			message:
+				"Azure DevOps API request (GET https://example.invalid/text) failed: response body exceeded 3 bytes.",
+		},
+	);
+	const denied = createAzureRequester({
+		pat: fakePat,
+		fetch: async () => ({
+			status: 403,
+			statusText: "Denied",
+			ok: false,
+			headers: new Headers(),
+			body: null,
+			text: async () => "x".repeat(10_000),
+		}),
+	});
+	await assert.rejects(
+		denied.request("https://example.invalid/denied"),
+		(error) => {
+			assert.equal(error.kind, "http");
+			assert.equal(
+				error.message,
+				`Azure DevOps API request (GET https://example.invalid/denied) failed: 403 Denied\n${"x".repeat(4096)}\n<response body truncated>`,
+			);
+			return true;
+		},
+	);
+});
+
+test("streamed responses accumulate chunks and cancel the reader when the error excerpt fills", async () => {
+	let cancelled = 0;
+	const chunks = [
+		new TextEncoder().encode("abc"),
+		new TextEncoder().encode("def"),
+		new Uint8Array(10_000).fill(120),
+		new TextEncoder().encode("unread"),
+	];
+	const azure = createAzureRequester({
+		pat: fakePat,
+		fetch: async () =>
+			new Response(
+				new ReadableStream({
+					pull(controller) {
+						const chunk = chunks.shift();
+						if (chunk) controller.enqueue(chunk);
+						else controller.close();
+					},
+					cancel() {
+						cancelled += 1;
+					},
+				}),
+				{ status: 403 },
+			),
+	});
+	await assert.rejects(
+		azure.request("https://example.invalid/chunks"),
+		(error) => {
+			assert.equal(
+				error.message,
+				`Azure DevOps API request (GET https://example.invalid/chunks) failed: 403 \nabcdef${"x".repeat(4090)}\n<response body truncated>`,
+			);
+			return true;
+		},
+	);
+	assert.equal(cancelled, 1);
+});
+
+test("requests send the literal Basic authorization header and omit unnecessary cancellation signals", async () => {
+	const azure = createAzureRequester({
+		pat: fakePat,
+		fetch: async (_url, options) => {
+			assert.equal(
+				options.headers.Authorization,
+				`Basic ${Buffer.from(`:${fakePat}`).toString("base64")}`,
+			);
+			assert.equal(options.signal, undefined);
+			return Response.json({ ok: true });
+		},
+	});
+	assert.deepEqual(await azure.request("https://example.invalid/auth"), {
+		ok: true,
+	});
+});
