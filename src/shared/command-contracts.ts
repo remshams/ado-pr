@@ -1,8 +1,4 @@
-export type FlagKind =
-	| "string"
-	| "repeatableString"
-	| "positiveInteger"
-	| "boolean";
+type FlagKind = "string" | "repeatableString" | "positiveInteger" | "boolean";
 
 interface FlagDefinition {
 	kind: FlagKind;
@@ -174,7 +170,7 @@ export type StringFlagName =
 	| TextFlagName
 	| RepeatableStringFlagName
 	| PositiveIntegerFlagName;
-export type BooleanFlagName = FlagNameForKind<"boolean">;
+type BooleanFlagName = FlagNameForKind<"boolean">;
 
 function flagNamesForKind<Kind extends FlagKind>(
 	kind: Kind,
@@ -184,10 +180,10 @@ function flagNamesForKind<Kind extends FlagKind>(
 		.map(([name]) => name) as FlagNameForKind<Kind>[];
 }
 
-export const TEXT_FLAG_NAMES = flagNamesForKind("string");
+const TEXT_FLAG_NAMES = flagNamesForKind("string");
 export const REPEATABLE_STRING_FLAG_NAMES =
 	flagNamesForKind("repeatableString");
-export const POSITIVE_INTEGER_FLAG_NAMES = flagNamesForKind("positiveInteger");
+const POSITIVE_INTEGER_FLAG_NAMES = flagNamesForKind("positiveInteger");
 
 export const STRING_FLAG_NAMES: StringFlagName[] = [
 	...TEXT_FLAG_NAMES,
@@ -197,7 +193,7 @@ export const STRING_FLAG_NAMES: StringFlagName[] = [
 
 export const BOOLEAN_FLAG_NAMES = flagNamesForKind("boolean");
 
-export type BatchFieldKind = "command" | "positiveInteger" | "message" | "file";
+type BatchFieldKind = "command" | "positiveInteger" | "message" | "file";
 
 interface BatchFieldDefinition {
 	kind: BatchFieldKind;
@@ -474,7 +470,7 @@ export type BatchOperation = {
 }[BatchCommand];
 
 export const COMMAND_IDS = Object.keys(COMMAND_REGISTRY) as CommandId[];
-export const RESOURCE_NAMES = [
+const RESOURCE_NAMES = [
 	...new Set(COMMAND_IDS.map((id) => COMMAND_REGISTRY[id].resource)),
 ];
 export const BATCH_COMMANDS = COMMAND_IDS.filter(
