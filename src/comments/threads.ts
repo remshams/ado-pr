@@ -101,13 +101,20 @@ function formatLocation(
 		threadContext.rightFileStart?.line ?? threadContext.leftFileStart?.line;
 	const end =
 		threadContext.rightFileEnd?.line ?? threadContext.leftFileEnd?.line;
+	return `${threadContext.filePath}${formatLineRange(start, end)}`;
+}
+
+function formatLineRange(
+	start: number | undefined,
+	end: number | undefined,
+): string {
 	if (!start && !end) {
-		return threadContext.filePath;
+		return "";
 	}
 	if (!start || !end || start === end) {
-		return `${threadContext.filePath}:${start ?? end}`;
+		return `:${start ?? end}`;
 	}
-	return `${threadContext.filePath}:${start}-${end}`;
+	return `:${start}-${end}`;
 }
 
 export function createThreadService({

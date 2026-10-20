@@ -16,22 +16,12 @@ import type { ThreadService } from "./threads.ts";
 
 const BATCH_FIELDS = new Set<string>(BATCH_FIELD_NAMES);
 
-/** Validates and normalizes one element of a `comment batch` command's JSON operations array. */
-function parseBatchOperation(raw: unknown, index: number): BatchOperation {
-	const label = `Batch operation ${index + 1}`;
-	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		throw new Error(`${label} must be a JSON object.`);
-	}
-	const op = raw as Record<string, unknown>;
-
-	const command = op.command;
-	if (typeof command !== "string" || !isBatchCommand(command)) {
-		throw new Error(
-			`${label} has an invalid "command" (must be one of: ${BATCH_COMMANDS.join(", ")}).`,
-		);
-	}
-	const batchCommand = command;
-	const allowedFields = getBatchFields(batchCommand);
+function validateBatchFields(
+	op: Record<string, unknown>,
+	batchCommand: BatchOperation["command"],
+	allowedFields: readonly BatchFieldName[],
+	label: string,
+): void {
 	for (const field of Object.keys(op)) {
 		if (!BATCH_FIELDS.has(field)) {
 			throw new Error(
@@ -44,55 +34,67 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
 			);
 		}
 	}
+}
 
-	const normalized: Record<string, unknown> = { command: batchCommand };
-	for (const field of BATCH_FIELD_NAMES) {
-		if (field === "command" || !allowedFields.includes(field)) {
-			continue;
-		}
+function validateBatchFieldValue(
+	value: unknown,
+	field: Exclude<BatchFieldName, "command">,
+	batchCommand: BatchOperation["command"],
+	label: string,
+): void {
+	const definition = BATCH_FIELD_DEFINITIONS[field];
 
-		const value = op[field];
-		const definition = BATCH_FIELD_DEFINITIONS[field];
-		if (value === undefined) {
-			if (definition.required) {
+	switch (definition.kind) {
+		case "positiveInteger":
+			if (!isPositiveInteger(value)) {
+				throw new Error(
+					`${label} has an invalid "${field}" (must be a positive integer).`,
+				);
+			}
+			break;
+		case "message":
+			if (value === "" && definition.required) {
 				throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
 			}
-			continue;
-		}
+			if (typeof value !== "string") {
+				throw new Error(
+					`${label} has an invalid "${field}" (must be a string).`,
+				);
+			}
+			break;
+		case "file":
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(
+					`${label} has an invalid "${field}" (must be a non-empty string).`,
+				);
+			}
+			break;
+	}
+}
 
-		switch (definition.kind) {
-			case "positiveInteger":
-				if (!isPositiveInteger(value)) {
-					throw new Error(
-						`${label} has an invalid "${field}" (must be a positive integer).`,
-					);
-				}
-				normalized[field] = value;
-				break;
-			case "message":
-				if (value === "" && definition.required) {
-					throw new Error(
-						`${label} ("${batchCommand}") requires a "${field}".`,
-					);
-				}
-				if (typeof value !== "string") {
-					throw new Error(
-						`${label} has an invalid "${field}" (must be a string).`,
-					);
-				}
-				normalized[field] = value;
-				break;
-			case "file":
-				if (typeof value !== "string" || value.length === 0) {
-					throw new Error(
-						`${label} has an invalid "${field}" (must be a non-empty string).`,
-					);
-				}
-				normalized[field] = value;
-				break;
+function parseBatchField(
+	value: unknown,
+	field: Exclude<BatchFieldName, "command">,
+	batchCommand: BatchOperation["command"],
+	label: string,
+): unknown {
+	const definition = BATCH_FIELD_DEFINITIONS[field];
+	if (value === undefined) {
+		if (definition.required) {
+			throw new Error(`${label} ("${batchCommand}") requires a "${field}".`);
 		}
+		return undefined;
 	}
 
+	validateBatchFieldValue(value, field, batchCommand, label);
+	return value;
+}
+
+function validateBatchLocation(
+	normalized: Record<string, unknown>,
+	batchCommand: BatchOperation["command"],
+	label: string,
+): void {
 	if (getCommandValidationRules(batchCommand).includes("commentLocation")) {
 		const file = normalized.file as string | undefined;
 		const line = normalized.line as number | undefined;
@@ -109,6 +111,38 @@ function parseBatchOperation(raw: unknown, index: number): BatchOperation {
 			throw new Error(`${label} ("${batchCommand}") has "endLine" < "line".`);
 		}
 	}
+}
+
+/** Validates and normalizes one element of a `comment batch` command's JSON operations array. */
+function parseBatchOperation(raw: unknown, index: number): BatchOperation {
+	const label = `Batch operation ${index + 1}`;
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new Error(`${label} must be a JSON object.`);
+	}
+	const op = raw as Record<string, unknown>;
+
+	const command = op.command;
+	if (typeof command !== "string" || !isBatchCommand(command)) {
+		throw new Error(
+			`${label} has an invalid "command" (must be one of: ${BATCH_COMMANDS.join(", ")}).`,
+		);
+	}
+	const batchCommand = command;
+	const allowedFields = getBatchFields(batchCommand);
+	validateBatchFields(op, batchCommand, allowedFields, label);
+
+	const normalized: Record<string, unknown> = { command: batchCommand };
+	for (const field of BATCH_FIELD_NAMES) {
+		if (field === "command" || !allowedFields.includes(field)) {
+			continue;
+		}
+
+		const value = op[field];
+		const parsed = parseBatchField(value, field, batchCommand, label);
+		if (parsed !== undefined) normalized[field] = parsed;
+	}
+
+	validateBatchLocation(normalized, batchCommand, label);
 
 	return normalized as unknown as BatchOperation;
 }
