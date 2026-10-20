@@ -4,3 +4,7 @@ node_modules/
 # .env and configure a literal AZURE_DEVOPS_PAT or an op:// reference.
 .env
 .env-*
+
+# Test coverage and Fallow reports.
+coverage/
+.fallow/
