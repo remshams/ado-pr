@@ -368,6 +368,43 @@ function cancelReaderBestEffort(
 	}
 }
 
+async function readUnstreamedText(
+	response: Response,
+	maxBytes: number,
+	truncate: boolean,
+	awaitCancellable: AwaitCancellable,
+): Promise<{ text: string; truncated: boolean }> {
+	let text: string;
+	try {
+		text = await awaitCancellable(response.text());
+	} catch (error) {
+		if (isAzureRequestError(error)) throw error;
+		throw new ResponseBodyReadError(error);
+	}
+	const bytes = Buffer.from(text);
+	const exceeded = bytes.byteLength > maxBytes;
+	if (exceeded && !truncate)
+		throw new ResponseBodySizeError(`response body exceeded ${maxBytes} bytes`);
+	return {
+		text: bytes.subarray(0, maxBytes).toString("utf8"),
+		truncated: exceeded,
+	};
+}
+
+async function readResponseChunk(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	awaitCancellable: AwaitCancellable,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+	try {
+		return await awaitCancellable(reader.read(), {
+			onCancellation: () => cancelReaderBestEffort(reader),
+		});
+	} catch (error) {
+		if (isAzureRequestError(error)) throw error;
+		throw new ResponseBodyReadError(error);
+	}
+}
+
 async function readTextWithByteLimit(
 	response: Response,
 	maxBytes: number,
@@ -376,38 +413,14 @@ async function readTextWithByteLimit(
 ): Promise<{ text: string; truncated: boolean }> {
 	const reader = response.body?.getReader();
 	if (!reader) {
-		let text: string;
-		try {
-			text = await awaitCancellable(response.text());
-		} catch (error) {
-			if (isAzureRequestError(error)) throw error;
-			throw new ResponseBodyReadError(error);
-		}
-		const bytes = Buffer.from(text);
-		const exceeded = bytes.byteLength > maxBytes;
-		if (exceeded && !truncate)
-			throw new ResponseBodySizeError(
-				`response body exceeded ${maxBytes} bytes`,
-			);
-		return {
-			text: bytes.subarray(0, maxBytes).toString("utf8"),
-			truncated: exceeded,
-		};
+		return readUnstreamedText(response, maxBytes, truncate, awaitCancellable);
 	}
 
 	const chunks: Uint8Array[] = [];
 	let total = 0;
 	let truncated = false;
 	while (true) {
-		let result: ReadableStreamReadResult<Uint8Array>;
-		try {
-			result = await awaitCancellable(reader.read(), {
-				onCancellation: () => cancelReaderBestEffort(reader),
-			});
-		} catch (error) {
-			if (isAzureRequestError(error)) throw error;
-			throw new ResponseBodyReadError(error);
-		}
+		const result = await readResponseChunk(reader, awaitCancellable);
 		if (result.done) break;
 		const remaining = maxBytes - total;
 		if (result.value.byteLength > remaining) {
@@ -431,6 +444,211 @@ async function readTextWithByteLimit(
 		),
 		truncated,
 	};
+}
+
+function cleanupCancelledOperation<T>(
+	callbacks: {
+		onCancellation?: () => void;
+		onLateSuccess?: (value: T) => void;
+	},
+	outcome?: { type: "success"; value: T } | { type: "failure"; error: unknown },
+): void {
+	try {
+		callbacks.onCancellation?.();
+		if (outcome?.type === "success") callbacks.onLateSuccess?.(outcome.value);
+	} catch {
+		// Cleanup cannot replace the cancellation error.
+	}
+}
+
+function createRequestCancellation(
+	options: AzureRequestOptions,
+	method: string,
+	safeUrl: string,
+) {
+	const controller =
+		options.signal === undefined && options.timeoutMs === undefined
+			? undefined
+			: new AbortController();
+	let abortSource: "caller" | "timeout" | undefined;
+	let settleCancellation: (() => void) | undefined;
+	const cancellation =
+		controller === undefined
+			? undefined
+			: new Promise<void>((resolve) => {
+					settleCancellation = resolve;
+				});
+	const abortRequest = (source: "caller" | "timeout"): void => {
+		if (abortSource !== undefined) return;
+		abortSource = source;
+		controller?.abort();
+		settleCancellation?.();
+	};
+	const onCallerAbort = (): void => abortRequest("caller");
+	if (options.signal?.aborted) {
+		abortRequest("caller");
+	} else {
+		options.signal?.addEventListener("abort", onCallerAbort, { once: true });
+	}
+	const timer =
+		options.timeoutMs === undefined || abortSource !== undefined
+			? undefined
+			: setTimeout(() => abortRequest("timeout"), options.timeoutMs);
+
+	const cancellationError = (): AzureRequestError => {
+		if (abortSource === "timeout") {
+			return new AzureRequestError(
+				`Azure DevOps API request (${method} ${safeUrl}) timed out after ${options.timeoutMs}ms.`,
+				"timeout",
+			);
+		}
+		return new AzureRequestError(
+			`Azure DevOps API request (${method} ${safeUrl}) was aborted by the caller.`,
+			"abort",
+		);
+	};
+	const cancellationFence = (): void => {
+		if (abortSource !== undefined) throw cancellationError();
+	};
+	const awaitCancellable: AwaitCancellable = async (
+		operation,
+		callbacks = {},
+	) => {
+		const observed = Promise.resolve(operation).then(
+			(value) => ({ type: "success" as const, value }),
+			(error: unknown) => ({ type: "failure" as const, error }),
+		);
+		if (cancellation === undefined) {
+			const outcome = await observed;
+			if (outcome.type === "failure") throw outcome.error;
+			return outcome.value;
+		}
+
+		const outcome = await Promise.race([
+			observed,
+			cancellation.then(() => ({ type: "cancelled" as const })),
+		]);
+		if (outcome.type === "cancelled") {
+			cleanupCancelledOperation(callbacks);
+			void observed.then((lateOutcome) => {
+				if (lateOutcome.type === "success") {
+					try {
+						callbacks.onLateSuccess?.(lateOutcome.value);
+					} catch {
+						// Late cleanup is best effort only.
+					}
+				}
+			});
+			throw cancellationError();
+		}
+		if (abortSource !== undefined) {
+			cleanupCancelledOperation(callbacks, outcome);
+			throw cancellationError();
+		}
+		if (outcome.type === "failure") throw outcome.error;
+		return outcome.value;
+	};
+
+	return {
+		signal: controller?.signal,
+		awaitCancellable,
+		fence: cancellationFence,
+		dispose() {
+			if (timer !== undefined) clearTimeout(timer);
+			options.signal?.removeEventListener("abort", onCallerAbort);
+		},
+	};
+}
+
+interface RequestBodyKinds {
+	raw: boolean;
+	json: boolean;
+}
+
+function serializeRequestBody(
+	options: AzureRequestOptions,
+	bodyKinds: RequestBodyKinds,
+	method: string,
+	safeUrl: string,
+	pat: string,
+): Uint8Array<ArrayBuffer> | string | undefined {
+	let requestBody: Uint8Array<ArrayBuffer> | string | undefined;
+	if (bodyKinds.raw) {
+		requestBody = options.rawBody;
+	} else if (bodyKinds.json) {
+		try {
+			requestBody = JSON.stringify(options.body);
+		} catch (error) {
+			const detail = safeErrorDetail(error, pat);
+			throw new AzureRequestError(
+				`Azure DevOps API request (${method} ${safeUrl}) failed: request body could not be serialized${detail.length === 0 ? "" : ` (${detail})`}.`,
+				"response",
+			);
+		}
+	}
+	return requestBody;
+}
+
+function requestHeaders(
+	options: AzureRequestOptions,
+	bodyKinds: RequestBodyKinds,
+	pat: string,
+): Record<string, string> {
+	return {
+		Authorization: authHeader(pat),
+		...(options.accept === undefined ? {} : { Accept: options.accept }),
+		...(bodyKinds.raw
+			? { "Content-Type": options.contentType as string }
+			: bodyKinds.json
+				? { "Content-Type": "application/json" }
+				: {}),
+	};
+}
+
+async function readSuccessfulResponse<T>(
+	response: Response,
+	options: AzureRequestOptions,
+	method: string,
+	safeUrl: string,
+	awaitCancellable: AwaitCancellable,
+	cancellationFence: () => void,
+): Promise<AzureResponse<T | undefined>> {
+	const metadata: AzureResponseMetadata = {
+		headers: response.headers,
+		status: response.status,
+		statusText: response.statusText,
+		url: response.url,
+	};
+	if (options.responseType === "none") {
+		cancellationFence();
+		return { data: undefined, metadata };
+	}
+
+	const text = (
+		await readTextWithByteLimit(
+			response,
+			options.maxResponseBytes ?? Number.MAX_SAFE_INTEGER,
+			false,
+			awaitCancellable,
+		)
+	).text;
+	cancellationFence();
+	if (options.responseType === "text") {
+		cancellationFence();
+		return { data: text as T, metadata };
+	}
+
+	let data: unknown;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		throw new AzureRequestError(
+			`Azure DevOps API request (${method} ${safeUrl}) failed: response body was not valid JSON.`,
+			"response",
+		);
+	}
+	cancellationFence();
+	return { data: data as T, metadata };
 }
 
 /** Creates an authenticated Azure requester around an explicitly owned fetch implementation. */
@@ -458,104 +676,15 @@ export function createAzureRequester({
 		);
 		const method = options.method ?? "GET";
 		const safeUrl = safeRequestUrl(url, pat);
-		const hasRawBody = options.rawBody !== undefined;
-		const hasJsonBody = options.body !== undefined;
-		const controller =
-			options.signal === undefined && options.timeoutMs === undefined
-				? undefined
-				: new AbortController();
-		let abortSource: "caller" | "timeout" | undefined;
-		let settleCancellation: (() => void) | undefined;
-		const cancellation =
-			controller === undefined
-				? undefined
-				: new Promise<void>((resolve) => {
-						settleCancellation = resolve;
-					});
-		const abortRequest = (source: "caller" | "timeout"): void => {
-			if (abortSource !== undefined) return;
-			abortSource = source;
-			controller?.abort();
-			settleCancellation?.();
+		const bodyKinds = {
+			raw: options.rawBody !== undefined,
+			json: options.body !== undefined,
 		};
-		const onCallerAbort = (): void => abortRequest("caller");
-		if (options.signal?.aborted) {
-			abortRequest("caller");
-		} else {
-			options.signal?.addEventListener("abort", onCallerAbort, { once: true });
-		}
-		const timer =
-			options.timeoutMs === undefined || abortSource !== undefined
-				? undefined
-				: setTimeout(() => abortRequest("timeout"), options.timeoutMs);
+		const cancellation = createRequestCancellation(options, method, safeUrl);
+		const { awaitCancellable, fence: cancellationFence } = cancellation;
 		let phase: "request" | "fetch" | "http" | "response" = "request";
 		let response: Response | undefined;
 		let responseReceivedAt: number | undefined;
-
-		const cancellationError = (): AzureRequestError => {
-			if (abortSource === "timeout") {
-				return new AzureRequestError(
-					`Azure DevOps API request (${method} ${safeUrl}) timed out after ${options.timeoutMs}ms.`,
-					"timeout",
-				);
-			}
-			return new AzureRequestError(
-				`Azure DevOps API request (${method} ${safeUrl}) was aborted by the caller.`,
-				"abort",
-			);
-		};
-		const cancellationFence = (): void => {
-			if (abortSource !== undefined) throw cancellationError();
-		};
-		const awaitCancellable: AwaitCancellable = async (
-			operation,
-			callbacks = {},
-		) => {
-			const observed = Promise.resolve(operation).then(
-				(value) => ({ type: "success" as const, value }),
-				(error: unknown) => ({ type: "failure" as const, error }),
-			);
-			if (cancellation === undefined) {
-				const outcome = await observed;
-				if (outcome.type === "failure") throw outcome.error;
-				return outcome.value;
-			}
-
-			const outcome = await Promise.race([
-				observed,
-				cancellation.then(() => ({ type: "cancelled" as const })),
-			]);
-			if (outcome.type === "cancelled") {
-				try {
-					callbacks.onCancellation?.();
-				} catch {
-					// Cancellation cleanup cannot replace the classified cancellation error.
-				}
-				void observed.then((lateOutcome) => {
-					if (lateOutcome.type === "success") {
-						try {
-							callbacks.onLateSuccess?.(lateOutcome.value);
-						} catch {
-							// Late cleanup is best effort only.
-						}
-					}
-				});
-				throw cancellationError();
-			}
-			if (abortSource !== undefined) {
-				try {
-					callbacks.onCancellation?.();
-					if (outcome.type === "success")
-						callbacks.onLateSuccess?.(outcome.value);
-				} catch {
-					// Cancellation cleanup cannot replace the classified cancellation error.
-				}
-				throw cancellationError();
-			}
-			if (outcome.type === "failure") throw outcome.error;
-			return outcome.value;
-		};
-
 		const httpError = (
 			httpResponse: Response,
 			excerpt: { text: string; truncated: boolean },
@@ -579,99 +708,7 @@ export function createAzureRequester({
 			);
 		};
 
-		try {
-			cancellationFence();
-			let requestBody: Uint8Array<ArrayBuffer> | string | undefined;
-			if (hasRawBody) {
-				requestBody = options.rawBody;
-			} else if (hasJsonBody) {
-				try {
-					requestBody = JSON.stringify(options.body);
-				} catch (error) {
-					const detail = safeErrorDetail(error, pat);
-					throw new AzureRequestError(
-						`Azure DevOps API request (${method} ${safeUrl}) failed: request body could not be serialized${detail.length === 0 ? "" : ` (${detail})`}.`,
-						"response",
-					);
-				}
-			}
-			cancellationFence();
-
-			phase = "fetch";
-			response = await awaitCancellable(
-				fetchImpl(url, {
-					method,
-					headers: {
-						Authorization: authHeader(pat),
-						...(options.accept === undefined ? {} : { Accept: options.accept }),
-						...(hasRawBody
-							? { "Content-Type": options.contentType }
-							: hasJsonBody
-								? { "Content-Type": "application/json" }
-								: {}),
-					},
-					body: requestBody,
-					signal: controller?.signal,
-				}),
-				{
-					onLateSuccess: (lateResponse) =>
-						cancelBodyBestEffort(lateResponse.body),
-				},
-			);
-			responseReceivedAt = now();
-			cancellationFence();
-
-			if (!response.ok) {
-				phase = "http";
-				const excerpt = await readTextWithByteLimit(
-					response,
-					MAX_ERROR_RESPONSE_BYTES,
-					true,
-					awaitCancellable,
-				);
-				cancellationFence();
-				throw httpError(response, excerpt);
-			}
-
-			phase = "response";
-			const metadata: AzureResponseMetadata = {
-				headers: response.headers,
-				status: response.status,
-				statusText: response.statusText,
-				url: response.url,
-			};
-			if (options.responseType === "none") {
-				cancellationFence();
-				return { data: undefined, metadata };
-			}
-
-			const text = (
-				await readTextWithByteLimit(
-					response,
-					options.maxResponseBytes ?? Number.MAX_SAFE_INTEGER,
-					false,
-					awaitCancellable,
-				)
-			).text;
-			cancellationFence();
-			if (options.responseType === "text") {
-				cancellationFence();
-				return { data: text as T, metadata };
-			}
-
-			let data: unknown;
-			try {
-				data = JSON.parse(text);
-			} catch {
-				throw new AzureRequestError(
-					`Azure DevOps API request (${method} ${safeUrl}) failed: response body was not valid JSON.`,
-					"response",
-				);
-			}
-			cancellationFence();
-			return { data: data as T, metadata };
-		} catch (error) {
-			if (abortSource !== undefined) throw cancellationError();
+		const classifyError = (error: unknown): never => {
 			if (isAzureRequestError(error)) throw error;
 			if (error instanceof ResponseBodyReadError) {
 				if (phase === "http" && response !== undefined) {
@@ -694,9 +731,61 @@ export function createAzureRequester({
 				`Azure DevOps API request (${method} ${safeUrl}) failed: network request failed${detail.length === 0 ? "" : ` (${detail})`}.`,
 				"network",
 			);
+		};
+
+		try {
+			cancellationFence();
+			const requestBody = serializeRequestBody(
+				options,
+				bodyKinds,
+				method,
+				safeUrl,
+				pat,
+			);
+			cancellationFence();
+
+			phase = "fetch";
+			response = await awaitCancellable(
+				fetchImpl(url, {
+					method,
+					headers: requestHeaders(options, bodyKinds, pat),
+					body: requestBody,
+					signal: cancellation.signal,
+				}),
+				{
+					onLateSuccess: (lateResponse) =>
+						cancelBodyBestEffort(lateResponse.body),
+				},
+			);
+			responseReceivedAt = now();
+			cancellationFence();
+
+			if (!response.ok) {
+				phase = "http";
+				const excerpt = await readTextWithByteLimit(
+					response,
+					MAX_ERROR_RESPONSE_BYTES,
+					true,
+					awaitCancellable,
+				);
+				cancellationFence();
+				throw httpError(response, excerpt);
+			}
+
+			phase = "response";
+			return await readSuccessfulResponse<T>(
+				response,
+				options,
+				method,
+				safeUrl,
+				awaitCancellable,
+				cancellationFence,
+			);
+		} catch (error) {
+			cancellationFence();
+			return classifyError(error);
 		} finally {
-			if (timer !== undefined) clearTimeout(timer);
-			options.signal?.removeEventListener("abort", onCallerAbort);
+			cancellation.dispose();
 		}
 	}
 
