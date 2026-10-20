@@ -7,8 +7,8 @@ import {
   isBatchCommand,
   type BatchFieldName,
   type BatchOperation,
-} from "./command-registry.ts";
-import { isPositiveInteger, toCommentLocation } from "./operation-types.ts";
+} from "../shared/command-contracts.ts";
+import { isPositiveInteger, toCommentLocation } from "../shared/operation-types.ts";
 import type { ThreadService } from "./threads.ts";
 
 const BATCH_FIELDS = new Set<string>(BATCH_FIELD_NAMES);

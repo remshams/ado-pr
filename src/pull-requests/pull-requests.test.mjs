@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 
-import { createAzureRequester } from "../azure.ts";
+import { createAzureRequester } from "../shared/azure.ts";
 import {
   createPullRequestService,
   removeAttachmentMarkdown,
   validateImagePlaceholders,
-} from "../pull-requests.ts";
-import { createMockFetch } from "./test-helpers.mjs";
+} from "./pull-requests.ts";
+import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
   organization: "test-org",

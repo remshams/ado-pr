@@ -1,3 +1,4 @@
+import { formatHelp } from "./command-registry.ts";
 import minimist from "minimist";
 
 import {
@@ -6,7 +7,6 @@ import {
   FLAG_DEFINITIONS,
   REPEATABLE_STRING_FLAG_NAMES,
   STRING_FLAG_NAMES,
-  formatHelp,
   getCommandId,
   isResourceName,
   type CommandId,
@@ -16,8 +16,9 @@ import {
   type PositiveIntegerFlagName,
   type RepeatableStringFlagName,
   type TextFlagName,
-} from "./command-registry.ts";
-import { isPositiveInteger, type CliOptions } from "./operation-types.ts";
+} from "../shared/command-contracts.ts";
+import { isPositiveInteger } from "../shared/operation-types.ts";
+import type { CliOptions } from "./operation-types.ts";
 
 const KNOWN_FLAGS = new Set<string>(Object.keys(FLAG_DEFINITIONS));
 const STRING_FLAG_SET = new Set<string>(STRING_FLAG_NAMES);

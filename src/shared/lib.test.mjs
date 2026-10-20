@@ -3,13 +3,13 @@ import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 
-import { getCurrentBranch, getRepoContext, parseAzureDevOpsRemote, runCommand } from "../lib.ts";
+import { getCurrentBranch, getRepoContext, parseAzureDevOpsRemote, runCommand } from "./lib.ts";
 import {
   createTempGitRepo,
   gitTestEnvironment,
   isolateGitEnvironment,
   spawnTestProcess,
-} from "./test-helpers.mjs";
+} from "../../tests/test-helpers.mjs";
 
 const supportedRemotes = [
   {

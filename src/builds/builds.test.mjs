@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { AzureRequestError, createAzureRequester } from "../azure.ts";
-import { createBuildService, stripTerminalControls } from "../builds.ts";
-import { createMockFetch } from "./test-helpers.mjs";
+import { AzureRequestError, createAzureRequester } from "../shared/azure.ts";
+import { createBuildService, stripTerminalControls } from "./builds.ts";
+import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
   organization: "test org",

@@ -14,15 +14,15 @@
  * {{image:<basename>}}, and every such placeholder needs an upload. Create/edit uploads replace
  * every exact match with marked image Markdown; edit removal strips only exact marked references.
  */
-import { createAzureRequester, pullRequestWebUrl } from "./azure.ts";
-import { createBatchRunner } from "./batch.ts";
-import { createBuildService } from "./builds.ts";
-import { getPat, parseArgs } from "./cli.ts";
-import { createFileAnchorService } from "./file-anchors.ts";
-import { getRepoContext } from "./lib.ts";
-import { buildWaitExitCode, toCommentLocation } from "./operation-types.ts";
-import { createPullRequestService } from "./pull-requests.ts";
-import { createThreadService } from "./threads.ts";
+import { createAzureRequester, pullRequestWebUrl } from "./shared/azure.ts";
+import { createBatchRunner } from "./comments/batch.ts";
+import { createBuildService } from "./builds/builds.ts";
+import { getPat, parseArgs } from "./cli/cli.ts";
+import { createFileAnchorService } from "./comments/file-anchors.ts";
+import { getRepoContext } from "./shared/lib.ts";
+import { buildWaitExitCode, toCommentLocation } from "./shared/operation-types.ts";
+import { createPullRequestService } from "./pull-requests/pull-requests.ts";
+import { createThreadService } from "./comments/threads.ts";
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled command: ${JSON.stringify(value)}`);

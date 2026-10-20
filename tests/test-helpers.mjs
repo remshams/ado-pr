@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createFetchQueue, validateFetchResponses } from "./support/fetch-harness.mjs";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-const prPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
+const prPath = fileURLToPath(new URL("../src/pr.ts", import.meta.url));
 const fetchPreloadPath = fileURLToPath(new URL("./fixtures/fetch-preload.mjs", import.meta.url));
 const FETCH_RESPONSES_ENV = "ADO_PR_TEST_FETCH_RESPONSES";
 const FETCH_CALLS_FILE_ENV = "ADO_PR_TEST_FETCH_CALLS_FILE";

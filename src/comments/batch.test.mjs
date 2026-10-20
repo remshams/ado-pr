@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAzureRequester } from "../azure.ts";
-import { createBatchRunner } from "../batch.ts";
-import { createFileAnchorService } from "../file-anchors.ts";
-import { createThreadService } from "../threads.ts";
-import { captureConsole, createMockFetch, isolateExitCode, mockStdin } from "./test-helpers.mjs";
+import { createAzureRequester } from "../shared/azure.ts";
+import { createBatchRunner } from "./batch.ts";
+import { createFileAnchorService } from "./file-anchors.ts";
+import { createThreadService } from "./threads.ts";
+import { captureConsole, createMockFetch, isolateExitCode, mockStdin } from "../../tests/test-helpers.mjs";
 
 const ctx = {
   organization: "test-org",

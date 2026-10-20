@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Creates, lists, and edits Azure DevOps pull requests (including attachments and reviewers),
 # manages PR comments, and waits for validation builds from a git checkout whose origin remote
-# points at Azure Repos (see pr.ts for the actions/options). This tool is fully self-contained
+# points at Azure Repos (see src/pr.ts for the actions/options). This tool is fully self-contained
 # (its own package.json/node_modules live alongside this script), so it works against any such
 # checkout/worktree without needing anything installed or copied there - just cd into the target
 # worktree and run this.
@@ -29,9 +29,9 @@ if [[ -n "${AZURE_DEVOPS_PAT:-}" ]]; then
       echo "Error: AZURE_DEVOPS_PAT is an op:// reference, but the 1Password CLI ('op') was not found on PATH." >&2
       exit 1
     fi
-    exec op run -- node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/pr.ts" "$@"
+    exec op run -- node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/src/pr.ts" "$@"
   fi
-  exec node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/pr.ts" "$@"
+  exec node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/src/pr.ts" "$@"
 fi
 
 # An explicitly empty inherited value must not override a value loaded from .env.
@@ -45,7 +45,7 @@ fi
 # 1Password Environment mounts are named pipes that provide literal values on demand. Read a
 # mounted dotenv file only once: probing it first would consume one delivery before Node starts.
 if [[ -p "${ENV_FILE}" ]]; then
-  exec node --disable-warning=ExperimentalWarning --experimental-strip-types --env-file="${ENV_FILE}" "${SCRIPT_DIR}/pr.ts" "$@"
+  exec node --disable-warning=ExperimentalWarning --experimental-strip-types --env-file="${ENV_FILE}" "${SCRIPT_DIR}/src/pr.ts" "$@"
 fi
 
 # Probe a regular dotenv file without printing the PAT. Only op:// references require 1Password;
@@ -55,7 +55,7 @@ if node --env-file="${ENV_FILE}" -e 'process.exit(process.env.AZURE_DEVOPS_PAT?.
     echo "Error: AZURE_DEVOPS_PAT in ${ENV_FILE} is an op:// reference, but the 1Password CLI ('op') was not found on PATH." >&2
     exit 1
   fi
-  exec op run --env-file="${ENV_FILE}" -- node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/pr.ts" "$@"
+  exec op run --env-file="${ENV_FILE}" -- node --disable-warning=ExperimentalWarning --experimental-strip-types "${SCRIPT_DIR}/src/pr.ts" "$@"
 fi
 
-exec node --disable-warning=ExperimentalWarning --experimental-strip-types --env-file="${ENV_FILE}" "${SCRIPT_DIR}/pr.ts" "$@"
+exec node --disable-warning=ExperimentalWarning --experimental-strip-types --env-file="${ENV_FILE}" "${SCRIPT_DIR}/src/pr.ts" "$@"

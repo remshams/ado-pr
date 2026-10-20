@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createAzureRequester } from "../azure.ts";
-import { createFileAnchorService } from "../file-anchors.ts";
-import { createThreadService } from "../threads.ts";
-import { createMockFetch } from "./test-helpers.mjs";
+import { createAzureRequester } from "../shared/azure.ts";
+import { createFileAnchorService } from "./file-anchors.ts";
+import { createThreadService } from "./threads.ts";
+import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
   organization: "my org",

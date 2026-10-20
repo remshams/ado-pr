@@ -1,10 +1,4 @@
-import type { CommandId } from "./command-registry.ts";
-
-export interface CommentLocation {
-  file: string;
-  line?: number;
-  endLine?: number;
-}
+import type { CommandId } from "../shared/command-contracts.ts";
 
 interface PullRequestTarget {
   pr?: number;
@@ -129,25 +123,3 @@ type RegistryMatchesCliOptions = Assert<
 >;
 export type CliOptions = RegistryMatchesCliOptions extends true ? CliOptionsShape : never;
 
-export function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
-}
-
-export function buildWaitExitCode(result: {
-  timedOut: boolean;
-  outcome: string;
-}): 0 | 1 | 124 {
-  if (result.timedOut || result.outcome === "timeout") return 124;
-  return result.outcome === "succeeded" ? 0 : 1;
-}
-
-/** Builds an optional file-anchor location from CLI options or a batch operation. */
-export function toCommentLocation(source: {
-  file?: string;
-  line?: number;
-  endLine?: number;
-}): CommentLocation | undefined {
-  return source.file
-    ? { file: source.file, line: source.line, endLine: source.endLine }
-    : undefined;
-}
