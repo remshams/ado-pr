@@ -23,8 +23,9 @@ coverage from tests and CLI subprocesses.
 Use `fallow mutation` with its native node:test runner rather than Stryker/Vitest,
 so the tests do not need migration. PRs gate changed code against their base.
 `pnpm mutation` does the same locally, defaulting to `origin/main` and accepting
-`MUTATION_BASE`. Keep the minimum score at 71 for now and raise it toward 80 as
-coverage improves; do not lower it to pass changes. Full runs report the score
+`MUTATION_BASE`. The minimum score lives in the `mutation` script in
+`package.json`. Raise it as coverage improves, aiming for at least 80; do not
+lower it to pass changes. Full runs report the score
 through `pnpm mutation:all` and are manual in CI via `workflow_dispatch`.
 
 Run `pnpm check` before committing. It combines typechecking, Biome, tests and all
@@ -35,5 +36,5 @@ locally. GitHub Actions checks Node 22 and 24, lint, Fallow and PR mutations.
 
 One runner supports ordinary tests, coverage and mutation checks. Changed-code
 mutation gates keep PR validation focused; manual full runs reveal gaps outside
-the diff. A score of 71 permits surviving mutants, so 80 remains a target, not a
-claim about current test strength.
+the diff. A minimum score still permits surviving mutants; it is a floor, not a
+claim that every behaviour is tested.
