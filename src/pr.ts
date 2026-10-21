@@ -236,10 +236,15 @@ async function runCommentCommand(
 			return;
 		}
 		case "resolve": {
-			await threads.resolve(prId, options.thread);
+			await threads.resolve(prId, options.thread, options.status);
 			console.log(
-				`Marked thread ${options.thread} on PR #${prId} as resolved.`,
+				`Marked thread ${options.thread} on PR #${prId} as ${options.status}.`,
 			);
+			return;
+		}
+		case "reopen": {
+			await threads.reopen(prId, options.thread);
+			console.log(`Reopened thread ${options.thread} on PR #${prId}.`);
 			return;
 		}
 		case "batch": {

@@ -1472,8 +1472,39 @@ test("resolve dispatches a fixed status update to the selected thread", (t) => {
 			body: JSON.stringify({ status: "fixed" }),
 		},
 	]);
-	assert.equal(result.stdout, "Marked thread 9 on PR #42 as resolved.\n");
+	assert.equal(result.stdout, "Marked thread 9 on PR #42 as fixed.\n");
 });
+
+for (const [command, flags, status, confirmation] of [
+	[
+		"resolve",
+		["--status", "wontFix"],
+		"wontFix",
+		"Marked thread 9 on PR #42 as wontFix.",
+	],
+	["reopen", [], "active", "Reopened thread 9 on PR #42."],
+]) {
+	test(`comment ${command} dispatches ${status}`, (t) => {
+		const cwd = createRepo(t);
+		const result = runPr(
+			t,
+			["comment", command, "--pr", "42", "--thread", "9", ...flags],
+			{
+				cwd,
+				responses: [{ json: { id: 9, status } }],
+			},
+		);
+		assertSucceeded(result);
+		assert.deepEqual(result.calls.map(request), [
+			{
+				url: `${apiBase}/pullRequests/42/threads/9?api-version=7.1`,
+				method: "PATCH",
+				body: JSON.stringify({ status }),
+			},
+		]);
+		assert.equal(result.stdout, `${confirmation}\n`);
+	});
+}
 
 test("batch reads stdin and dispatches operations in order with per-operation PR overrides", (t) => {
 	const cwd = createRepo(t);
