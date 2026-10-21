@@ -1,6 +1,6 @@
 ---
 name: azure-pr
-description: "Manage Azure DevOps pull requests, review comments, and Azure Pipelines validation builds with pr.sh: inspect/retry builds, list/create/inspect PRs, update descriptions/images/reviewers/draft state, inspect feedback, post/reply/edit/delete/resolve comments, and run batch operations. Use whenever the user asks to manage an Azure DevOps pull request, review feedback, or PR validation build."
+description: "Manage Azure DevOps pull requests, review comments, and Azure Pipelines validation builds with pr.sh: inspect/retry builds, list/create/inspect PRs, update descriptions/images/reviewers/draft state, inspect feedback, post/reply/edit/delete/resolve/reopen comments, and run batch operations. Use whenever the user asks to manage an Azure DevOps pull request, review feedback, or PR validation build."
 ---
 
 # Azure DevOps PR tooling
@@ -40,4 +40,4 @@ Replace `<actual model name>` with the exact provider and model identity current
 
 Do not ask the user for the model name and do not use an unverified one; the model name is optional, the AI-authorship disclosure is not. When editing a comment, ensure the resulting content contains one current disclosure rather than dropping it or adding duplicates. Never post or edit agent-authored comment text without the disclosure.
 
-Operations that do not write comment content, such as `pr.sh comment delete`, `pr.sh comment resolve`, `comment.delete`, and `comment.resolve`, do not require a disclosure.
+Operations that do not write comment content, such as `pr.sh comment delete`, `pr.sh comment resolve`, `pr.sh comment reopen`, `comment.delete`, and `comment.resolve`, do not require a disclosure.
