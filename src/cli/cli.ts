@@ -1,3 +1,4 @@
+import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
 import { formatHelp } from "./command-registry.ts";
 import minimist from "minimist";
 
@@ -191,6 +192,19 @@ type FlagValues = Partial<
 	Record<FlagName, string | string[] | number | boolean>
 >;
 
+function parseResolvedStatus(raw: string | undefined): ResolvedStatus {
+	if (raw === undefined) return "fixed";
+	const status = RESOLVED_STATUSES.find(
+		(value) => value.toLowerCase() === raw.toLowerCase(),
+	);
+	if (!status) {
+		printUsageAndExit(
+			`invalid --status "${raw}" (must be one of: ${RESOLVED_STATUSES.join(", ")})`,
+		);
+	}
+	return status;
+}
+
 function parseFlagValue(
 	occurrences: FlagOccurrences,
 	flag: FlagName,
@@ -204,7 +218,8 @@ function parseFlagValue(
 			occurrences,
 			flag as RepeatableStringFlagName,
 		);
-	return parseStringFlag(occurrences, flag as TextFlagName);
+	const raw = parseStringFlag(occurrences, flag as TextFlagName);
+	return flag === "status" ? parseResolvedStatus(raw) : raw;
 }
 
 function validatePullRequestEdit(
@@ -461,6 +476,13 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 	"comment.resolve": (values) => ({
 		resource: "comment",
 		command: "resolve",
+		pr: values.pr,
+		thread: values.thread,
+		status: values.status as ResolvedStatus,
+	}),
+	"comment.reopen": (values) => ({
+		resource: "comment",
+		command: "reopen",
 		pr: values.pr,
 		thread: values.thread,
 	}),
