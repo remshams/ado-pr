@@ -18,7 +18,13 @@ export const FLAG_DEFINITIONS = {
 		kind: "positiveInteger",
 		usage: "--build <id>",
 		description:
-			"Build ID (required for `build show`, `build retry`, and `build wait`).",
+			"Build ID. Required for `build retry`; choose --build or --latest for show/wait.",
+	},
+	latest: {
+		kind: "boolean",
+		usage: "--latest",
+		description:
+			"Select the newest build validating the PR head by queue time.",
 	},
 	interval: {
 		kind: "positiveInteger",
@@ -224,7 +230,8 @@ export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 export type CommandValidationRule =
 	| "pullRequestEdit"
 	| "commentLocation"
-	| "buildWaitBounds";
+	| "buildWaitBounds"
+	| "buildSelection";
 
 interface CommandDefinition {
 	resource: "pr" | "comment" | "build";
@@ -316,11 +323,12 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"build.show": {
 		resource: "build",
 		command: "show",
-		usage: "build show --build <id> [--pr <id>] [--full-logs] [--json]",
+		usage:
+			"build show (--build <id> | --latest) [--pr <id>] [--full-logs] [--json]",
 		summary:
 			"Inspect a PR validation build, timeline, issues, and diagnostic logs.",
-		flags: ["build", "pr", "full-logs", "json"],
-		requiredFlags: ["build"],
+		flags: ["build", "latest", "pr", "full-logs", "json"],
+		validationRules: ["buildSelection"],
 	},
 	"build.retry": {
 		resource: "build",
@@ -335,12 +343,11 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		resource: "build",
 		command: "wait",
 		usage:
-			"build wait --build <id> [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
+			"build wait (--build <id> | --latest) [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
 		summary:
 			"Wait for a PR validation build to reach a terminal outcome without mutating it.",
-		flags: ["build", "pr", "interval", "timeout", "json"],
-		requiredFlags: ["build"],
-		validationRules: ["buildWaitBounds"],
+		flags: ["build", "latest", "pr", "interval", "timeout", "json"],
+		validationRules: ["buildSelection", "buildWaitBounds"],
 	},
 	"comment.list": {
 		resource: "comment",
