@@ -149,6 +149,12 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
 		},
 		{
+			name: "reopen is not a batch command",
+			operation: { command: "comment.reopen", thread: 1 },
+			message:
+				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
+		},
+		{
 			name: "non-positive PR",
 			operation: { command: "comment.create", message: "hello", pr: 0 },
 			message:
@@ -277,6 +283,7 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 	test("rejects unknown fields for every command", async (t) => {
 		const unknownFields = [
 			["unexpected", true],
+			["status", "wontFix"],
 			["action", "reply"],
 		];
 		for (const [command, validOperation] of Object.entries(

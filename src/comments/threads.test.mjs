@@ -442,4 +442,18 @@ test.describe("threads", () => {
 			},
 		]);
 	});
+	for (const status of ["fixed", "wontFix", "byDesign", "closed", "active"]) {
+		test(`sets the ${status} thread status`, async (t) => {
+			const { calls, threads } = createServices(t, [{ json: {} }]);
+			if (status === "active") await threads.reopen(prId, 19);
+			else await threads.resolve(prId, 19, status);
+			assert.deepEqual(requestShapes(calls), [
+				{
+					url: `${apiBase}/threads/19?api-version=7.1`,
+					method: "PATCH",
+					body: { status },
+				},
+			]);
+		});
+	}
 });
