@@ -257,7 +257,7 @@ test("build retry double-checks its target and prints Azure's returned build", (
 	assert.equal(
 		result.stdout,
 		"Azure DevOps accepted the retry request for build 701/20260818.2.\n" +
-			"Returned status/result: inProgress/unknown\n" +
+			"Association: pr-merge\nReturned status/result: inProgress/unknown\n" +
 			"URL: https://dev.azure.com/acme/build/701\n",
 	);
 });
@@ -329,7 +329,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
 					`^build 700 for PR #42 finished with outcome ${expectedOutcome}\\.`,
 				),
 			);
-			assert.equal(result.stdout.split("\n").length, 4);
+			assert.equal(result.stdout.split("\n").length, 5);
 		}
 	}
 });
@@ -1595,4 +1595,165 @@ test("a top-level Azure error is printed and exits nonzero", (t) => {
 		`Azure DevOps API request (GET ${apiBase}/pullRequests/42/threads?api-version=7.1) failed: ` +
 			`503 Service Unavailable\nAzure is temporarily unavailable\n`,
 	);
+});
+
+test("build show --latest prints current branch-head diagnostics in human and JSON output", (t) => {
+	for (const json of [false, true]) {
+		const candidate = validationBuild({
+			reason: "manual",
+			sourceBranch: "refs/heads/feature/dispatch",
+			sourceVersion: "head-1",
+		});
+		const result = runPr(
+			t,
+			["build", "show", "--latest", "--pr=42", ...(json ? ["--json"] : [])],
+			{
+				cwd: createRepo(t),
+				responses: [
+					{
+						json: validationPr({
+							lastMergeSourceCommit: { commitId: "head-1" },
+						}),
+					},
+					{ json: { value: [] } },
+					{ json: { value: [candidate] } },
+					{ json: { records: [] } },
+					{ json: { value: [] } },
+				],
+			},
+		);
+		assertSucceeded(result);
+		if (json) {
+			const output = JSON.parse(result.stdout);
+			assert.equal(output.current, true);
+			assert.equal(output.association, "branch-head");
+			assert.deepEqual(output.build, candidate);
+		} else {
+			assert.match(result.stdout, /PR: #42 \(current\)/);
+			assert.match(result.stdout, /Association: branch-head; commit: head-1/);
+		}
+		const branchQuery = new URL(result.calls[2].url);
+		assert.equal(
+			branchQuery.searchParams.get("branchName"),
+			"refs/heads/feature/dispatch",
+		);
+		assert.equal(branchQuery.searchParams.get("reasonFilter"), null);
+		assert.equal(result.calls.length, 5);
+	}
+});
+
+test("build show --latest prints stale diagnostics and exits 1", (t) => {
+	for (const json of [false, true]) {
+		const stale = validationBuild({ sourceVersion: "old-merge" });
+		const result = runPr(
+			t,
+			["build", "show", "--pr=42", "--latest", ...(json ? ["--json"] : [])],
+			{
+				cwd: createRepo(t),
+				responses: [
+					{
+						json: validationPr({
+							lastMergeSourceCommit: { commitId: "head-1" },
+						}),
+					},
+					{ json: { value: [stale] } },
+					{ json: { value: [] } },
+					{ json: { records: [] } },
+					{ json: { value: [] } },
+				],
+			},
+		);
+		assert.equal(result.status, 1);
+		assert.equal(result.stderr, "");
+		if (json) {
+			assert.equal(JSON.parse(result.stdout).current, false);
+			assert.equal(JSON.parse(result.stdout).build.sourceVersion, "old-merge");
+		} else {
+			assert.match(result.stdout, /stale/);
+			assert.match(result.stdout, /commit: old-merge/);
+		}
+	}
+});
+
+test("build wait --latest selects and polls the newest validating build", (t) => {
+	const branch = validationBuild({
+		id: 701,
+		reason: "manual",
+		sourceBranch: "refs/heads/feature/dispatch",
+		sourceVersion: "head-1",
+		queueTime: "2026-08-19T10:00:00Z",
+		result: "succeeded",
+	});
+	for (const json of [false, true]) {
+		const result = runPr(
+			t,
+			["build", "wait", "--pr=42", "--latest", ...(json ? ["--json"] : [])],
+			{
+				cwd: createRepo(t),
+				responses: [
+					{
+						json: validationPr({
+							lastMergeSourceCommit: { commitId: "head-1" },
+						}),
+					},
+					{ json: { value: [validationBuild()] } },
+					{ json: { value: [branch] } },
+					{ json: branch },
+				],
+			},
+		);
+		assert.equal(result.status, 0);
+		assert.match(
+			result.stderr,
+			/build 701: initial state completed\/succeeded/,
+		);
+		if (json) {
+			const output = JSON.parse(result.stdout);
+			assert.equal(output.buildId, 701);
+			assert.equal(output.association, "branch-head");
+			assert.equal(output.outcome, "succeeded");
+			assert.equal(output.pollCount, 1);
+		} else {
+			assert.match(result.stdout, /build 701.*outcome succeeded/);
+			assert.match(result.stdout, /Association: branch-head/);
+		}
+		assert.equal(result.calls.length, 4);
+		assert.equal(result.calls[3].url, `${buildApiBase}/701?api-version=7.1`);
+	}
+});
+
+test("build wait --latest fails naming the head when no build validates it", (t) => {
+	const result = runPr(t, ["build", "wait", "--pr=42", "--latest", "--json"], {
+		cwd: createRepo(t),
+		responses: [
+			{ json: validationPr({ lastMergeSourceCommit: { commitId: "head-1" } }) },
+			{ json: { value: [validationBuild({ sourceVersion: "old-merge" })] } },
+			{ json: { value: [] } },
+		],
+	});
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(result.stderr, /No build validates PR #42 head commit head-1/);
+	assert.equal(result.calls.length, 3);
+});
+
+test("build show/wait require exactly one selector before any Azure request", (t) => {
+	for (const command of ["show", "wait"]) {
+		for (const [args, error] of [
+			[[], /exactly one of --build or --latest is required/],
+			[
+				["--build=700", "--latest"],
+				/--build and --latest are mutually exclusive/,
+			],
+		]) {
+			const result = runPr(t, ["build", command, ...args], {
+				cwd: createRepo(t),
+				responses: [],
+			});
+			assert.equal(result.status, 1);
+			assert.equal(result.stdout, "");
+			assert.match(result.stderr, error);
+			assert.deepEqual(result.calls, []);
+		}
+	}
 });

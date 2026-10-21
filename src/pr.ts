@@ -60,7 +60,7 @@ async function runBuildWait(
 	process.on("SIGINT", onInterrupt);
 	process.on("SIGTERM", onTerminate);
 	try {
-		const result = await builds.wait(options.pr, options.build, {
+		const result = await builds.wait(options.pr, options.build ?? "latest", {
 			intervalSeconds: options.intervalSeconds,
 			timeoutSeconds: options.timeoutSeconds,
 			signal: controller.signal,
@@ -103,7 +103,7 @@ async function runBuildCommand(
 			return;
 		}
 		case "show": {
-			const result = await builds.show(options.pr, options.build, {
+			const result = await builds.show(options.pr, options.build ?? "latest", {
 				fullLogs: options.fullLogs,
 			});
 			console.log(
@@ -111,7 +111,8 @@ async function runBuildCommand(
 					? JSON.stringify(result, null, 2)
 					: builds.formatShow(result),
 			);
-			if (builds.hasLogErrors(result)) process.exitCode = 1;
+			if (builds.hasLogErrors(result) || (options.latest && !result.current))
+				process.exitCode = 1;
 			return;
 		}
 		case "retry": {
