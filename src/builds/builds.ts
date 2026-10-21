@@ -173,7 +173,10 @@ export type ProblemRecord =
 	| ProblemRecordWithoutLog
 	| ProblemRecordWithLogError;
 
+type BuildAssociation = "pr-merge" | "branch-head";
+
 export interface BuildShowEnvelope {
+	association: BuildAssociation;
 	pullRequest: PullRequestBuildSummary;
 	current: boolean;
 	build: AzureBuild;
@@ -198,6 +201,7 @@ export type BuildWaitOutcome =
 	| "timeout";
 
 export interface BuildWaitEnvelope {
+	association: BuildAssociation | null;
 	pullRequest: PullRequestBuildSummary;
 	buildId: number;
 	build: AzureBuild | null;
@@ -256,7 +260,7 @@ export interface BuildService {
 	): Promise<BuildListEnvelope>;
 	show(
 		requestedPrId: number | undefined,
-		buildId: number,
+		buildId: number | "latest",
 		options?: ShowBuildOptions,
 	): Promise<BuildShowEnvelope>;
 	retry(
@@ -265,7 +269,7 @@ export interface BuildService {
 	): Promise<AzureBuild>;
 	wait(
 		requestedPrId: number | undefined,
-		buildId: number,
+		buildId: number | "latest",
 		options?: WaitBuildOptions,
 	): Promise<BuildWaitEnvelope>;
 	hasLogErrors(result: BuildShowEnvelope): boolean;
@@ -281,6 +285,8 @@ interface ValidatedPullRequest {
 	repositoryId: string;
 	status: string | undefined;
 	mergeCommit: string | undefined;
+	headCommit: string | undefined;
+	sourceBranch: string;
 	summary: PullRequestBuildSummary;
 }
 
@@ -377,6 +383,14 @@ function normalized(value: string): string {
 	return value.toLowerCase();
 }
 
+function optionalCommit(value: unknown, context: string): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	return requireString(
+		requireObject(value, context).commitId,
+		describeField(context, "commitId"),
+	);
+}
+
 function validatePullRequest(
 	pr: PullRequest,
 	context: string,
@@ -387,7 +401,10 @@ function validatePullRequest(
 		describeField(context, "pullRequestId"),
 	);
 	const title = requireString(value.title, describeField(context, "title"));
-	requireString(value.sourceRefName, describeField(context, "sourceRefName"));
+	const sourceBranch = requireString(
+		value.sourceRefName,
+		describeField(context, "sourceRefName"),
+	);
 	const repository = requireObject(
 		value.repository,
 		describeField(context, "repository"),
@@ -404,21 +421,20 @@ function validatePullRequest(
 		);
 	}
 
-	let mergeCommit: string | undefined;
-	if (value.lastMergeCommit !== undefined && value.lastMergeCommit !== null) {
-		const commit = requireObject(
-			value.lastMergeCommit,
-			describeField(context, "lastMergeCommit"),
-		);
-		mergeCommit = requireString(
-			commit.commitId,
-			describeField(context, "lastMergeCommit.commitId"),
-		);
-	}
+	const mergeCommit = optionalCommit(
+		value.lastMergeCommit,
+		describeField(context, "lastMergeCommit"),
+	);
+	const headCommit = optionalCommit(
+		value.lastMergeSourceCommit,
+		describeField(context, "lastMergeSourceCommit"),
+	);
 
 	return {
 		id,
 		repositoryId,
+		headCommit,
+		sourceBranch,
 		status,
 		mergeCommit,
 		summary: {
@@ -512,6 +528,7 @@ function buildAssociationMismatch(
 		return "repository ID";
 	if (!equalsIdentifier(repository.type as string, "TfsGit"))
 		return "repository type";
+	if (build.sourceBranch === pr.sourceBranch) return undefined;
 	if (!equalsIdentifier(build.reason as string, "pullRequest")) return "reason";
 	if (build.sourceBranch !== `refs/pull/${pr.id}/merge`) return "source branch";
 	return undefined;
@@ -529,12 +546,20 @@ function assertBuildAssociation(
 	}
 }
 
+function buildAssociation(build: AzureBuild): BuildAssociation {
+	return (build.sourceBranch as string).startsWith("refs/heads/")
+		? "branch-head"
+		: "pr-merge";
+}
+
 function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
+	const commit =
+		buildAssociation(build) === "branch-head" ? pr.headCommit : pr.mergeCommit;
 	return (
 		pr.status !== undefined &&
 		normalized(pr.status) === "active" &&
-		pr.mergeCommit !== undefined &&
-		equalsIdentifier(build.sourceVersion as string, pr.mergeCommit)
+		commit !== undefined &&
+		equalsIdentifier(build.sourceVersion as string, commit)
 	);
 }
 
@@ -1111,10 +1136,11 @@ function listUrl(
 	ctx: AzureDevOpsRepoContext,
 	pr: ValidatedPullRequest,
 	continuationToken: string | undefined,
+	branchHead: boolean,
 ): string {
 	const parameters = [
-		["reasonFilter", "pullRequest"],
-		["branchName", `refs/pull/${pr.id}/merge`],
+		...(branchHead ? [] : [["reasonFilter", "pullRequest"]]),
+		["branchName", branchHead ? pr.sourceBranch : `refs/pull/${pr.id}/merge`],
 		["repositoryId", pr.repositoryId],
 		["repositoryType", "TfsGit"],
 		["queryOrder", "queueTimeDescending"],
@@ -1154,6 +1180,7 @@ function assertFetchedBuild(
 function formatBuildRow(build: AzureBuild, current: boolean): string {
 	return [
 		`- Build ${build.id as number}/${display(build.buildNumber)} — ${display(buildDefinitionName(build))}`,
+		`  Association: ${buildAssociation(build)}`,
 		`  Status/result: ${display(build.status)}/${display(build.result)} [${current ? "current" : "history"}]`,
 		`  Queue/start/finish: ${display(build.queueTime)} / ${display(build.startTime)} / ${display(build.finishTime)}`,
 		`  ${display(buildWebLink(build))}`,
@@ -1266,6 +1293,8 @@ export function createBuildService({
 	async function listAssociatedBuilds(
 		pr: ValidatedPullRequest,
 		mergeCommit: string | undefined,
+		branchHead = false,
+		signal?: AbortSignal,
 	): Promise<AzureBuild[]> {
 		const builds: AzureBuild[] = [];
 		const seenBuildIds = new Set<number>();
@@ -1281,8 +1310,9 @@ export function createBuildService({
 				);
 			}
 			const response = await azure.requestWithMetadata<unknown>(
-				listUrl(ctx, pr, continuationToken),
+				listUrl(ctx, pr, continuationToken, branchHead),
 				{
+					signal,
 					timeoutMs: READ_TIMEOUT_MS,
 					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
 				},
@@ -1294,7 +1324,17 @@ export function createBuildService({
 					`Azure DevOps build pagination exceeded the safety limit of ${MAX_BUILD_RESPONSES} builds.`,
 				);
 			}
-			appendAssociatedBuilds(builds, page, pr, mergeCommit, seenBuildIds);
+			appendAssociatedBuilds(
+				builds,
+				page.filter((build) =>
+					branchHead
+						? build.sourceBranch === pr.sourceBranch
+						: build.sourceBranch === `refs/pull/${pr.id}/merge`,
+				),
+				pr,
+				mergeCommit,
+				seenBuildIds,
+			);
 
 			continuationToken = nextBuildContinuationToken(
 				response.metadata.headers,
@@ -1302,6 +1342,28 @@ export function createBuildService({
 			);
 		} while (continuationToken !== undefined);
 		return builds;
+	}
+
+	async function selectLatestBuild(
+		pr: ValidatedPullRequest,
+		requireCurrent: boolean,
+		signal?: AbortSignal,
+	): Promise<AzureBuild> {
+		const builds = [
+			...(await listAssociatedBuilds(pr, undefined, false, signal)),
+			...(await listAssociatedBuilds(pr, undefined, true, signal)),
+		].sort(
+			(left, right) =>
+				Date.parse(right.queueTime ?? "") - Date.parse(left.queueTime ?? ""),
+		);
+		const current = builds.find((build) => isCurrentBuild(build, pr));
+		if (current !== undefined) return current;
+		if (requireCurrent || builds.length === 0) {
+			throw new Error(
+				`No build validates PR #${pr.id} head commit ${pr.headCommit ?? "(unavailable)"}.`,
+			);
+		}
+		return builds[0];
 	}
 
 	async function list(
@@ -1378,12 +1440,16 @@ export function createBuildService({
 
 	async function show(
 		requestedPrId: number | undefined,
-		buildId: number,
+		buildId: number | "latest",
 		options: ShowBuildOptions = {},
 	): Promise<BuildShowEnvelope> {
-		assertRequestedBuildId(buildId);
+		if (buildId !== "latest") assertRequestedBuildId(buildId);
 		const pr = await resolvePullRequest(requestedPrId);
-		const build = await fetchBuild(buildId);
+		const build =
+			buildId === "latest"
+				? await selectLatestBuild(pr, false)
+				: await fetchBuild(buildId);
+		buildId = build.id as number;
 		assertBuildAssociation(build, pr);
 		const timeline = validateTimeline(
 			await azure.request<unknown>(timelineUrl(ctx, buildId), {
@@ -1439,6 +1505,7 @@ export function createBuildService({
 		return {
 			pullRequest: pr.summary,
 			current: isCurrentBuild(build, pr),
+			association: buildAssociation(build),
 			build,
 			timeline,
 			problemRecords,
@@ -1451,11 +1518,12 @@ export function createBuildService({
 		operation: string,
 	): void {
 		assertActivePullRequest(pr, operation);
-		const mergeCommit = requireCurrentMergeCommit(pr, operation);
 		assertBuildAssociation(build, pr);
-		if (!equalsIdentifier(build.sourceVersion as string, mergeCommit)) {
+		if (buildAssociation(build) === "pr-merge")
+			requireCurrentMergeCommit(pr, operation);
+		if (!isCurrentBuild(build, pr)) {
 			throw new Error(
-				`Cannot ${operation}: build ${build.id as number} is historical and does not match PR #${pr.id}'s current merge commit.`,
+				`Cannot ${operation}: build ${build.id as number} is historical and does not match PR #${pr.id}'s current head or merge commit.`,
 			);
 		}
 		if (typeof build.status !== "string") {
@@ -1519,7 +1587,7 @@ export function createBuildService({
 			assertBuildAssociation(returnedBuild, refreshedPr);
 			if (!isCurrentBuild(returnedBuild, refreshedPr)) {
 				throw new Error(
-					`Retry response build ${returnedBuild.id as number} does not match PR #${refreshedPr.id}'s current merge commit.`,
+					`Retry response build ${returnedBuild.id as number} does not match PR #${refreshedPr.id}'s current head or merge commit.`,
 				);
 			}
 			return returnedBuild;
@@ -1532,12 +1600,12 @@ export function createBuildService({
 
 	async function wait(
 		requestedPrId: number | undefined,
-		buildId: number,
+		requestedBuild: number | "latest",
 		options: WaitBuildOptions = {},
 	): Promise<BuildWaitEnvelope> {
 		const signal = options.signal;
 		const onProgress = options.onProgress;
-		assertRequestedBuildId(buildId);
+		if (requestedBuild !== "latest") assertRequestedBuildId(requestedBuild);
 		const intervalSeconds = validateWaitSeconds(
 			options.intervalSeconds,
 			DEFAULT_WAIT_INTERVAL_SECONDS,
@@ -1560,6 +1628,12 @@ export function createBuildService({
 		});
 		throwIfWaitAborted(signal);
 
+		const buildId =
+			requestedBuild === "latest"
+				? ((await selectLatestBuild(pr, true, signal)).id as number)
+				: requestedBuild;
+		throwIfWaitAborted(signal);
+
 		const startedAt = now();
 		const deadline = startedAt + timeoutSeconds * 1_000;
 		const intervalMs = intervalSeconds * 1_000;
@@ -1574,6 +1648,7 @@ export function createBuildService({
 		const elapsedSeconds = (at = now()): number =>
 			Math.max(0, at - startedAt) / 1_000;
 		const timeoutEnvelope = (at = now()): BuildWaitEnvelope => ({
+			association: latestBuild === null ? null : buildAssociation(latestBuild),
 			pullRequest: pr.summary,
 			buildId,
 			build: latestBuild,
@@ -1646,6 +1721,7 @@ export function createBuildService({
 			const terminalEnvelope: BuildWaitEnvelope | undefined =
 				observedStatus === "completed"
 					? {
+							association: buildAssociation(observedBuild),
 							pullRequest: pr.summary,
 							buildId,
 							build: observedBuild,
@@ -1763,7 +1839,8 @@ export function createBuildService({
 				: result.problemRecords.map(formatProblemRecord);
 		return [
 			`Build ${build.id as number}/${display(build.buildNumber)} — ${display(buildDefinitionName(build))}`,
-			`PR: #${result.pullRequest.id} (${result.current ? "current" : "history"})`,
+			`PR: #${result.pullRequest.id} (${result.current ? "current" : "history; stale"})`,
+			`Association: ${result.association}; commit: ${display(build.sourceVersion)}`,
 			`Status/result: ${display(build.status)}/${display(build.result)}`,
 			`Queue/start/finish: ${display(build.queueTime)} / ${display(build.startTime)} / ${display(build.finishTime)}`,
 			`URL: ${display(buildWebLink(build))}`,
@@ -1787,6 +1864,7 @@ export function createBuildService({
 		validateBuild(build, "retry result build");
 		return [
 			`Azure DevOps accepted the retry request for build ${build.id as number}/${display(build.buildNumber)}.`,
+			`Association: ${buildAssociation(build)}`,
 			`Returned status/result: ${display(build.status)}/${display(build.result)}`,
 			`URL: ${display(buildWebLink(build))}`,
 		].join("\n");
@@ -1821,12 +1899,13 @@ export function createBuildService({
 		if (result.timedOut) {
 			return (
 				`${identifier} for PR #${result.pullRequest.id} timed out. ` +
-				`Latest status/result: ${statusResult}; ${counters}.`
+				`Latest status/result: ${statusResult}; ${counters}.\nAssociation: ${display(result.association)}`
 			);
 		}
 		const lines = [
 			`${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
 			`Status/result: ${statusResult}; ${counters}.`,
+			`Association: ${display(result.association)}`,
 		];
 		if (result.outcome !== "succeeded" && buildId !== undefined) {
 			lines.push(
