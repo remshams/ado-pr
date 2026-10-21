@@ -42,6 +42,7 @@ function createFixture(t, envContents) {
 	mkdirSync(binPath);
 	symlinkSync(process.execPath, join(binPath, "node"));
 	symlinkSync("/usr/bin/dirname", join(binPath, "dirname"));
+	symlinkSync("/usr/bin/readlink", join(binPath, "readlink"));
 
 	return {
 		binPath,
@@ -82,6 +83,21 @@ function installFakeOp(fixture) {
 function readLines(path) {
 	return readFileSync(path, "utf8").trimEnd().split("\n");
 }
+
+launcherTest("loads dotenv beside the real script through a symlink", (t) => {
+	const fixture = createFixture(t, "AZURE_DEVOPS_PAT=real-script-pat\n");
+	const launcherPath = join(fixture.binPath, "pr.sh");
+	symlinkSync(fixture.launcherPath, launcherPath);
+	writeFileSync(join(fixture.binPath, ".env"), "AZURE_DEVOPS_PAT=link-pat\n");
+
+	const result = runLauncher({ ...fixture, launcherPath }, ["pr", "show"]);
+
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(readCapture(fixture), {
+		pat: "real-script-pat",
+		args: ["pr", "show"],
+	});
+});
 
 launcherTest(
 	"prefers an exported literal PAT and forwards arguments without shell evaluation",

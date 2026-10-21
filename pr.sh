@@ -4,7 +4,7 @@
 # points at Azure Repos (see src/pr.ts for the actions/options). This tool is fully self-contained
 # (its own package.json/node_modules live alongside this script), so it works against any such
 # checkout/worktree without needing anything installed or copied there - just cd into the target
-# worktree and run this.
+# worktree and run this. Symlinks resolve to the real script's checkout.
 #
 # Requires:
 #   - Node.js >= 22.6 (TypeScript stripping and --env-file support). No build step is needed.
@@ -20,7 +20,8 @@
 #     CLI. The path may also be a 1Password Environment mount containing a literal PAT.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 
 if [[ -n "${AZURE_DEVOPS_PAT:-}" ]]; then
