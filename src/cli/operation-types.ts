@@ -1,3 +1,4 @@
+import type { ResolvedStatus } from "../comments/threads.ts";
 import type { CommandId } from "../shared/command-contracts.ts";
 
 interface PullRequestTarget {
@@ -99,6 +100,12 @@ type CliOptionsShape =
 	| (PullRequestTarget & {
 			resource: "comment";
 			command: "resolve";
+			thread: number;
+			status: ResolvedStatus;
+	  })
+	| (PullRequestTarget & {
+			resource: "comment";
+			command: "reopen";
 			thread: number;
 	  })
 	| (PullRequestTarget & {

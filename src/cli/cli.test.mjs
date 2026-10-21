@@ -1076,7 +1076,13 @@ test("parsing returns command options with typed values and defaults", () => {
 		],
 		[
 			["comment", "resolve", "--pr=7", "--thread=8"],
-			{ resource: "comment", command: "resolve", pr: 7, thread: 8 },
+			{
+				resource: "comment",
+				command: "resolve",
+				pr: 7,
+				thread: 8,
+				status: "fixed",
+			},
 		],
 		[
 			["comment", "batch", "--pr=7"],
@@ -1159,4 +1165,78 @@ test("the entrypoint still reads argv and prints help before requiring a PAT", (
 	assert.equal(result.status, 1);
 	assert.equal(result.stdout, "");
 	assert.equal(result.stderr, missingPatError);
+});
+
+test("resolve normalizes all supported statuses and defaults to fixed", () => {
+	for (const status of ["fixed", "wontFix", "byDesign", "closed"]) {
+		for (const value of [status, status.toUpperCase(), status.toLowerCase()]) {
+			assert.deepEqual(
+				parseOptions([
+					"comment",
+					"resolve",
+					"--thread",
+					"9",
+					"--status",
+					value,
+				]),
+				{
+					resource: "comment",
+					command: "resolve",
+					pr: undefined,
+					thread: 9,
+					status,
+				},
+			);
+		}
+	}
+	assert.equal(
+		parseOptions(["comment", "resolve", "--thread", "9"]).status,
+		"fixed",
+	);
+});
+
+test("resolve rejects invalid and missing status values", () => {
+	for (const value of ["active", "pending", "unknown", ""]) {
+		assertUsageError(
+			runCli("comment", "resolve", "--thread", "9", `--status=${value}`),
+			`Error: invalid --status "${value}" (must be one of: fixed, wontFix, byDesign, closed)`,
+		);
+	}
+	assertUsageError(
+		runCli("comment", "resolve", "--thread", "9", "--status"),
+		"Error: --status requires an explicit value",
+	);
+	assertUsageError(
+		runCli("comment", "resolve", "--help", "--status", "active"),
+		'Error: invalid --status "active" (must be one of: fixed, wontFix, byDesign, closed)',
+	);
+});
+
+test("reopen requires a thread and accepts only thread and PR flags", () => {
+	assert.deepEqual(
+		parseOptions(["comment", "reopen", "--thread", "9", "--pr", "42"]),
+		{
+			resource: "comment",
+			command: "reopen",
+			pr: 42,
+			thread: 9,
+		},
+	);
+	assert.deepEqual(parseOptions(["comment", "reopen", "--thread", "9"]), {
+		resource: "comment",
+		command: "reopen",
+		pr: undefined,
+		thread: 9,
+	});
+	assertUsageError(
+		runCli("comment", "reopen"),
+		'Error: --thread is required for "comment reopen"',
+	);
+	assertUsageError(
+		runCli("comment", "reopen", "--thread", "9", "--status", "fixed"),
+		'Error: --status is not valid for "comment reopen"',
+	);
+	const result = runCli("comment", "reopen", "--help");
+	assertSuccessfulHelp(result);
+	assert.ok(result.stderr.includes("comment reopen --thread <id> [--pr <id>]"));
 });
