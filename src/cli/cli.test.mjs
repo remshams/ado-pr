@@ -433,7 +433,9 @@ test("build flags parse with registry-derived types and reject missing or foreig
 	for (const command of ["show", "retry", "wait"]) {
 		assertUsageError(
 			runCli("build", command),
-			`Error: --build is required for "build ${command}"`,
+			command === "retry"
+				? `Error: --build is required for "build ${command}"`
+				: `Error: exactly one of --build or --latest is required for "build ${command}"`,
 		);
 		assertUsageError(
 			runCli("build", command, "--build", "0"),
@@ -928,6 +930,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				resource: "build",
 				command: "show",
 				build: 9,
+				latest: false,
 				pr: 7,
 				fullLogs: true,
 				json: true,
@@ -943,6 +946,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				resource: "build",
 				command: "wait",
 				build: 9,
+				latest: false,
 				pr: undefined,
 				intervalSeconds: 60,
 				timeoutSeconds: 3600,
@@ -963,6 +967,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				resource: "build",
 				command: "wait",
 				build: 9,
+				latest: false,
 				pr: 7,
 				intervalSeconds: 3600,
 				timeoutSeconds: 10,
@@ -975,6 +980,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				resource: "build",
 				command: "wait",
 				build: 9,
+				latest: false,
 				pr: undefined,
 				intervalSeconds: 10,
 				timeoutSeconds: 86400,
@@ -1239,4 +1245,31 @@ test("reopen requires a thread and accepts only thread and PR flags", () => {
 	const result = runCli("comment", "reopen", "--help");
 	assertSuccessfulHelp(result);
 	assert.ok(result.stderr.includes("comment reopen --thread <id> [--pr <id>]"));
+});
+
+test("latest selection parses for show/wait and keeps help validation consistent", () => {
+	for (const command of ["show", "wait"]) {
+		const parsed = parseArgs(["build", command, "--latest", "--pr=42"]);
+		assert.equal(parsed.latest, true);
+		assert.equal(parsed.build, undefined);
+		assert.equal(parsed.pr, 42);
+		assert.equal(parsed.command, command);
+		assert.equal(runCli("build", command, "--help").status, 0);
+		assertUsageError(
+			runCli("build", command, "--build=7", "--latest", "--help"),
+			`Error: --build and --latest are mutually exclusive for "build ${command}"`,
+		);
+		assertUsageError(
+			runCli("build", command, "--latest=false"),
+			"Error: --latest does not take a value",
+		);
+	}
+	assertUsageError(
+		runCli("build", "list", "--latest"),
+		'Error: --latest is not valid for "build list"',
+	);
+	assertUsageError(
+		runCli("build", "retry", "--build=7", "--latest"),
+		'Error: --latest is not valid for "build retry"',
+	);
 });

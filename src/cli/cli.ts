@@ -300,6 +300,23 @@ function validateSuppliedRequiredFlags(
 	}
 }
 
+function validateBuildSelection(
+	values: Partial<Record<FlagName, unknown>>,
+	enforceRequired: boolean,
+	route: string,
+): void {
+	if (values.build !== undefined && values.latest === true) {
+		printUsageAndExit(
+			`--build and --latest are mutually exclusive for "${route}"`,
+		);
+	}
+	if (enforceRequired && values.build === undefined && values.latest !== true) {
+		printUsageAndExit(
+			`exactly one of --build or --latest is required for "${route}"`,
+		);
+	}
+}
+
 function parseCommandFlags<Id extends CommandId>(
 	commandId: Id,
 	route: string,
@@ -349,6 +366,9 @@ function parseCommandFlags<Id extends CommandId>(
 			enforceRequired,
 			route,
 		);
+	if (validationRules?.includes("buildSelection"))
+		validateBuildSelection(values, enforceRequired, route);
+
 	if (validationRules?.includes("buildWaitBounds"))
 		validateBuildWaitBounds(values);
 	if (validationRules?.includes("commentLocation"))
@@ -415,6 +435,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		resource: "build",
 		command: "show",
 		build: values.build,
+		latest: values.latest,
 		pr: values.pr,
 		fullLogs: values["full-logs"],
 		json: values.json,
@@ -429,6 +450,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		resource: "build",
 		command: "wait",
 		build: values.build,
+		latest: values.latest,
 		pr: values.pr,
 		intervalSeconds: values.interval ?? 60,
 		timeoutSeconds: values.timeout ?? 3600,

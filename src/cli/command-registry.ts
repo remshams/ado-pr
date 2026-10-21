@@ -73,15 +73,24 @@ ${batchShapes}
 Options:
 ${options}
 
+Build selection:
+  \`build show\` and \`build wait\` require exactly one of --build <id> or --latest.
+  --latest selects the newest build by queue time that validates the current PR head. It checks
+  pullRequest runs on the PR merge ref against lastMergeCommit and runs of any reason on the PR
+  source branch against lastMergeSourceCommit. Output labels them pr-merge or branch-head.
+  Manual runs on the PR merge ref are unsupported. If no build validates the head, show prints
+  the newest associated build marked stale with its commit and exits 1; wait fails naming the head.
+  --build accepts current or historical associated builds. build list includes only PR merge runs.
+
 Build wait:
-  \`build wait\` monitors validation metadata for the requested build, whether it is current or
-  historical. --pr only selects or resolves the associated pull request. After bounded PR
-  resolution, polling runs every 60 seconds for up to 1 hour by default; --interval accepts
-  10–3600 seconds and --timeout accepts 10–86400 seconds. Five-minute heartbeats and progress go to
-  stderr. Completed and timed-out waits emit one final human or pretty JSON result to stdout;
-  operational failures and signals emit none. JSON includes the selected PR summary, requested
-  build ID, raw Azure build metadata (or null before observation), counters, elapsed polling time,
-  timeout state, and outcome; inspect raw metadata before persisting it.
+  \`build wait\` monitors validation metadata for the selected build. --pr only selects or resolves
+  the associated pull request. After bounded PR resolution, polling runs every 60 seconds for up to
+  1 hour by default; --interval accepts 10–3600 seconds and --timeout accepts 10–86400 seconds.
+  Five-minute heartbeats and progress go to stderr. Completed and timed-out waits emit one final
+  human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes
+  the selected PR summary, requested build ID, raw Azure build metadata (or null before
+  observation), counters, elapsed polling time, timeout state, and outcome; inspect raw metadata
+  before persisting it.
   Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes/errors, 130 for SIGINT, and
   143 for SIGTERM. Transient poll requests retry, but a third consecutive transient failure aborts.
   Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;
