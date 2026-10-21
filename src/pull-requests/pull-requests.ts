@@ -32,6 +32,8 @@ export interface PullRequest {
 	targetRefName?: string;
 	repository?: PullRequestRepository;
 	lastMergeCommit?: PullRequestCommit;
+	lastMergeSourceCommit?: PullRequestCommit;
+	mergeStatus?: string;
 }
 
 export interface CreatePullRequestOptions {
