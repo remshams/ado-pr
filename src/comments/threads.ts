@@ -13,6 +13,14 @@ import type {
 import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
 import type { CommentLocation } from "../shared/operation-types.ts";
 
+export const RESOLVED_STATUSES = [
+	"fixed",
+	"wontFix",
+	"byDesign",
+	"closed",
+] as const;
+export type ResolvedStatus = (typeof RESOLVED_STATUSES)[number];
+
 interface Comment {
 	id: number;
 	content?: string;
@@ -48,7 +56,12 @@ export interface ThreadService {
 		message: string,
 	): Promise<void>;
 	delete(prId: number, threadId: number, commentId: number): Promise<void>;
-	resolve(prId: number, threadId: number): Promise<void>;
+	resolve(
+		prId: number,
+		threadId: number,
+		status?: ResolvedStatus,
+	): Promise<void>;
+	reopen(prId: number, threadId: number): Promise<void>;
 	webUrl(prId: number, threadId: number): string;
 	format(thread: CommentThread, prId: number): string;
 	formatSummary(threads: CommentThread[], prId: number): string;
@@ -211,10 +224,25 @@ export function createThreadService({
 		await azure.request(url, { method: "DELETE", responseType: "none" });
 	}
 
-	/** Marks a thread as resolved using Azure DevOps' "fixed" status. */
-	async function resolve(prId: number, threadId: number): Promise<void> {
+	async function setStatus(
+		prId: number,
+		threadId: number,
+		status: ResolvedStatus | "active",
+	): Promise<void> {
 		const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}`)}?api-version=${API_VERSION}`;
-		await azure.request(url, { method: "PATCH", body: { status: "fixed" } });
+		await azure.request(url, { method: "PATCH", body: { status } });
+	}
+
+	async function resolve(
+		prId: number,
+		threadId: number,
+		status: ResolvedStatus = "fixed",
+	): Promise<void> {
+		await setStatus(prId, threadId, status);
+	}
+
+	async function reopen(prId: number, threadId: number): Promise<void> {
+		await setStatus(prId, threadId, "active");
 	}
 
 	function webUrl(prId: number, threadId: number): string {
@@ -252,6 +280,7 @@ export function createThreadService({
 		edit,
 		delete: deleteComment,
 		resolve,
+		reopen,
 		webUrl,
 		format,
 		formatSummary,
