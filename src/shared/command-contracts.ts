@@ -92,7 +92,13 @@ export const FLAG_DEFINITIONS = {
 	thread: {
 		kind: "positiveInteger",
 		usage: "--thread <id>",
-		description: "Thread ID for reply/edit/delete/resolve.",
+		description: "Thread ID for reply/edit/delete/resolve/reopen.",
+	},
+	status: {
+		kind: "string",
+		usage: "--status <status>",
+		description:
+			"Resolution status: fixed, wontFix, byDesign, closed (case-insensitive; default fixed).",
 	},
 	comment: {
 		kind: "positiveInteger",
@@ -386,11 +392,20 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"comment.resolve": {
 		resource: "comment",
 		command: "resolve",
-		usage: "comment resolve --thread <id> [--pr <id>]",
+		usage:
+			"comment resolve --thread <id> [--pr <id>] [--status fixed|wontFix|byDesign|closed]",
 		summary: "Mark an existing thread as resolved.",
-		flags: ["pr", "thread"],
+		flags: ["pr", "thread", "status"],
 		requiredFlags: ["thread"],
 		batchFields: ["command", "thread", "pr"],
+	},
+	"comment.reopen": {
+		resource: "comment",
+		command: "reopen",
+		usage: "comment reopen --thread <id> [--pr <id>]",
+		summary: "Reopen an existing thread.",
+		flags: ["pr", "thread"],
+		requiredFlags: ["thread"],
 	},
 	"comment.batch": {
 		resource: "comment",
