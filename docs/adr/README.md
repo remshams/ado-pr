@@ -34,3 +34,4 @@ review.
 | [0003](0003-keep-the-tool-small.md) | Keep the tool small and handle realistic failures | Accepted |
 | [0004](0004-quality-gates.md) | Check quality with Biome and Fallow | Accepted |
 | [0005](0005-run-typescript-directly.md) | Run TypeScript directly with Node type stripping | Accepted |
+| [0006](0006-match-builds-to-the-pr-head.md) | Match builds to the PR head | Proposed |
