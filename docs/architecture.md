@@ -97,7 +97,12 @@ Results and mutation confirmations go to stdout. Commands that accept `--json`
 emit their result there as JSON instead of human formatting. Help, usage errors,
 failures and build wait progress go to stderr. Batch operations report successes
 on stdout and failures on stderr, continue after operation failures, and exit 1
-if any failed. `build show` also exits 1 if diagnostics include log read errors.
+if any failed. `build show` also exits 1 if diagnostics include log read errors or
+`--latest` falls back to a stale associated build. Show and wait require an explicit
+build ID or `--latest`, which selects the newest build validating the PR head. Both
+accept PR merge builds and source-branch builds under
+[ADR 0006](adr/0006-match-builds-to-the-pr-head.md). Build listing still includes
+only PR merge builds.
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
 and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
