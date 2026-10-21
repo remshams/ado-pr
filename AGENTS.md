@@ -4,7 +4,9 @@ A TypeScript CLI for developers' coding agents to manage Azure DevOps pull reque
 comments and review threads, and PR build pipelines. Node >= 22.6 strips the types;
 there is no build step.
 
-Run `./pr.sh --help` from an Azure Repos checkout. Export `AZURE_DEVOPS_PAT` or copy
+Install the launcher with `mkdir -p ~/.local/bin && ln -s <checkout>/pr.sh ~/.local/bin/pr.sh`.
+Add `~/.local/bin` to PATH if your shell doesn't include it.
+Run `pr.sh --help` from an Azure Repos checkout. Export `AZURE_DEVOPS_PAT` or copy
 `.env.tpl` to `.env` beside `pr.sh`. The launcher accepts a literal PAT or resolves
 an `op://` reference with the 1Password CLI. For help without authentication, run
 `node --experimental-strip-types src/pr.ts --help`.
