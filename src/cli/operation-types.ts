@@ -46,7 +46,8 @@ type CliOptionsShape =
 	| (PullRequestTarget & {
 			resource: "build";
 			command: "show";
-			build: number;
+			build?: number;
+			latest: boolean;
 			fullLogs: boolean;
 			json: boolean;
 	  })
@@ -58,7 +59,8 @@ type CliOptionsShape =
 	| (PullRequestTarget & {
 			resource: "build";
 			command: "wait";
-			build: number;
+			build?: number;
+			latest: boolean;
 			intervalSeconds: number;
 			timeoutSeconds: number;
 			json: boolean;

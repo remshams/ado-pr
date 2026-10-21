@@ -43,19 +43,25 @@ test("registers resource-first build routes and keeps them out of batch schemas"
 		"history",
 		"json",
 	]);
-	assert.deepEqual(COMMAND_REGISTRY["build.show"].requiredFlags, ["build"]);
+	assert.deepEqual(COMMAND_REGISTRY["build.show"].validationRules, [
+		"buildSelection",
+	]);
 	assert.deepEqual(COMMAND_REGISTRY["build.retry"].requiredFlags, ["build"]);
 	assert.deepEqual(COMMAND_REGISTRY["build.wait"].flags, [
 		"build",
+		"latest",
 		"pr",
 		"interval",
 		"timeout",
 		"json",
 	]);
-	assert.deepEqual(COMMAND_REGISTRY["build.wait"].requiredFlags, ["build"]);
+	assert.deepEqual(COMMAND_REGISTRY["build.wait"].validationRules, [
+		"buildSelection",
+		"buildWaitBounds",
+	]);
 	assert.equal(
 		COMMAND_REGISTRY["build.wait"].usage,
-		"build wait --build <id> [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
+		"build wait (--build <id> | --latest) [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
 	);
 	assert.ok(!BATCH_COMMANDS.some((command) => command.startsWith("build.")));
 	assert.equal(FLAG_DEFINITIONS.build.kind, "positiveInteger");
@@ -132,12 +138,12 @@ test("help is generated from every registered command and batch schema", () => {
 		help,
 		/--remove-reviewer resolves current PR reviewers and needs only Code \(Read & Write\)\./,
 	);
-	assert.match(help, /requested build, whether it is current or\s+historical/);
+	assert.match(help, /--build accepts current or historical associated builds/);
 	assert.match(
 		help,
-		/--pr only selects or resolves the associated pull request/,
+		/--pr only selects or resolves\s+the associated pull request/,
 	);
-	assert.match(help, /polling runs every 60 seconds for up to 1 hour/);
+	assert.match(help, /polling runs every 60 seconds for up to\s+1 hour/);
 	assert.match(help, /10–3600 seconds/);
 	assert.match(help, /10–86400 seconds/);
 	assert.match(help, /operational failures and signals emit none/);
@@ -156,9 +162,9 @@ test("help preserves the documented commands, options, and output layout", () =>
 			'       pr.sh pr create --title "..." [--description "..."] [--source <branch>] [--target <branch>] [--draft] [--image <path>]... [--reviewer <email-or-display-name>]...',
 			'       pr.sh pr edit [--description "..."] [--draft | --no-draft] [--image <path>]... [--remove-image <filename>]... [--reviewer <email-or-display-name>]... [--remove-reviewer <email-or-display-name>]... [--pr <id>]',
 			"       pr.sh build list [--pr <id>] [--history] [--json]",
-			"       pr.sh build show --build <id> [--pr <id>] [--full-logs] [--json]",
+			"       pr.sh build show (--build <id> | --latest) [--pr <id>] [--full-logs] [--json]",
 			"       pr.sh build retry --build <id> [--pr <id>]",
-			"       pr.sh build wait --build <id> [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
+			"       pr.sh build wait (--build <id> | --latest) [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
 			"       pr.sh comment list [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]",
 			'       pr.sh comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]',
 			'       pr.sh comment reply --thread <id> --message "..." [--pr <id>]',
@@ -200,7 +206,8 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"",
 			"Options:",
 			"  --pr <id>                                  Use a specific pull request instead of the current branch's active PR.",
-			"  --build <id>                               Build ID (required for `build show`, `build retry`, and `build wait`).",
+			"  --build <id>                               Build ID. Required for `build retry`; choose --build or --latest for show/wait.",
+			"  --latest                                   Select the newest build validating the PR head by queue time.",
 			"  --interval <seconds>                       Polling interval for `build wait` (default 60 seconds; range 10–3600).",
 			"  --timeout <seconds>                        Maximum polling time after PR resolution for `build wait` (default 3600 seconds/1 hour; range 10–86400).",
 			"  --title <text>                             Pull request title (required for `pr create`).",
@@ -227,15 +234,24 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"  --json                                     Print normalized build output, or raw JSON for PR/comment list and PR show.",
 			"  -h, --help                                 Show this help.",
 			"",
+			"Build selection:",
+			"  `build show` and `build wait` require exactly one of --build <id> or --latest.",
+			"  --latest selects the newest build by queue time that validates the current PR head. It checks",
+			"  pullRequest runs on the PR merge ref against lastMergeCommit and runs of any reason on the PR",
+			"  source branch against lastMergeSourceCommit. Output labels them pr-merge or branch-head.",
+			"  Manual runs on the PR merge ref are unsupported. If no build validates the head, show prints",
+			"  the newest associated build marked stale with its commit and exits 1; wait fails naming the head.",
+			"  --build accepts current or historical associated builds. build list includes only PR merge runs.",
+			"",
 			"Build wait:",
-			"  `build wait` monitors validation metadata for the requested build, whether it is current or",
-			"  historical. --pr only selects or resolves the associated pull request. After bounded PR",
-			"  resolution, polling runs every 60 seconds for up to 1 hour by default; --interval accepts",
-			"  10–3600 seconds and --timeout accepts 10–86400 seconds. Five-minute heartbeats and progress go to",
-			"  stderr. Completed and timed-out waits emit one final human or pretty JSON result to stdout;",
-			"  operational failures and signals emit none. JSON includes the selected PR summary, requested",
-			"  build ID, raw Azure build metadata (or null before observation), counters, elapsed polling time,",
-			"  timeout state, and outcome; inspect raw metadata before persisting it.",
+			"  `build wait` monitors validation metadata for the selected build. --pr only selects or resolves",
+			"  the associated pull request. After bounded PR resolution, polling runs every 60 seconds for up to",
+			"  1 hour by default; --interval accepts 10–3600 seconds and --timeout accepts 10–86400 seconds.",
+			"  Five-minute heartbeats and progress go to stderr. Completed and timed-out waits emit one final",
+			"  human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes",
+			"  the selected PR summary, requested build ID, raw Azure build metadata (or null before",
+			"  observation), counters, elapsed polling time, timeout state, and outcome; inspect raw metadata",
+			"  before persisting it.",
 			"  Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes/errors, 130 for SIGINT, and",
 			"  143 for SIGTERM. Transient poll requests retry, but a third consecutive transient failure aborts.",
 			"  Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;",
