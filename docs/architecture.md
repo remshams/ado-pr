@@ -7,12 +7,13 @@ as recorded in [ADR 0005](adr/0005-run-typescript-directly.md).
 
 ## Runtime flow
 
-Run `pr.sh` from the target checkout. The launcher finds its own source and
-dependencies without changing the caller's working directory. It prefers an
-exported `AZURE_DEVOPS_PAT`, then loads `.env` beside the launcher. Literal values
-use Node's dotenv loader; `op://` references use `op run` for resolution. A
-1Password Environment named pipe supplies literal dotenv values and is read once.
-The TypeScript entrypoint requires a resolved PAT.
+Link the launcher into a directory on PATH, as `AGENTS.md` describes, then run
+`pr.sh` from the target checkout. The launcher resolves its real path with
+`readlink -f` to find its source and dependencies without changing the caller's
+working directory. It prefers an exported `AZURE_DEVOPS_PAT`, then loads `.env`
+beside the real script. Literal values use Node's dotenv loader; `op://` references
+use `op run` for resolution. A 1Password Environment named pipe supplies literal
+dotenv values and is read once. The TypeScript entrypoint requires a resolved PAT.
 
 ```mermaid
 flowchart TD
