@@ -38,6 +38,17 @@ Follow the [pull request description guide](docs/pull-request-descriptions.md)
 when creating or updating a PR description. Apply the `unslop` skill before
 publishing it.
 
+## CodeRabbit reviews
+
+- CodeRabbit does not review pull requests automatically.
+- When the work on a PR is finished and pushed, comment `@coderabbitai review` once
+  with `gh pr comment <n> --body "@coderabbitai review"`. Do not trigger a review
+  after every push. Batch fixes and trigger once per round.
+- The main branch ruleset requires CodeRabbit's approval. After the last fix, request
+  a final review and wait for the approval before merging.
+- If CodeRabbit replies that the rate limit is exceeded, wait the stated time, then
+  trigger the review again.
+
 ## Commits
 
 - Use Conventional Commits: `<type>(<scope>): <description>`, e.g. `feat(NxSelect): ...`.
