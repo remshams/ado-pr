@@ -7,6 +7,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -84,20 +85,38 @@ function readLines(path) {
 	return readFileSync(path, "utf8").trimEnd().split("\n");
 }
 
-launcherTest("loads dotenv beside the real script through a symlink", (t) => {
-	const fixture = createFixture(t, "AZURE_DEVOPS_PAT=real-script-pat\n");
-	const launcherPath = join(fixture.binPath, "pr.sh");
-	symlinkSync(fixture.launcherPath, launcherPath);
-	writeFileSync(join(fixture.binPath, ".env"), "AZURE_DEVOPS_PAT=link-pat\n");
+launcherTest(
+	"runs from PATH through a symlink with the real script's dotenv",
+	(t) => {
+		const fixture = createFixture(t, "AZURE_DEVOPS_PAT=real-script-pat\n");
+		symlinkSync(fixture.launcherPath, join(fixture.binPath, "pr.sh"));
+		symlinkSync("/bin/bash", join(fixture.binPath, "bash"));
+		writeFileSync(join(fixture.binPath, ".env"), "AZURE_DEVOPS_PAT=link-pat\n");
+		writeFileSync(
+			fixture.prPath,
+			`require("node:fs").writeFileSync(process.env.ADO_PR_LAUNCH_CAPTURE, JSON.stringify({ pat: process.env.AZURE_DEVOPS_PAT, cwd: process.cwd(), args: process.argv.slice(2) }));\n`,
+		);
+		const targetPath = join(dirname(fixture.capturePath), "target");
+		mkdirSync(targetPath);
 
-	const result = runLauncher({ ...fixture, launcherPath }, ["pr", "show"]);
+		const result = spawnTestProcess("pr.sh", ["pr", "show"], {
+			description: "pr.sh launcher test",
+			cwd: targetPath,
+			encoding: "utf8",
+			env: {
+				PATH: fixture.binPath,
+				ADO_PR_LAUNCH_CAPTURE: fixture.capturePath,
+			},
+		});
 
-	assert.equal(result.status, 0, result.stderr);
-	assert.deepEqual(readCapture(fixture), {
-		pat: "real-script-pat",
-		args: ["pr", "show"],
-	});
-});
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(readCapture(fixture), {
+			pat: "real-script-pat",
+			cwd: realpathSync(targetPath),
+			args: ["pr", "show"],
+		});
+	},
+);
 
 launcherTest(
 	"prefers an exported literal PAT and forwards arguments without shell evaluation",
