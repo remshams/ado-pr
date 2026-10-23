@@ -42,14 +42,27 @@ publishing it.
 
 ## CodeRabbit reviews
 
-- CodeRabbit does not review pull requests automatically.
-- When the work on a PR is finished and pushed, comment `@coderabbitai review` once
-  with `gh pr comment <n> --body "@coderabbitai review"`. Do not trigger a review
-  after every push. Batch fixes and trigger once per round.
-- The main branch ruleset requires CodeRabbit's approval. After the last fix, request
-  a final review and wait for the approval before merging.
+- CodeRabbit does not review pull requests automatically. Each PR gets one CodeRabbit
+  review.
+- Request it only when the PR is finished: your own review rounds are done, CI
+  passes, and the branch is rebased onto its base. For a stack, wait until every
+  layer is finished, then request one review per layer. Use
+  `gh pr comment <n> --body "@coderabbitai review"`.
+- Fix all actionable findings in one push and add a regression test for every fix
+  that changes behavior. Reply on each thread with the commit that fixes it, or the
+  reason for declining.
+- Before replying, review the fix commits against the commit CodeRabbit reviewed, and
+  check that each "Fixed in <sha>" reply points to a commit that addresses that
+  finding.
+- Do not request another review, except when a fix changes production behavior for a
+  Major or Critical finding. Then request one incremental review with
+  `@coderabbitai review`.
+- The main branch ruleset requires CodeRabbit's approval. Once every thread is
+  answered, comment `@coderabbitai approve`. If a later push or rebase dismisses the
+  approval, comment `@coderabbitai approve` again instead of requesting a review.
 - If CodeRabbit replies that the rate limit is exceeded, wait the stated time, then
-  trigger the review again.
+  trigger the request again. Count from when its message was posted; the number in it
+  does not count down.
 
 ## Commits
 
