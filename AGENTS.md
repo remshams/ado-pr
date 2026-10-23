@@ -18,6 +18,14 @@ dependency rules, runtime flow and tests. Update it in the same change when
 components, dependencies or ownership change. The [ADR index](docs/adr/README.md)
 records decisions and explains when to add or supersede a record.
 
+Keep the architecture document in two formats with the same content:
+`docs/architecture.md` for agents and diffs, and a self-contained
+`docs/architecture.html` for human readers. Update both in the same change. Use the
+`frontend-design` skill when creating or redesigning the HTML version. Keep the HTML
+self-contained so it works offline, with portable source links and no
+machine-specific paths. If `docs/architecture.html` does not exist yet, create it in
+the next change that updates the architecture document.
+
 ## Development
 
 Keep the project small and simple. Split by feature where it doesn't complicate
