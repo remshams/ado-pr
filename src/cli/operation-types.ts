@@ -58,6 +58,11 @@ type CliOptionsShape =
 	  })
 	| (PullRequestTarget & {
 			resource: "build";
+			command: "queue";
+			branch?: string;
+	  })
+	| (PullRequestTarget & {
+			resource: "build";
 			command: "wait";
 			build?: number;
 			latest: boolean;

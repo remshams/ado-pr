@@ -11,6 +11,12 @@ import type {
 	PullRequestReadOptions,
 	PullRequestService,
 } from "../pull-requests/pull-requests.ts";
+import {
+	buildApiUrl,
+	policyConfigurationsUrl,
+	policyEvaluationsUrl,
+	reposBaseUrl,
+} from "../shared/azure.ts";
 
 const BUILD_PAGE_SIZE = 100;
 const DEFAULT_LOG_LINE_COUNT = 200;
@@ -56,6 +62,7 @@ const WAIT_OUTCOMES = new Map<
 	["canceled", "canceled"],
 ]);
 const DISPLAY_RECORD_TYPES = new Set(["stage", "job", "task"]);
+const BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241";
 
 interface AzureObject {
 	[key: string]: unknown;
@@ -267,6 +274,8 @@ export interface BuildService {
 		requestedPrId: number | undefined,
 		buildId: number,
 	): Promise<AzureBuild>;
+	queuePr(prId: number): Promise<QueuedBuild>;
+	queueBranch(branch: string): Promise<AzureBuild>;
 	wait(
 		requestedPrId: number | undefined,
 		buildId: number | "latest",
@@ -276,13 +285,17 @@ export interface BuildService {
 	formatList(result: BuildListEnvelope): string;
 	formatShow(result: BuildShowEnvelope): string;
 	formatRetry(build: AzureBuild): string;
+	formatQueue(build: AzureBuild): string;
 	formatWaitProgress(event: BuildWaitProgress): string;
 	formatWaitResult(result: BuildWaitEnvelope): string;
 }
 
+export type QueuedBuild = { build: AzureBuild } | { evaluationId: string };
+
 interface ValidatedPullRequest {
 	id: number;
 	repositoryId: string;
+	projectId: string | undefined;
 	status: string | undefined;
 	mergeCommit: string | undefined;
 	headCommit: string | undefined;
@@ -414,6 +427,13 @@ function validatePullRequest(
 		describeField(context, "repository.id"),
 	);
 	requireString(repository.name, describeField(context, "repository.name"));
+	const repositoryProject = isObject(repository.project)
+		? repository.project
+		: undefined;
+	const projectId =
+		typeof repositoryProject?.id === "string"
+			? repositoryProject.id
+			: undefined;
 	const status = optionalString(value.status, describeField(context, "status"));
 	if (value.isDraft !== undefined && typeof value.isDraft !== "boolean") {
 		throw new Error(
@@ -433,6 +453,7 @@ function validatePullRequest(
 	return {
 		id,
 		repositoryId,
+		projectId,
 		headCommit,
 		sourceBranch,
 		status,
@@ -1177,6 +1198,57 @@ function assertFetchedBuild(
 	return build;
 }
 
+function policyEvaluationLabel(evaluation: AzureObject): string {
+	const configuration = isObject(evaluation.configuration)
+		? evaluation.configuration
+		: undefined;
+	const name = configuration?.name ?? evaluation.configurationName;
+	return `evaluation ${String(evaluation.evaluationId)}${typeof name === "string" ? ` (${name})` : ""}`;
+}
+
+function isBuildPolicyEvaluation(evaluation: AzureObject): boolean {
+	const configuration = isObject(evaluation.configuration)
+		? evaluation.configuration
+		: undefined;
+	const type =
+		configuration && isObject(configuration.type)
+			? configuration.type
+			: undefined;
+	return (
+		typeof type?.id === "string" &&
+		equalsIdentifier(type.id, BUILD_POLICY_TYPE_ID)
+	);
+}
+
+function policyConfigurationLabel(policy: AzureObject): string {
+	const id = typeof policy.id === "number" ? policy.id : "unknown";
+	const settings = isObject(policy.settings) ? policy.settings : undefined;
+	const name = settings?.displayName ?? policy.displayName;
+	return `policy ${id}${typeof name === "string" ? ` (${name})` : ""}`;
+}
+
+function isBuildPolicyForRepository(
+	policy: AzureObject,
+	repositoryId: string,
+): boolean {
+	if (policy.isEnabled === false) return false;
+	if (
+		!isObject(policy.type) ||
+		typeof policy.type.id !== "string" ||
+		!equalsIdentifier(policy.type.id, BUILD_POLICY_TYPE_ID)
+	)
+		return false;
+	if (!isObject(policy.settings) || !Array.isArray(policy.settings.scope))
+		return false;
+	return policy.settings.scope.some(
+		(scope) =>
+			isObject(scope) &&
+			(scope.repositoryId == null ||
+				(typeof scope.repositoryId === "string" &&
+					equalsIdentifier(scope.repositoryId, repositoryId))),
+	);
+}
+
 function formatBuildRow(build: AzureBuild, current: boolean): string {
 	return [
 		`- Build ${build.id as number}/${display(build.buildNumber)} — ${display(buildDefinitionName(build))}`,
@@ -1598,6 +1670,159 @@ export function createBuildService({
 		}
 	}
 
+	async function queuePr(prId: number): Promise<QueuedBuild> {
+		assertRequestedPullRequestId(prId);
+		const pr = await resolvePullRequest(prId);
+		const projectId = pr.projectId;
+		if (typeof projectId !== "string" || projectId.length === 0) {
+			throw new Error(
+				`Cannot queue a build for PR #${pr.id}: Azure DevOps did not return its project ID.`,
+			);
+		}
+		const artifactId = `vstfs:///CodeReview/CodeReviewId/${projectId}/${pr.id}`;
+		const evaluationsUrl = policyEvaluationsUrl(ctx, artifactId);
+		const evaluationResponse = requireObject(
+			await azure.request<unknown>(evaluationsUrl, {
+				timeoutMs: READ_TIMEOUT_MS,
+				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+			}),
+			"policy evaluations response",
+		);
+		const evaluations = requireArray(
+			evaluationResponse.value,
+			"policy evaluations response.value",
+		);
+		const candidates = evaluations
+			.map((value, index) =>
+				requireObject(value, `policy evaluation ${index + 1}`),
+			)
+			.filter((evaluation) => isBuildPolicyEvaluation(evaluation))
+			.map((evaluation, index) => {
+				const id = requireString(
+					evaluation.evaluationId,
+					`build policy evaluation ${index + 1}.evaluationId`,
+				);
+				return {
+					id,
+					label: policyEvaluationLabel(evaluation),
+				};
+			});
+		if (candidates.length === 0) {
+			throw new Error(`No build policy evaluation was found for PR #${pr.id}.`);
+		}
+		if (candidates.length > 1) {
+			throw new Error(
+				`More than one build policy evaluation was found for PR #${pr.id}. Choose one manually: ${candidates.map((candidate) => candidate.label).join(", ")}.`,
+			);
+		}
+
+		const candidate = candidates[0];
+		const evaluationUrl = `${orgProjectUrl(ctx)}/_apis/policy/evaluations/${candidate.id}?api-version=7.1-preview.1`;
+		const response = requireObject(
+			await azure.request<unknown>(evaluationUrl, {
+				method: "PATCH",
+				body: { status: "queued" },
+				timeoutMs: RETRY_TIMEOUT_MS,
+				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+			}),
+			"requeued policy evaluation response",
+		);
+		const context = isObject(response.context) ? response.context : undefined;
+		if (context?.buildId !== undefined) {
+			const buildId = requirePositiveInteger(
+				context.buildId,
+				"requeued policy evaluation context.buildId",
+			);
+			return {
+				build: assertFetchedBuild(
+					await azure.request<unknown>(
+						`${buildApiUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
+						{
+							timeoutMs: READ_TIMEOUT_MS,
+							maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+						},
+					),
+					buildId,
+					"requeued build response",
+				),
+			};
+		}
+		return { evaluationId: candidate.id };
+	}
+
+	async function queueBranch(branch: string): Promise<AzureBuild> {
+		const sourceBranch = branch.startsWith("refs/")
+			? branch
+			: `refs/heads/${branch}`;
+		const repository = requireObject(
+			await azure.request<unknown>(
+				`${reposBaseUrl(ctx)}?api-version=${API_VERSION}`,
+				{
+					timeoutMs: READ_TIMEOUT_MS,
+					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+				},
+			),
+			"repository response",
+		);
+		const repositoryId = requireString(repository.id, "repository response.id");
+		const response = requireObject(
+			await azure.request<unknown>(policyConfigurationsUrl(ctx), {
+				timeoutMs: READ_TIMEOUT_MS,
+				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+			}),
+			"policy configurations response",
+		);
+		const repositoryPolicies = requireArray(
+			response.value,
+			"policy configurations response.value",
+		)
+			.map((value, index) =>
+				requireObject(value, `policy configuration ${index + 1}`),
+			)
+			.filter((policy) => isBuildPolicyForRepository(policy, repositoryId));
+		if (repositoryPolicies.length === 0) {
+			throw new Error(
+				`No build policy was found for repository ${ctx.repository}.`,
+			);
+		}
+		const definitions = new Map<number, AzureObject[]>();
+		for (const policy of repositoryPolicies) {
+			const settings = requireObject(policy.settings, "build policy settings");
+			const definitionId = requirePositiveInteger(
+				settings.buildDefinitionId,
+				"build policy settings.buildDefinitionId",
+			);
+			const matchingPolicies = definitions.get(definitionId) ?? [];
+			matchingPolicies.push(policy);
+			definitions.set(definitionId, matchingPolicies);
+		}
+		if (definitions.size > 1) {
+			const candidates = [...definitions.entries()]
+				.map(
+					([definitionId, policies]) =>
+						`definition ${definitionId}: ${policies.map(policyConfigurationLabel).join(", ")}`,
+				)
+				.join("; ");
+			throw new Error(
+				`More than one build definition was found for repository ${ctx.repository}. Choose one manually: ${candidates}.`,
+			);
+		}
+		const definitionId = definitions.keys().next().value as number;
+		const build = validateBuild(
+			await azure.request<unknown>(
+				`${buildApiUrl(ctx)}?api-version=${API_VERSION}`,
+				{
+					method: "POST",
+					body: { definition: { id: definitionId }, sourceBranch },
+					timeoutMs: RETRY_TIMEOUT_MS,
+					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+				},
+			),
+			"queued branch build",
+		);
+		return build;
+	}
+
 	async function wait(
 		requestedPrId: number | undefined,
 		requestedBuild: number | "latest",
@@ -1870,6 +2095,13 @@ export function createBuildService({
 		].join("\n");
 	}
 
+	function formatQueue(build: AzureBuild): string {
+		return [
+			`Azure DevOps queued build ${build.id as number}/${display(build.buildNumber)}.`,
+			`URL: ${display(buildWebLink(build))}`,
+		].join("\n");
+	}
+
 	function formatWaitProgress(event: BuildWaitProgress): string {
 		const state = `${display(event.build?.status)}/${display(event.build?.result)}`;
 		const counters =
@@ -1919,11 +2151,14 @@ export function createBuildService({
 		list,
 		show,
 		retry,
+		queuePr,
+		queueBranch,
 		wait,
 		hasLogErrors,
 		formatList,
 		formatShow,
 		formatRetry,
+		formatQueue,
 		formatWaitProgress,
 		formatWaitResult,
 	};

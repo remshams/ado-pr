@@ -1,24 +1,23 @@
-import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
-import { formatHelp } from "./command-registry.ts";
 import minimist from "minimist";
-
+import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
 import {
 	BOOLEAN_FLAG_NAMES,
 	COMMAND_REGISTRY,
-	FLAG_DEFINITIONS,
-	REPEATABLE_STRING_FLAG_NAMES,
-	STRING_FLAG_NAMES,
-	getCommandId,
-	isResourceName,
 	type CommandId,
 	type CommandValidationRule,
+	FLAG_DEFINITIONS,
 	type FlagName,
+	getCommandId,
+	isResourceName,
 	type ParsedCommandFlags,
 	type PositiveIntegerFlagName,
+	REPEATABLE_STRING_FLAG_NAMES,
 	type RepeatableStringFlagName,
+	STRING_FLAG_NAMES,
 	type TextFlagName,
 } from "../shared/command-contracts.ts";
 import { isPositiveInteger } from "../shared/operation-types.ts";
+import { formatHelp } from "./command-registry.ts";
 import type { CliOptions } from "./operation-types.ts";
 
 const KNOWN_FLAGS = new Set<string>(Object.keys(FLAG_DEFINITIONS));
@@ -317,6 +316,32 @@ function validateBuildSelection(
 	}
 }
 
+function validateBuildQueueTarget(
+	values: Partial<Record<FlagName, unknown>>,
+	enforceRequired: boolean,
+	route: string,
+): void {
+	const hasPr = values.pr !== undefined;
+	const hasBranch = values.branch !== undefined;
+	if (hasPr && hasBranch) {
+		printUsageAndExit(
+			`--pr and --branch are mutually exclusive for "${route}"`,
+		);
+	}
+	if (!hasPr && !hasBranch && enforceRequired) {
+		printUsageAndExit(
+			`exactly one of --pr or --branch is required for "${route}"`,
+		);
+	}
+	if (
+		hasBranch &&
+		typeof values.branch === "string" &&
+		values.branch.trim() === ""
+	) {
+		printUsageAndExit("--branch must not be empty");
+	}
+}
+
 function parseCommandFlags<Id extends CommandId>(
 	commandId: Id,
 	route: string,
@@ -368,6 +393,8 @@ function parseCommandFlags<Id extends CommandId>(
 		);
 	if (validationRules?.includes("buildSelection"))
 		validateBuildSelection(values, enforceRequired, route);
+	if (validationRules?.includes("buildQueueTarget"))
+		validateBuildQueueTarget(values, enforceRequired, route);
 
 	if (validationRules?.includes("buildWaitBounds"))
 		validateBuildWaitBounds(values);
@@ -445,6 +472,12 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "retry",
 		build: values.build,
 		pr: values.pr,
+	}),
+	"build.queue": (values) => ({
+		resource: "build",
+		command: "queue",
+		pr: values.pr,
+		branch: values.branch,
 	}),
 	"build.wait": (values) => ({
 		resource: "build",

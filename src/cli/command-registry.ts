@@ -1,11 +1,11 @@
 import {
 	BATCH_COMMANDS,
 	BATCH_FIELD_DEFINITIONS,
+	type BatchCommand,
 	COMMAND_IDS,
 	COMMAND_REGISTRY,
 	FLAG_DEFINITIONS,
 	getBatchFields,
-	type BatchCommand,
 } from "../shared/command-contracts.ts";
 
 function formatBatchShape(command: BatchCommand): string {
@@ -96,12 +96,18 @@ Build wait:
   Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;
   use \`build show\` afterward for diagnostics.
 
+Build queue:
+  \`build queue\` requires exactly one of --pr <id> or --branch <name>. PR builds requeue the PR's
+  build policy evaluation; branch builds use the repository's build policy definition. Both print
+  the queued build ID and URL. Multiple matching policies are reported for manual resolution.
+
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
   - AZURE_DEVOPS_PAT exported by the caller or set in .env.
   - PAT Code (Read & Write) for PR/comment mutations; Code (Read) is sufficient for build commands.
-  - Build read, also named vso.build, for build queries; Build execute, also named vso.build_execute,
-    additionally for build retries.
+  - Build (Read), also named vso.build, for build queries; Build (Read & execute), also named
+    vso.build_execute, for build retries and queueing. The policy evaluation requeue scope has not
+    been verified with a real PAT.
   - Build commands support YAML and classic Build API validation runs, not Releases, external status
     checks, or individual stage/job/task retries.
   - Identity (Read), also named vso.identity, only for --reviewer additions on pr create/edit.

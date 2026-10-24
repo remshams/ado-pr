@@ -20,6 +20,11 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Build ID. Required for `build retry`; choose --build or --latest for show/wait.",
 	},
+	branch: {
+		kind: "string",
+		usage: "--branch <name>",
+		description: "Queue a validation build for this source branch.",
+	},
 	latest: {
 		kind: "boolean",
 		usage: "--latest",
@@ -231,7 +236,8 @@ export type CommandValidationRule =
 	| "pullRequestEdit"
 	| "commentLocation"
 	| "buildWaitBounds"
-	| "buildSelection";
+	| "buildSelection"
+	| "buildQueueTarget";
 
 interface CommandDefinition {
 	resource: "pr" | "comment" | "build";
@@ -338,6 +344,14 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 			"Retry an eligible failed PR validation build at the whole-build level.",
 		flags: ["build", "pr"],
 		requiredFlags: ["build"],
+	},
+	"build.queue": {
+		resource: "build",
+		command: "queue",
+		usage: "build queue (--pr <id> | --branch <name>)",
+		summary: "Queue a validation build for a pull request or branch.",
+		flags: ["pr", "branch"],
+		validationRules: ["buildQueueTarget"],
 	},
 	"build.wait": {
 		resource: "build",
