@@ -208,6 +208,22 @@ function escapeMarkdownAltText(value: string): string {
 	return value.replace(/[\\[\]]/g, "\\$&");
 }
 
+// Renaming can't fix a missing scope, a wrong PR, a server error or a network failure.
+function isRenameableUploadRejection(
+	error: unknown,
+): error is AzureRequestError {
+	if (!(error instanceof AzureRequestError) || error.kind !== "http")
+		return false;
+	const status = error.status ?? 0;
+	return status >= 400 && status < 500 && ![401, 403, 404].includes(status);
+}
+
+export function attachmentMarkdownLink(
+	attachment: PullRequestAttachment,
+): string {
+	return `[${escapeMarkdownAltText(attachment.displayName)}](<${attachment.url}>)`;
+}
+
 function encodeImageMarkerFilename(value: string): string {
 	return encodeURIComponent(value).replace(
 		/[!'()*-]/g,
@@ -955,22 +971,14 @@ export function createPullRequestService({
 		path: string,
 		name?: string,
 	): Promise<PullRequestAttachment> {
+		if (name === "") throw new Error("--name must not be empty.");
 		const prId = await resolveId(requestedPrId);
 		const filename = name ?? basename(path);
 		const bytes = new Uint8Array(await readFile(path));
 		try {
 			return await uploadAttachment(prId, { filename, bytes });
 		} catch (error) {
-			if (
-				error instanceof AzureRequestError &&
-				error.kind === "http" &&
-				error.status !== undefined &&
-				error.status >= 400 &&
-				error.status < 500 &&
-				error.status !== 401 &&
-				error.status !== 403 &&
-				error.status !== 404
-			) {
+			if (isRenameableUploadRejection(error)) {
 				throw new Error(
 					`${error.message}\nTry renaming the file with --name, for example --name "attachment.txt".`,
 				);
