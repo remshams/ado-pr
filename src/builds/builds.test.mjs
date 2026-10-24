@@ -2670,6 +2670,49 @@ describe("build queueing", () => {
 		);
 	});
 
+	test("rejects an invalid PR ID before resolving the pull request", async (t) => {
+		const { service, calls, pullRequestCalls } = setup(t, []);
+
+		await assert.rejects(service.queuePr(0), {
+			message: "Pull request ID must be a positive safe integer.",
+		});
+		assert.deepEqual(pullRequestCalls, []);
+		assert.deepEqual(calls, []);
+	});
+
+	test("reports a missing project ID before looking up policy evaluations", async (t) => {
+		for (const project of [undefined, {}]) {
+			const pr = pullRequest({
+				repository: { id: "Repo-ID", name: "widgets", project },
+			});
+			const { service, calls } = setup(t, [], { resolveValues: [pr] });
+
+			await assert.rejects(service.queuePr(42), {
+				message:
+					"Cannot queue a build for PR #42: Azure DevOps did not return its project ID.",
+			});
+			assert.deepEqual(calls, []);
+		}
+	});
+
+	test("reports malformed evaluation responses with their field names", async (t) => {
+		const pr = pullRequest({
+			repository: {
+				id: "Repo-ID",
+				name: "widgets",
+				project: { id: projectId },
+			},
+		});
+		for (const [response, error] of [
+			[{ json: [] }, /policy evaluations response must be an object/],
+			[{ json: {} }, /policy evaluations response\.value must be an array/],
+		]) {
+			const { service, calls } = setup(t, [response], { resolveValues: [pr] });
+			await assert.rejects(service.queuePr(42), error);
+			assert.match(calls[0].url, /_apis\/policy\/evaluations\?/);
+		}
+	});
+
 	test("fetches the build ID from the requeued evaluation context", async (t) => {
 		const pr = pullRequest({
 			repository: {
@@ -2733,6 +2776,45 @@ describe("build queueing", () => {
 		);
 	});
 
+	test("rejects an invalid evaluation build ID without requesting a build", async (t) => {
+		const pr = pullRequest({
+			repository: {
+				id: "Repo-ID",
+				name: "widgets",
+				project: { id: projectId },
+			},
+		});
+		const { service, calls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							{
+								evaluationId: "evaluation-id",
+								configuration: { type: { id: buildPolicyType } },
+							},
+						],
+					},
+				},
+				{
+					json: {
+						evaluationId: "evaluation-id",
+						status: "queued",
+						context: { buildId: 0 },
+					},
+				},
+			],
+			{ resolveValues: [pr] },
+		);
+
+		await assert.rejects(service.queuePr(42), {
+			message:
+				"Malformed Azure DevOps response: requeued policy evaluation context.buildId must be a positive safe integer.",
+		});
+		assert.equal(calls.length, 2);
+	});
+
 	test("lists several build policy evaluations and asks for a manual choice", async (t) => {
 		const pr = pullRequest({
 			repository: {
@@ -2741,22 +2823,31 @@ describe("build queueing", () => {
 				project: { id: projectId },
 			},
 		});
-		const evaluations = ["first-evaluation", "second-evaluation"].map(
-			(evaluationId) => ({
-				evaluationId,
+		const evaluations = [
+			{
+				evaluationId: "first-evaluation",
 				configuration: {
-					name: evaluationId,
+					name: "Widget CI",
 					type: { id: buildPolicyType },
 				},
-			}),
-		);
+			},
+			{
+				evaluationId: "second-evaluation",
+				configurationName: "Widget CD",
+				configuration: { type: { id: buildPolicyType } },
+			},
+			{
+				evaluationId: "other-policy",
+				configuration: { type: { id: "other-policy-type" } },
+			},
+		];
 		const { service } = setup(t, [{ json: { value: evaluations } }], {
 			resolveValues: [pr],
 		});
-		await assert.rejects(
-			service.queuePr(42),
-			/More than one build policy evaluation.*first-evaluation.*second-evaluation/,
-		);
+		await assert.rejects(service.queuePr(42), {
+			message:
+				"More than one build policy evaluation was found for PR #42. Choose one manually: evaluation first-evaluation (Widget CI), evaluation second-evaluation (Widget CD).",
+		});
 	});
 
 	test("queues a branch build with the repository build policy definition", async (t) => {
@@ -2815,6 +2906,38 @@ describe("build queueing", () => {
 		);
 	});
 
+	test("preserves a fully qualified source branch when queueing", async (t) => {
+		const { service, calls } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{
+				json: {
+					value: [
+						{
+							id: 7,
+							type: { id: buildPolicyType },
+							settings: {
+								buildDefinitionId: 9,
+								scope: [{ repositoryId: "repo-id" }],
+							},
+						},
+					],
+				},
+			},
+			{ json: build({ id: 706, sourceBranch: "refs/heads/main" }) },
+		]);
+
+		const result = await service.queueBranch("refs/heads/main");
+
+		assert.equal(result.id, 706);
+		assert.equal(
+			calls[2].body,
+			JSON.stringify({
+				definition: { id: 9 },
+				sourceBranch: "refs/heads/main",
+			}),
+		);
+	});
+
 	test("reports a missing build policy for branch queueing", async (t) => {
 		const { service } = setup(t, [
 			{ json: { id: "repo-id" } },
@@ -2827,22 +2950,34 @@ describe("build queueing", () => {
 	});
 
 	test("lists multiple repository build definitions and their policies", async (t) => {
-		const policies = [1, 2].map((id) => ({
-			id,
-			type: { id: buildPolicyType },
-			settings: {
-				buildDefinitionId: id + 8,
-				scope: [{ repositoryId: "Repo-ID" }],
+		const policies = [
+			{
+				id: 1,
+				type: { id: buildPolicyType },
+				settings: {
+					buildDefinitionId: 9,
+					displayName: "Main CI",
+					scope: [{ repositoryId: "Repo-ID" }],
+				},
 			},
-		}));
+			{
+				id: 2,
+				displayName: "Release policy",
+				type: { id: buildPolicyType },
+				settings: {
+					buildDefinitionId: 10,
+					scope: [{ repositoryId: "Repo-ID" }],
+				},
+			},
+		];
 		const { service } = setup(t, [
 			{ json: { id: "repo-id" } },
 			{ json: { value: policies } },
 		]);
-		await assert.rejects(
-			service.queueBranch("main"),
-			/More than one build definition.*definition 9: policy 1.*definition 10: policy 2/,
-		);
+		await assert.rejects(service.queueBranch("main"), {
+			message:
+				"More than one build definition was found for repository checkout-name. Choose one manually: definition 9: policy 1 (Main CI); definition 10: policy 2 (Release policy).",
+		});
 	});
 
 	test("queues once when several repository policies share a build definition", async (t) => {
@@ -2854,6 +2989,33 @@ describe("build queueing", () => {
 				scope: [{ repositoryId: "repo-id" }],
 			},
 		}));
+		policies.unshift(
+			{
+				type: { id: "other-policy-type" },
+				settings: {
+					buildDefinitionId: 13,
+					scope: [{ repositoryId: "repo-id" }],
+				},
+			},
+			{
+				type: null,
+				settings: {
+					buildDefinitionId: 15,
+					scope: [{ repositoryId: "repo-id" }],
+				},
+			},
+			{
+				type: { id: buildPolicyType },
+				settings: { buildDefinitionId: 16, scope: null },
+			},
+			{
+				type: { id: buildPolicyType },
+				settings: {
+					buildDefinitionId: 14,
+					scope: [{ repositoryId: "another-repo" }],
+				},
+			},
+		);
 		const { service, calls } = setup(t, [
 			{ json: { id: "repo-id" } },
 			{ json: { value: policies } },
@@ -2886,6 +3048,14 @@ describe("build queueing", () => {
 								scope: [{ matchKind: "Exact", refName: "refs/heads/main" }],
 							},
 						},
+						{
+							id: 5,
+							type: { id: buildPolicyType },
+							settings: {
+								buildDefinitionId: 11,
+								scope: [{ repositoryId: null }],
+							},
+						},
 					],
 				},
 			},
@@ -2895,7 +3065,13 @@ describe("build queueing", () => {
 		const result = await service.queueBranch("main");
 
 		assert.equal(result.id, 705);
-		assert.match(calls[2].body, /"id":11/);
+		assert.equal(
+			calls[2].body,
+			JSON.stringify({
+				definition: { id: 11 },
+				sourceBranch: "refs/heads/main",
+			}),
+		);
 	});
 
 	test("ignores disabled build policies", async (t) => {
