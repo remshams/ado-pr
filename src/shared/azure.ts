@@ -812,6 +812,21 @@ export function reposBaseUrl(ctx: AzureDevOpsRepoContext): string {
 	return `${orgProjectUrl(ctx)}/_apis/git/repositories/${encodeURIComponent(ctx.repository)}`;
 }
 
+export function policyEvaluationsUrl(
+	ctx: AzureDevOpsRepoContext,
+	artifactId: string,
+): string {
+	return `${orgProjectUrl(ctx)}/_apis/policy/evaluations?artifactId=${encodeURIComponent(artifactId)}&api-version=7.1-preview.1`;
+}
+
+export function policyConfigurationsUrl(ctx: AzureDevOpsRepoContext): string {
+	return `${orgProjectUrl(ctx)}/_apis/policy/configurations?api-version=${API_VERSION}`;
+}
+
+export function buildApiUrl(ctx: AzureDevOpsRepoContext): string {
+	return `${orgProjectUrl(ctx)}/_apis/build/builds`;
+}
+
 export function pullRequestApiUrl(
 	ctx: AzureDevOpsRepoContext,
 	prId: number,
