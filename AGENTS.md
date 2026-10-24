@@ -40,9 +40,10 @@ documents, ADRs, issues, PR descriptions and explanations of the code.
   aggregate is a cluster of objects that changes only through its root.
 - Call stateless domain logic that belongs to no single type a domain service, and
   code that runs one use case an application service.
-- Call a part of the model with its own language a bounded context. Code that maps
-  the Azure DevOps REST API to that model is an anti-corruption layer; keep Azure
-  DevOps types and names out of the rest of the code.
+- Call the boundary within which one model and its language stay consistent a bounded
+  context. Code that maps the Azure DevOps REST API to that model is an
+  anti-corruption layer; keep Azure DevOps types and names out of the rest of the
+  code.
 - Use these terms to describe the code that exists. Don't add layers, interfaces or
   folders just to match a DDD pattern; keeping the project small still wins.
 
