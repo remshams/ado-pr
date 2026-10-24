@@ -16,6 +16,12 @@ type CliOptionsShape =
 	  }
 	| (PullRequestTarget & {
 			resource: "pr";
+			command: "attach";
+			path: string;
+			name?: string;
+	  })
+	| (PullRequestTarget & {
+			resource: "pr";
 			command: "show";
 			json: boolean;
 	  })
