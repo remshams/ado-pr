@@ -3,14 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-
+import { createMockFetch } from "../../tests/test-helpers.mjs";
 import { createAzureRequester } from "../shared/azure.ts";
 import {
 	createPullRequestService,
 	removeAttachmentMarkdown,
 	validateImagePlaceholders,
 } from "./pull-requests.ts";
-import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
 	organization: "test-org",
@@ -52,6 +51,68 @@ function createTempImage(t, filename, bytes = [0, 255, 16]) {
 }
 
 describe("pull request listing, resolution, creation, and updates", () => {
+	test("uploads any file using the shared attachment upload request", async (t) => {
+		const path = createTempImage(t, "change.patch", [65, 66]);
+		const { service, calls } = createService(t, [
+			{
+				json: {
+					displayName: "review.txt",
+					url: "https://files.test/review.txt",
+				},
+			},
+		]);
+		assert.deepEqual(await service.attach(42, path, "review.txt"), {
+			displayName: "review.txt",
+			url: "https://files.test/review.txt",
+		});
+		assert.equal(calls[0].method, "POST");
+		assert.match(calls[0].url, /pullRequests\/42\/attachments\/review.txt/);
+		assert.deepEqual(calls[0].body, { encoding: "base64", data: "QUI=" });
+	});
+	test("adds a rename suggestion to Azure upload rejection details", async (t) => {
+		const path = createTempImage(t, "change.patch");
+		const { service } = createService(t, [
+			{
+				status: 400,
+				statusText: "Bad Request",
+				body: '{"message":"Unsupported file"}',
+			},
+		]);
+		await assert.rejects(
+			service.attach(42, path),
+			/400 Bad Request[\s\S]*Unsupported file[\s\S]*--name "attachment.txt"/,
+		);
+	});
+	test("does not suggest renaming after an unauthorized upload rejection", async (t) => {
+		const path = createTempImage(t, "change.patch");
+		const { service } = createService(t, [
+			{
+				status: 401,
+				statusText: "Unauthorized",
+				body: '{"message":"Invalid PAT"}',
+			},
+		]);
+		await assert.rejects(service.attach(42, path), (error) => {
+			assert.match(error.message, /401 Unauthorized/);
+			assert.doesNotMatch(error.message, /Try renaming/);
+			return true;
+		});
+	});
+	test("does not suggest renaming after a server upload failure", async (t) => {
+		const path = createTempImage(t, "change.patch");
+		const { service } = createService(t, [
+			{
+				status: 500,
+				statusText: "Internal Server Error",
+				body: '{"message":"Unavailable"}',
+			},
+		]);
+		await assert.rejects(service.attach(42, path), (error) => {
+			assert.match(error.message, /500 Internal Server Error/);
+			assert.doesNotMatch(error.message, /Try renaming/);
+			return true;
+		});
+	});
 	test("lists the current identity's active repository pull requests in response order", async (t) => {
 		const expected = [
 			pullRequest({ pullRequestId: 91, title: "Second by ID" }),
