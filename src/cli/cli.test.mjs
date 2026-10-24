@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
 import test, { mock } from "node:test";
-
-import { getPat, parseArgs } from "./cli.ts";
+import { fileURLToPath } from "node:url";
+import { spawnTestProcess } from "../../tests/test-helpers.mjs";
 
 import { buildWaitExitCode } from "../shared/operation-types.ts";
-import { spawnTestProcess } from "../../tests/test-helpers.mjs";
+import { getPat, parseArgs } from "./cli.ts";
 
 const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
@@ -495,6 +494,31 @@ test("pr list parses all filters and rejects mutually exclusive modes", () => {
 	assertUsageError(
 		runCli("pr", "list", "--target", ""),
 		'Error: --target requires a non-empty branch for "pr list"',
+	);
+});
+
+test("build queue accepts exactly one PR or branch target", () => {
+	const byPr = parseArgs(["build", "queue", "--pr", "42"]);
+	assert.deepEqual(
+		{ command: byPr.command, pr: byPr.pr, branch: byPr.branch },
+		{ command: "queue", pr: 42, branch: undefined },
+	);
+	const byBranch = parseArgs(["build", "queue", "--branch", "release/next"]);
+	assert.deepEqual(
+		{ command: byBranch.command, pr: byBranch.pr, branch: byBranch.branch },
+		{ command: "queue", pr: undefined, branch: "release/next" },
+	);
+	assertUsageError(
+		runCli("build", "queue"),
+		'Error: exactly one of --pr or --branch is required for "build queue"',
+	);
+	assertUsageError(
+		runCli("build", "queue", "--pr", "42", "--branch", "main"),
+		'Error: --pr and --branch are mutually exclusive for "build queue"',
+	);
+	assertUsageError(
+		runCli("build", "queue", "--branch", ""),
+		"Error: --branch must not be empty",
 	);
 });
 
