@@ -135,21 +135,7 @@ async function runPullRequestCommand(
 ): Promise<void> {
 	switch (options.command) {
 		case "list": {
-			const prs = await pullRequests.list();
-			if (options.json) {
-				console.log(JSON.stringify(prs, null, 2));
-				return;
-			}
-			if (prs.length === 0) {
-				console.log(
-					"No active pull requests created by you in this repository.",
-				);
-				return;
-			}
-			console.log("Active pull requests created by you:\n");
-			console.log(
-				prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"),
-			);
+			await runPullRequestList(options, pullRequests);
 			return;
 		}
 		case "create": {
@@ -173,6 +159,35 @@ async function runPullRequestCommand(
 		}
 	}
 	return assertNever(options);
+}
+
+async function runPullRequestList(
+	options: Extract<CliOptions, { resource: "pr"; command: "list" }>,
+	pullRequests: ReturnType<typeof createPullRequestService>,
+): Promise<void> {
+	const prs = await pullRequests.list(options);
+	if (options.json) {
+		console.log(JSON.stringify(prs, null, 2));
+		return;
+	}
+	if (prs.length === 0) {
+		console.log(
+			options.reviewing
+				? "No active pull requests assigned to you for review."
+				: options.all
+					? "No active pull requests in this repository."
+					: "No active pull requests created by you in this repository.",
+		);
+		return;
+	}
+	console.log(
+		options.reviewing
+			? "Active pull requests assigned to you for review:\n"
+			: options.all
+				? "All active pull requests:\n"
+				: "Active pull requests created by you:\n",
+	);
+	console.log(prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"));
 }
 
 async function runCommentCommand(
