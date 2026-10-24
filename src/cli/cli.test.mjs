@@ -9,7 +9,8 @@ import { spawnTestProcess } from "../../tests/test-helpers.mjs";
 
 const projectRoot = fileURLToPath(new URL("../..", import.meta.url));
 const cliPath = fileURLToPath(new URL("../pr.ts", import.meta.url));
-const usageFirstLine = "Usage: pr.sh pr list [--json]";
+const usageFirstLine =
+	"Usage: pr.sh pr list [--reviewing | --all] [--target <branch>] [--json]";
 const missingPatError =
 	"Error: AZURE_DEVOPS_PAT is not set. Export it before running pr.ts, or configure it in .env and run pr.sh.\n";
 const childEnvAllowlist = new Set([
@@ -464,6 +465,36 @@ test("build flags parse with registry-derived types and reject missing or foreig
 	}
 });
 
+test("pr list parses all filters and rejects mutually exclusive modes", () => {
+	assert.deepEqual(
+		parseOptions(["pr", "list", "--reviewing", "--target", "release/2026"]),
+		{
+			resource: "pr",
+			command: "list",
+			reviewing: true,
+			all: false,
+			target: "release/2026",
+			json: false,
+		},
+	);
+	assert.deepEqual(parseOptions(["pr", "list", "--all"]), {
+		resource: "pr",
+		command: "list",
+		reviewing: false,
+		all: true,
+		target: undefined,
+		json: false,
+	});
+	assertUsageError(
+		runCli("pr", "list", "--reviewing", "--all"),
+		'Error: --reviewing and --all are mutually exclusive for "pr list"',
+	);
+	assertUsageError(
+		runCli("pr", "list", "--target", ""),
+		'Error: --target requires a non-empty branch for "pr list"',
+	);
+});
+
 test("unknown flags and invalid boolean values are rejected", () => {
 	assertUsageError(
 		runCli("pr", "show", "--bogus"),
@@ -808,8 +839,28 @@ test("an unresolved op reference explains that an Environment mount needs a lite
 
 test("parsing returns command options with typed values and defaults", () => {
 	const cases = [
-		[["pr", "list"], { resource: "pr", command: "list", json: false }],
-		[["pr", "list", "--json"], { resource: "pr", command: "list", json: true }],
+		[
+			["pr", "list"],
+			{
+				resource: "pr",
+				command: "list",
+				reviewing: false,
+				all: false,
+				target: undefined,
+				json: false,
+			},
+		],
+		[
+			["pr", "list", "--json"],
+			{
+				resource: "pr",
+				command: "list",
+				reviewing: false,
+				all: false,
+				target: undefined,
+				json: true,
+			},
+		],
 		[
 			["pr", "show", "--pr=42", "--json"],
 			{ resource: "pr", command: "show", pr: 42, json: true },
@@ -1104,6 +1155,9 @@ test("option scanning respects terminators and option-like text", () => {
 	assert.deepEqual(parseOptions(["--", "pr", "list"]), {
 		resource: "pr",
 		command: "list",
+		reviewing: false,
+		all: false,
+		target: undefined,
 		json: false,
 	});
 	assert.equal(

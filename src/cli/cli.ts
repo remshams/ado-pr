@@ -317,6 +317,17 @@ function validateBuildSelection(
 	}
 }
 
+function validatePullRequestList(values: FlagValues): void {
+	if (values.reviewing === true && values.all === true) {
+		printUsageAndExit(
+			'--reviewing and --all are mutually exclusive for "pr list"',
+		);
+	}
+	if (values.target === "") {
+		printUsageAndExit('--target requires a non-empty branch for "pr list"');
+	}
+}
+
 function parseCommandFlags<Id extends CommandId>(
 	commandId: Id,
 	route: string,
@@ -366,6 +377,8 @@ function parseCommandFlags<Id extends CommandId>(
 			enforceRequired,
 			route,
 		);
+	if (validationRules?.includes("pullRequestList"))
+		validatePullRequestList(values);
 	if (validationRules?.includes("buildSelection"))
 		validateBuildSelection(values, enforceRequired, route);
 
@@ -391,6 +404,9 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 	"pr.list": (values) => ({
 		resource: "pr",
 		command: "list",
+		reviewing: values.reviewing,
+		all: values.all,
+		target: values.target,
 		json: values.json,
 	}),
 	"pr.show": (values) => ({

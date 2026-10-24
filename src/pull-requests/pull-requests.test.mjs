@@ -85,6 +85,38 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		);
 	});
 
+	test("lists pull requests assigned to the authenticated reviewer for a target branch", async (t) => {
+		const expected = [pullRequest({ reviewers: [{ id: "me", vote: 10 }] })];
+		const { service, calls } = createService(t, [
+			{ json: { authenticatedUser: { id: "reviewer/id" } } },
+			{ json: { value: expected } },
+		]);
+
+		assert.deepEqual(
+			await service.list({ reviewing: true, target: "release/2026" }),
+			expected,
+		);
+		assert.equal(
+			calls.at(-1).url,
+			`${repositoryUrl}/pullrequests?searchCriteria.reviewerId=reviewer%2Fid&` +
+				"searchCriteria.status=active&searchCriteria.targetRefName=refs%2Fheads%2Frelease%2F2026&api-version=7.1",
+		);
+	});
+
+	test("lists every active pull request without resolving the authenticated identity", async (t) => {
+		const expected = [pullRequest()];
+		const { service, calls } = createService(t, [
+			{ json: { value: expected } },
+		]);
+
+		assert.deepEqual(await service.list({ all: true }), expected);
+		assert.equal(calls.length, 1);
+		assert.equal(
+			calls[0].url,
+			`${repositoryUrl}/pullrequests?searchCriteria.status=active&api-version=7.1`,
+		);
+	});
+
 	test("an explicit pull request ID short-circuits without looking up the branch or fetching", async (t) => {
 		const { service, calls } = createService(t);
 
@@ -366,6 +398,27 @@ describe("pull request listing, resolution, creation, and updates", () => {
 			service.formatListItem(pullRequest({ targetRefName: undefined })),
 			"- PR #42: Test pull request\n" +
 				"  feature/test -> unknown\n" +
+				"  https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42",
+		);
+	});
+
+	test("formats every Azure reviewer vote in list items", (t) => {
+		const { service } = createService(t);
+		const reviewers = [
+			{ id: "reject", displayName: "Reject", vote: -10 },
+			{ id: "wait", displayName: "Wait", vote: -5 },
+			{ id: "none", displayName: "None", vote: 0 },
+			{ id: "suggest", displayName: "Suggest", vote: 5 },
+			{ id: "approve", displayName: "Approve", vote: 10 },
+			{ id: "unknown", displayName: "Unknown", vote: 3 },
+		];
+
+		assert.equal(
+			service.formatListItem(pullRequest({ reviewers })),
+			"- PR #42: Test pull request\n" +
+				"  feature/test -> unknown\n" +
+				"  Reviewers: Reject: rejected, Wait: waiting for author, None: no vote, " +
+				"Suggest: approved with suggestions, Approve: approved, Unknown: vote 3\n" +
 				"  https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42",
 		);
 	});

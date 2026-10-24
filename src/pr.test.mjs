@@ -414,6 +414,10 @@ test("pr list requests the current identity then prints active pull requests in 
 			isDraft: true,
 			sourceRefName: "refs/heads/feature/api-cleanup",
 			targetRefName: "refs/heads/main",
+			reviewers: [
+				{ id: "reviewer-1", displayName: "Ada Reviewer", vote: 10 },
+				{ id: "reviewer-2", displayName: "Lin Reviewer", vote: -5 },
+			],
 		},
 		{
 			pullRequestId: 12,
@@ -455,11 +459,71 @@ test("pr list requests the current identity then prints active pull requests in 
 		"Active pull requests created by you:\n\n" +
 			"- PR #91: Draft API cleanup [draft]\n" +
 			"  feature/api-cleanup -> main\n" +
+			"  Reviewers: Ada Reviewer: approved, Lin Reviewer: waiting for author\n" +
 			`  ${webBase}/91\n\n` +
 			"- PR #12: Release fix\n" +
 			"  fix/release -> release/2026\n" +
 			`  ${webBase}/12\n`,
 	);
+});
+
+test("pr list sends reviewer, all, and target search criteria", (t) => {
+	const cases = [
+		{
+			args: ["--reviewing"],
+			identity: true,
+			criteria:
+				"searchCriteria.reviewerId=me&searchCriteria.status=active&api-version=7.1",
+		},
+		{
+			args: ["--reviewing", "--target", "release/2026"],
+			identity: true,
+			criteria:
+				"searchCriteria.reviewerId=me&searchCriteria.status=active&searchCriteria.targetRefName=refs%2Fheads%2Frelease%2F2026&api-version=7.1",
+		},
+		{
+			args: ["--all"],
+			identity: false,
+			criteria: "searchCriteria.status=active&api-version=7.1",
+		},
+		{
+			args: ["--all", "--target", "main"],
+			identity: false,
+			criteria:
+				"searchCriteria.status=active&searchCriteria.targetRefName=refs%2Fheads%2Fmain&api-version=7.1",
+		},
+		{
+			args: ["--target", "main"],
+			identity: true,
+			criteria:
+				"searchCriteria.creatorId=me&searchCriteria.status=active&searchCriteria.targetRefName=refs%2Fheads%2Fmain&api-version=7.1",
+		},
+	];
+	for (const { args, identity, criteria } of cases) {
+		const cwd = createRepo(t);
+		const result = runPr(t, ["pr", "list", ...args, "--json"], {
+			cwd,
+			responses: [
+				...(identity ? [{ json: { authenticatedUser: { id: "me" } } }] : []),
+				{ json: { value: [] } },
+			],
+		});
+		assertSucceeded(result);
+		assert.equal(
+			result.calls.at(-1).url,
+			`${apiBase}/pullrequests?${criteria}`,
+		);
+	}
+});
+
+test("pr list rejects --reviewing with --all", (t) => {
+	const result = runPr(t, ["pr", "list", "--reviewing", "--all"], {
+		cwd: createRepo(t),
+		responses: [],
+	});
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /--reviewing and --all are mutually exclusive/);
+	assert.equal(result.calls.length, 0);
 });
 
 test("pr list --json prints the collection value as a pretty JSON array", (t) => {
