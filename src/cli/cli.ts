@@ -323,6 +323,9 @@ function validatePullRequestList(values: FlagValues): void {
 			'--reviewing and --all are mutually exclusive for "pr list"',
 		);
 	}
+	if (values.target === "") {
+		printUsageAndExit('--target requires a non-empty branch for "pr list"');
+	}
 }
 
 function parseCommandFlags<Id extends CommandId>(

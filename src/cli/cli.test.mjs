@@ -489,6 +489,10 @@ test("pr list parses all filters and rejects mutually exclusive modes", () => {
 		runCli("pr", "list", "--reviewing", "--all"),
 		'Error: --reviewing and --all are mutually exclusive for "pr list"',
 	);
+	assertUsageError(
+		runCli("pr", "list", "--target", ""),
+		'Error: --target requires a non-empty branch for "pr list"',
+	);
 });
 
 test("unknown flags and invalid boolean values are rejected", () => {
