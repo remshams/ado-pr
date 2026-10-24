@@ -465,15 +465,19 @@ test("build flags parse with registry-derived types and reject missing or foreig
 
 test("build queue accepts exactly one PR or branch target", () => {
 	const byPr = parseArgs(["build", "queue", "--pr", "42"]);
-	assert.deepEqual(
-		{ command: byPr.command, pr: byPr.pr, branch: byPr.branch },
-		{ command: "queue", pr: 42, branch: undefined },
-	);
+	assert.deepEqual(byPr, {
+		resource: "build",
+		command: "queue",
+		pr: 42,
+		branch: undefined,
+	});
 	const byBranch = parseArgs(["build", "queue", "--branch", "release/next"]);
-	assert.deepEqual(
-		{ command: byBranch.command, pr: byBranch.pr, branch: byBranch.branch },
-		{ command: "queue", pr: undefined, branch: "release/next" },
-	);
+	assert.deepEqual(byBranch, {
+		resource: "build",
+		command: "queue",
+		pr: undefined,
+		branch: "release/next",
+	});
 	assertUsageError(
 		runCli("build", "queue"),
 		'Error: exactly one of --pr or --branch is required for "build queue"',
