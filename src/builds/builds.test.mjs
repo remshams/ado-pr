@@ -2890,7 +2890,7 @@ describe("build queueing", () => {
 					body: null,
 				},
 				{
-					url: "https://dev.azure.com/test%20org/test%2Fproject/_apis/policy/configurations?api-version=7.1",
+					url: "https://dev.azure.com/test%20org/test%2Fproject/_apis/policy/configurations?api-version=7.1&policyType=0609b952-1397-4640-95ec-e00a01b2c241",
 					method: "GET",
 					body: null,
 				},
@@ -2977,6 +2977,72 @@ describe("build queueing", () => {
 		await assert.rejects(service.queueBranch("main"), {
 			message:
 				"More than one build definition was found for repository checkout-name. Choose one manually: definition 9: policy 1 (Main CI); definition 10: policy 2 (Release policy).",
+		});
+	});
+
+	test("follows policy continuation tokens to find a build policy on a later page", async (t) => {
+		const { service, calls } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{
+				json: { value: [] },
+				headers: { "x-ms-continuationtoken": "page-2" },
+			},
+			{
+				json: {
+					value: [
+						{
+							id: 7,
+							type: { id: buildPolicyType },
+							settings: {
+								buildDefinitionId: 9,
+								scope: [{ repositoryId: "repo-id" }],
+							},
+						},
+					],
+				},
+			},
+			{ json: build({ id: 707, sourceBranch: "refs/heads/main" }) },
+		]);
+
+		const result = await service.queueBranch("main");
+
+		assert.equal(result.id, 707);
+		assert.equal(
+			calls[2].url,
+			"https://dev.azure.com/test%20org/test%2Fproject/_apis/policy/configurations?api-version=7.1&policyType=0609b952-1397-4640-95ec-e00a01b2c241&continuationToken=page-2",
+		);
+		assert.match(calls[3].body, /"definition":\{"id":9\}/);
+	});
+
+	test("rejects a repeated policy continuation token", async (t) => {
+		const { service } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{ json: { value: [] }, headers: { "x-ms-continuationtoken": "same" } },
+			{ json: { value: [] }, headers: { "x-ms-continuationtoken": "same" } },
+		]);
+		await assert.rejects(service.queueBranch("main"), {
+			message:
+				"Azure DevOps policy pagination repeated a continuation token; refusing to loop.",
+		});
+	});
+
+	test("strips terminal controls from policy names in ambiguity errors", async (t) => {
+		const policies = [9, 10].map((definitionId) => ({
+			id: definitionId,
+			type: { id: buildPolicyType },
+			settings: {
+				buildDefinitionId: definitionId,
+				displayName: "\u001b[31mEvil\u001b[0m\nname",
+				scope: [{ repositoryId: "repo-id" }],
+			},
+		}));
+		const { service } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{ json: { value: policies } },
+		]);
+		await assert.rejects(service.queueBranch("main"), {
+			message:
+				"More than one build definition was found for repository checkout-name. Choose one manually: definition 9: policy 9 (Evil name); definition 10: policy 10 (Evil name).",
 		});
 	});
 
