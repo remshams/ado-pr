@@ -2808,11 +2808,54 @@ describe("build queueing", () => {
 			{ resolveValues: [pr] },
 		);
 
-		await assert.rejects(service.queuePr(42), {
-			message:
-				"Malformed Azure DevOps response: requeued policy evaluation context.buildId must be a positive safe integer.",
+		await assert.rejects(service.queuePr(42), (error) => {
+			assert.match(error.message, /failed after dispatch/);
+			assert.match(
+				error.message,
+				/requeued policy evaluation context\.buildId must be a positive safe integer/,
+			);
+			return true;
 		});
 		assert.equal(calls.length, 2);
+	});
+
+	test("gives uncertain-outcome guidance when the evaluation requeue fails after dispatch", async (t) => {
+		const pr = pullRequest({
+			repository: {
+				id: "Repo-ID",
+				name: "widgets",
+				project: { id: projectId },
+			},
+		});
+		const { service, calls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							{
+								evaluationId: "evaluation-id",
+								configuration: { type: { id: buildPolicyType } },
+							},
+						],
+					},
+				},
+				{ status: 503, statusText: "Service Unavailable", body: "try later" },
+			],
+			{ resolveValues: [pr] },
+		);
+
+		await assert.rejects(service.queuePr(42), (error) => {
+			assert.match(
+				error.message,
+				/Requeue request for build policy evaluation evaluation-id on PR #42 failed after dispatch/,
+			);
+			assert.match(error.message, /do not retry automatically/);
+			assert.match(error.message, /pr\.sh build show --latest --pr 42/);
+			assert.match(error.message, /503 Service Unavailable/);
+			return true;
+		});
+		assert.equal(calls.filter(({ method }) => method === "PATCH").length, 1);
 	});
 
 	test("lists several build policy evaluations and asks for a manual choice", async (t) => {
@@ -2936,6 +2979,38 @@ describe("build queueing", () => {
 				sourceBranch: "refs/heads/main",
 			}),
 		);
+	});
+
+	test("gives uncertain-outcome guidance when the branch queue request fails after dispatch", async (t) => {
+		const { service, calls } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{
+				json: {
+					value: [
+						{
+							id: 7,
+							type: { id: buildPolicyType },
+							settings: {
+								buildDefinitionId: 9,
+								scope: [{ repositoryId: "repo-id" }],
+							},
+						},
+					],
+				},
+			},
+			{ status: 503, statusText: "Service Unavailable", body: "try later" },
+		]);
+
+		await assert.rejects(service.queueBranch("main"), (error) => {
+			assert.match(
+				error.message,
+				/Queue request for build definition 9 on refs\/heads\/main failed after dispatch/,
+			);
+			assert.match(error.message, /do not retry automatically/);
+			assert.match(error.message, /503 Service Unavailable/);
+			return true;
+		});
+		assert.equal(calls.filter(({ method }) => method === "POST").length, 1);
 	});
 
 	test("reports a missing build policy for branch queueing", async (t) => {
