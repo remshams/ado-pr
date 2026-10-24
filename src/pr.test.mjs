@@ -310,6 +310,203 @@ test("build retry double-checks its target and prints Azure's returned build", (
 	);
 });
 
+test("build queue --branch queues the repository policy build and prints its ID and URL", (t) => {
+	const cwd = createRepo(t);
+	const returned = validationBuild({
+		id: 702,
+		sourceBranch: "refs/heads/release/next",
+		_links: { web: { href: "https://dev.azure.com/acme/build/702" } },
+	});
+	const result = runPr(t, ["build", "queue", "--branch", "release/next"], {
+		cwd,
+		responses: [
+			{ json: { id: "repo-id" } },
+			{
+				json: {
+					value: [
+						{
+							id: 3,
+							type: { id: "0609b952-1397-4640-95ec-e00a01b2c241" },
+							settings: {
+								buildDefinitionId: 9,
+								scope: [{ repositoryId: "repo-id" }],
+							},
+						},
+					],
+				},
+			},
+			{ json: returned },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(request), [
+		{
+			url: "https://dev.azure.com/acme/Test%20Project/_apis/git/repositories/widgets?api-version=7.1",
+			method: "GET",
+			body: null,
+		},
+		{
+			url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/configurations?api-version=7.1",
+			method: "GET",
+			body: null,
+		},
+		{
+			url: `${buildApiBase}?api-version=7.1`,
+			method: "POST",
+			body: JSON.stringify({
+				definition: { id: 9 },
+				sourceBranch: "refs/heads/release/next",
+			}),
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"Azure DevOps queued build 702/20260818.1.\nURL: https://dev.azure.com/acme/build/702\n",
+	);
+});
+
+test("build queue --pr reports when the requeued evaluation has no build ID", (t) => {
+	const cwd = createRepo(t);
+	const pr = validationPr({
+		repository: {
+			id: "repo-id",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
+		lastMergeSourceCommit: { commitId: "head-1" },
+	});
+	const result = runPr(t, ["build", "queue", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: pr },
+			{
+				json: {
+					value: [
+						{
+							evaluationId: "evaluation-id",
+							configuration: {
+								name: "Widget CI",
+								type: { id: "0609b952-1397-4640-95ec-e00a01b2c241" },
+							},
+						},
+					],
+				},
+			},
+			{ json: { evaluationId: "evaluation-id", status: "queued" } },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(
+		result.calls.map(({ url, method, body }) => ({ url, method, body })),
+		[
+			{
+				url: `${apiBase}/pullRequests/42?api-version=7.1`,
+				method: "GET",
+				body: null,
+			},
+			{
+				url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations?artifactId=vstfs%3A%2F%2F%2FCodeReview%2FCodeReviewId%2Fproject-id%2F42&api-version=7.1-preview.1",
+				method: "GET",
+				body: null,
+			},
+			{
+				url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations/evaluation-id?api-version=7.1-preview.1",
+				method: "PATCH",
+				body: JSON.stringify({ status: "queued" }),
+			},
+		],
+	);
+	assert.equal(
+		result.stdout,
+		"Requeued build policy evaluation evaluation-id for PR #42.\n" +
+			"Azure DevOps did not return the build ID yet. Check with `pr.sh build show --latest --pr 42`.\n",
+	);
+	assert.equal(result.status, 0);
+});
+
+test("build queue --pr fetches and prints the build ID from evaluation context", (t) => {
+	const cwd = createRepo(t);
+	const pr = validationPr({
+		repository: {
+			id: "repo-id",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
+		lastMergeSourceCommit: { commitId: "head-1" },
+	});
+	const queued = validationBuild({
+		id: 701,
+		_links: { web: { href: "https://dev.azure.com/acme/build/701" } },
+	});
+	const result = runPr(t, ["build", "queue", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: pr },
+			{
+				json: {
+					value: [
+						{
+							evaluationId: "evaluation-id",
+							configuration: {
+								type: { id: "0609b952-1397-4640-95ec-e00a01b2c241" },
+							},
+						},
+					],
+				},
+			},
+			{
+				json: {
+					evaluationId: "evaluation-id",
+					status: "queued",
+					context: { buildId: 701 },
+				},
+			},
+			{ json: queued },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(
+		result.calls
+			.slice(2)
+			.map(({ url, method, body }) => ({ url, method, body })),
+		[
+			{
+				url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations/evaluation-id?api-version=7.1-preview.1",
+				method: "PATCH",
+				body: JSON.stringify({ status: "queued" }),
+			},
+			{
+				url: `${buildApiBase}/701?api-version=7.1`,
+				method: "GET",
+				body: null,
+			},
+		],
+	);
+	assert.equal(
+		result.stdout,
+		"Azure DevOps queued build 701/20260818.1.\nURL: https://dev.azure.com/acme/build/701\n",
+	);
+});
+
+test("build queue requires exactly one queue target before any Azure request", (t) => {
+	const cwd = createRepo(t);
+	for (const args of [
+		["build", "queue"],
+		["build", "queue", "--pr", "42", "--branch", "main"],
+	]) {
+		const result = runPr(t, args, { cwd, responses: [] });
+		assert.equal(result.status, 1);
+		assert.match(
+			result.stderr,
+			/exactly one of --pr or --branch|--pr and --branch are mutually exclusive/,
+		);
+		assert.equal(result.calls.length, 0);
+	}
+});
+
 test("build wait polls exactly PR and build metadata for every terminal outcome", (t) => {
 	for (const [resultName, expectedStatus] of [
 		["succeeded", 0],
