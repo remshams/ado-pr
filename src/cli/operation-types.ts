@@ -9,6 +9,9 @@ type CliOptionsShape =
 	| {
 			resource: "pr";
 			command: "list";
+			reviewing: boolean;
+			all: boolean;
+			target?: string;
 			json: boolean;
 	  }
 	| (PullRequestTarget & {

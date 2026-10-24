@@ -26,6 +26,16 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Select the newest build validating the PR head by queue time.",
 	},
+	reviewing: {
+		kind: "boolean",
+		usage: "--reviewing",
+		description: "List active pull requests assigned to you for review.",
+	},
+	all: {
+		kind: "boolean",
+		usage: "--all",
+		description: "List all active pull requests in the repository.",
+	},
 	interval: {
 		kind: "positiveInteger",
 		usage: "--interval <seconds>",
@@ -83,7 +93,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "string",
 		usage: "--target <branch>",
 		description:
-			"Target branch for `pr create` (defaults to the repository default).",
+			"Target branch for `pr create`, or filter `pr list` by target branch.",
 	},
 	draft: {
 		kind: "boolean",
@@ -228,6 +238,7 @@ export const BATCH_FIELD_DEFINITIONS = {
 export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 
 export type CommandValidationRule =
+	| "pullRequestList"
 	| "pullRequestEdit"
 	| "commentLocation"
 	| "buildWaitBounds"
@@ -266,9 +277,11 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"pr.list": {
 		resource: "pr",
 		command: "list",
-		usage: "pr list [--json]",
-		summary: "List active pull requests created by the authenticated identity.",
-		flags: ["json"],
+		usage: "pr list [--reviewing | --all] [--target <branch>] [--json]",
+		summary:
+			"List active pull requests with optional review and target filters.",
+		flags: ["reviewing", "all", "target", "json"],
+		validationRules: ["pullRequestList"],
 	},
 	"pr.show": {
 		resource: "pr",
