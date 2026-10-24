@@ -34,6 +34,13 @@ export interface PullRequest {
 	lastMergeCommit?: PullRequestCommit;
 	lastMergeSourceCommit?: PullRequestCommit;
 	mergeStatus?: string;
+	reviewers?: PullRequestReviewer[];
+}
+
+export interface PullRequestListOptions {
+	reviewing?: boolean;
+	all?: boolean;
+	target?: string;
 }
 
 export interface CreatePullRequestOptions {
@@ -92,7 +99,7 @@ interface PreparedImage {
 const MAX_DESCRIPTION_LENGTH = 4_000;
 
 export interface PullRequestService {
-	list(): Promise<PullRequest[]>;
+	list(options?: PullRequestListOptions): Promise<PullRequest[]>;
 	create(options: CreatePullRequestOptions): Promise<PullRequest>;
 	edit(
 		requestedPrId: number | undefined,
@@ -362,9 +369,33 @@ export function createPullRequestService({
 	ctx: AzureDevOpsRepoContext;
 	getCurrentBranch?: (options?: { signal?: AbortSignal }) => Promise<string>;
 }): PullRequestService {
-	async function list(): Promise<PullRequest[]> {
-		const currentUserId = await getAuthenticatedUserId(azure, ctx.organization);
-		const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.creatorId=${encodeURIComponent(currentUserId)}&searchCriteria.status=active&api-version=${API_VERSION}`;
+	async function list(
+		options: PullRequestListOptions = {},
+	): Promise<PullRequest[]> {
+		const searchCriteria: [string, string][] = [];
+		if (!options.all) {
+			const currentUserId = await getAuthenticatedUserId(
+				azure,
+				ctx.organization,
+			);
+			searchCriteria.push([
+				options.reviewing
+					? "searchCriteria.reviewerId"
+					: "searchCriteria.creatorId",
+				currentUserId,
+			]);
+		}
+		searchCriteria.push(["searchCriteria.status", "active"]);
+		if (options.target)
+			searchCriteria.push([
+				"searchCriteria.targetRefName",
+				toFullRef(options.target),
+			]);
+		searchCriteria.push(["api-version", API_VERSION]);
+		const query = searchCriteria
+			.map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+			.join("&");
+		const url = `${reposBaseUrl(ctx)}/pullrequests?${query}`;
 		const data = await azure.request<{ value: PullRequest[] }>(url);
 		return data.value;
 	}
@@ -933,9 +964,23 @@ export function createPullRequestService({
 	}
 
 	function formatListItem(pr: PullRequest): string {
+		const voteLabels = new Map([
+			[-10, "rejected"],
+			[-5, "waiting for author"],
+			[0, "no vote"],
+			[5, "approved with suggestions"],
+			[10, "approved"],
+		]);
+		const reviewerVotes = (pr.reviewers ?? []).map(
+			(reviewer) =>
+				`${reviewerLabel(reviewer)}: ${voteLabels.get(reviewer.vote ?? 0) ?? `vote ${reviewer.vote}`}`,
+		);
 		return [
 			`- PR #${pr.pullRequestId}: ${pr.title}${pr.isDraft ? " [draft]" : ""}`,
 			`  ${formatRef(pr.sourceRefName)} -> ${formatRef(pr.targetRefName)}`,
+			...(reviewerVotes.length > 0
+				? [`  Reviewers: ${reviewerVotes.join(", ")}`]
+				: []),
 			`  ${pullRequestWebUrl(ctx, pr.pullRequestId)}`,
 		].join("\n");
 	}
