@@ -347,7 +347,7 @@ test("build queue --branch queues the repository policy build and prints its ID 
 			body: null,
 		},
 		{
-			url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/configurations?api-version=7.1",
+			url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/configurations?api-version=7.1&policyType=0609b952-1397-4640-95ec-e00a01b2c241",
 			method: "GET",
 			body: null,
 		},
