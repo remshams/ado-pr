@@ -746,6 +746,7 @@ function appendAssociatedBuilds(
 function nextBuildContinuationToken(
 	headers: Headers,
 	seenContinuationTokens: Set<string>,
+	resource = "build",
 ): string | undefined {
 	const nextToken = headers.get("x-ms-continuationtoken") ?? undefined;
 	if (nextToken === undefined || nextToken.length === 0) {
@@ -753,12 +754,12 @@ function nextBuildContinuationToken(
 	} else {
 		if (nextToken.length > MAX_CONTINUATION_TOKEN_LENGTH) {
 			throw new Error(
-				`Azure DevOps build pagination returned an oversized continuation token.`,
+				`Azure DevOps ${resource} pagination returned an oversized continuation token.`,
 			);
 		}
 		if (seenContinuationTokens.has(nextToken)) {
 			throw new Error(
-				`Azure DevOps build pagination repeated a continuation token; refusing to loop.`,
+				`Azure DevOps ${resource} pagination repeated a continuation token; refusing to loop.`,
 			);
 		}
 		seenContinuationTokens.add(nextToken);
@@ -1203,7 +1204,7 @@ function policyEvaluationLabel(evaluation: AzureObject): string {
 		? evaluation.configuration
 		: undefined;
 	const name = configuration?.name ?? evaluation.configurationName;
-	return `evaluation ${String(evaluation.evaluationId)}${typeof name === "string" ? ` (${name})` : ""}`;
+	return `evaluation ${display(evaluation.evaluationId)}${typeof name === "string" ? ` (${display(name)})` : ""}`;
 }
 
 function isBuildPolicyEvaluation(evaluation: AzureObject): boolean {
@@ -1224,7 +1225,7 @@ function policyConfigurationLabel(policy: AzureObject): string {
 	const id = typeof policy.id === "number" ? policy.id : "unknown";
 	const settings = isObject(policy.settings) ? policy.settings : undefined;
 	const name = settings?.displayName ?? policy.displayName;
-	return `policy ${id}${typeof name === "string" ? ` (${name})` : ""}`;
+	return `policy ${id}${typeof name === "string" ? ` (${display(name)})` : ""}`;
 }
 
 function isBuildPolicyForRepository(
@@ -1750,6 +1751,47 @@ export function createBuildService({
 		return { evaluationId: candidate.id };
 	}
 
+	async function listBuildPolicies(): Promise<AzureObject[]> {
+		const policies: AzureObject[] = [];
+		const seenContinuationTokens = new Set<string>();
+		let continuationToken: string | undefined;
+		let pageCount = 0;
+		do {
+			pageCount += 1;
+			if (pageCount > MAX_BUILD_PAGES) {
+				throw new Error(
+					`Azure DevOps policy pagination exceeded the safety limit of ${MAX_BUILD_PAGES} pages.`,
+				);
+			}
+			const query =
+				`&policyType=${BUILD_POLICY_TYPE_ID}` +
+				(continuationToken === undefined
+					? ""
+					: `&continuationToken=${encodeURIComponent(continuationToken)}`);
+			const response = await azure.requestWithMetadata<unknown>(
+				`${policyConfigurationsUrl(ctx)}${query}`,
+				{
+					timeoutMs: READ_TIMEOUT_MS,
+					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+				},
+			);
+			const page = requireArray(
+				requireObject(response.data, "policy configurations response").value,
+				"policy configurations response.value",
+			);
+			for (const value of page)
+				policies.push(
+					requireObject(value, `policy configuration ${policies.length + 1}`),
+				);
+			continuationToken = nextBuildContinuationToken(
+				response.metadata.headers,
+				seenContinuationTokens,
+				"policy",
+			);
+		} while (continuationToken !== undefined);
+		return policies;
+	}
+
 	async function queueBranch(branch: string): Promise<AzureBuild> {
 		const sourceBranch = branch.startsWith("refs/")
 			? branch
@@ -1765,21 +1807,9 @@ export function createBuildService({
 			"repository response",
 		);
 		const repositoryId = requireString(repository.id, "repository response.id");
-		const response = requireObject(
-			await azure.request<unknown>(policyConfigurationsUrl(ctx), {
-				timeoutMs: READ_TIMEOUT_MS,
-				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-			}),
-			"policy configurations response",
+		const repositoryPolicies = (await listBuildPolicies()).filter((policy) =>
+			isBuildPolicyForRepository(policy, repositoryId),
 		);
-		const repositoryPolicies = requireArray(
-			response.value,
-			"policy configurations response.value",
-		)
-			.map((value, index) =>
-				requireObject(value, `policy configuration ${index + 1}`),
-			)
-			.filter((policy) => isBuildPolicyForRepository(policy, repositoryId));
 		if (repositoryPolicies.length === 0) {
 			throw new Error(
 				`No build policy was found for repository ${ctx.repository}.`,
