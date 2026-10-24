@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ado-pr architecture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --paper: #f1f4f0;
+      --ink: #172a2a;
+      --muted: #536765;
+      --line: #b9c8c2;
+      --accent: #087e75;
+      --panel: #e4ebe6;
+      --code: #e0e8e3;
+      font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      line-height: 1.62;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #142221;
+        --ink: #e5eeea;
+        --muted: #a9bcb5;
+        --line: #3a514d;
+        --accent: #65d1c2;
+        --panel: #1d302e;
+        --code: #243835;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1040px; margin: 0 auto; padding: 56px 28px 80px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 30px; }
+    h1 { font-size: clamp(2.5rem, 7vw, 5.2rem); letter-spacing: -.055em; line-height: .98; margin: 0 0 18px; }
+    header p { color: var(--muted); font-size: 1.12rem; max-width: 660px; margin: 0; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 18px 0 32px; }
+    nav a, a { color: var(--accent); text-underline-offset: .2em; }
+    section { margin: 38px 0 0; }
+    h2 { font-size: 1.65rem; letter-spacing: -.025em; border-bottom: 1px solid var(--line); padding-bottom: 9px; }
+    h3 { font-size: 1.1rem; margin: 24px 0 8px; }
+    p, li { max-width: 78ch; }
+    .flow { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 24px 0; }
+    .node { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 9px 12px; font-size: .94rem; }
+    .arrow { color: var(--accent); font-weight: 700; }
+    .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 24px 0; }
+    .module { background: var(--paper); padding: 16px; }
+    .module code { color: var(--accent); font-weight: 700; }
+    code, pre { font-family: "SFMono-Regular", Consolas, monospace; font-size: .92em; }
+    code { background: var(--code); padding: .1em .3em; border-radius: 2px; }
+    pre { overflow-x: auto; background: var(--code); padding: 16px; border-left: 3px solid var(--accent); }
+    ul { padding-left: 1.25rem; }
+    footer { border-top: 1px solid var(--line); margin-top: 48px; padding-top: 16px; color: var(--muted); font-size: .9rem; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    @media (max-width: 600px) { main { padding: 34px 18px 56px; } nav { gap: 10px 14px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ado-pr<br>architecture</h1>
+    <p>A small TypeScript CLI for developers' coding agents working in Azure Repos checkouts. It manages pull requests, review comments and PR validation builds. Node 22.6 or newer runs the source directly with native type stripping and no build step, as recorded in <a href="adr/0005-run-typescript-directly.md">ADR 0005</a>.</p>
+  </header>
+  <nav aria-label="Architecture sections">
+    <a href="#runtime">Runtime flow</a><a href="#modules">Modules</a><a href="#requests">Azure requests and output</a><a href="#quality">Tests and quality gates</a><a href="#decisions">Decision records</a>
+  </nav>
+
+  <section id="runtime">
+    <h2>Runtime flow</h2>
+    <p>Install <code>pr.sh</code> on PATH and run it from the target checkout. The launcher resolves its real path with <code>readlink -f</code> to locate source and dependencies without changing the caller's working directory. It prefers an exported <code>AZURE_DEVOPS_PAT</code>, then loads <code>.env</code> beside the real script. Literal values use Node's dotenv loader; <code>op://</code> references use <code>op run</code>. A 1Password Environment named pipe supplies literal dotenv values and is read once. The TypeScript entrypoint requires a resolved PAT.</p>
+    <div class="flow"><span class="node">pr.sh</span><span class="arrow">→</span><span class="node">PAT or launcher .env</span><span class="arrow">→</span><span class="node">Node type stripping: src/pr.ts</span><span class="arrow">→</span><span class="node">CLI parse and validation</span><span class="arrow">→</span><span class="node">Git repository context</span><span class="arrow">→</span><span class="node">Feature services</span><span class="arrow">→</span><span class="node">Azure requester</span><span class="arrow">→</span><span class="node">Azure DevOps REST API</span></div>
+    <p><code>src/pr.ts</code> parses arguments before reading credentials or Git context, so direct Node invocation can show help without authentication. It creates one requester, injects it and the repository context into the services, dispatches the command and selects output and exit status. PR resolution uses an explicit ID or the current branch where the command allows it.</p>
+  </section>
+
+  <section id="modules">
+    <h2>Modules and dependencies</h2>
+    <div class="modules">
+      <div class="module"><code>src/shared/</code><br>Azure HTTP access, URL helpers, Git repository context, command contracts and shared types.</div>
+      <div class="module"><code>src/pull-requests/</code><br>Finding, listing, creating and editing pull requests, including generic attachment uploads, description images and reviewers.</div>
+      <div class="module"><code>src/comments/</code><br>Review threads and comments, file and line anchors, and batch operations read from stdin.</div>
+      <div class="module"><code>src/builds/</code><br>PR validation builds: listing, diagnostics and logs, retries and waiting for completion.</div>
+      <div class="module"><code>src/cli/</code><br>Argument parsing, validation, help and PAT lookup.</div>
+      <div class="module"><code>src/pr.ts</code><br>Wires modules together, dispatches commands and writes output.</div>
+    </div>
+    <p>Arrows show permitted imports between modules, including type-only imports. They describe dependency permissions, not every current import.</p>
+    <div class="flow"><span class="node">src/pr.ts</span><span class="arrow">→</span><span class="node">CLI</span><span class="arrow">→</span><span class="node">Feature modules</span><span class="arrow">→</span><span class="node">Shared</span></div>
+    <p>The entrypoint wires CLI and feature modules. Features depend on shared code; builds may also depend on pull requests. Only the CLI and entrypoint may wire features together. Shared code cannot depend on a feature, and features cannot depend on the CLI. <code>.fallowrc.json</code> declares these folders as boundary zones with explicit allowed dependencies. <code>pnpm fallow:architecture</code> rejects violations. See <a href="adr/0002-organise-code-by-feature.md">ADR 0002</a>.</p>
+  </section>
+
+  <section id="requests">
+    <h2>Azure requests and output</h2>
+    <p>The requester centralises PAT Basic authentication, JSON or raw request bodies, JSON/text/no-content responses and optional status/header metadata. Callers can set timeouts, cancellation signals and successful response byte limits. Timeouts and cancellation cover body reads as well as the initial fetch. Error excerpts have a fixed size limit. There is no general default request timeout or practical success-body limit; feature callers select them where needed.</p>
+    <p>Request errors are classified as HTTP, network, timeout, caller-abort or response failures, with status and Retry-After metadata when available. Error messages redact credentials and sensitive values, strip terminal controls and bound details. This sanitisation applies to diagnostics, not all successful API data. Build waiting decides which transient read failures to retry; the requester does not automatically retry mutations.</p>
+    <p>Results and mutation confirmations go to stdout. Commands that accept <code>--json</code> emit their result there as JSON instead of human formatting. Help, usage errors, failures and build wait progress go to stderr. Batch operations report successes on stdout and failures on stderr, continue after operation failures, and exit 1 if any failed. <code>build show</code> also exits 1 if diagnostics include log read errors or <code>--latest</code> falls back to a stale associated build. Show and wait require an explicit build ID or <code>--latest</code>, which selects the newest build validating the PR head. Both accept PR merge builds and source-branch builds under <a href="adr/0006-match-builds-to-the-pr-head.md">ADR 0006</a>. Build listing still includes only PR merge builds.</p>
+    <p><code>build wait</code> exits 0 only for <code>succeeded</code>, 1 for other terminal outcomes or errors, and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively, without a final result or cancellation of the remote build. A repeated signal forces exit.</p>
+  </section>
+
+  <section id="quality">
+    <h2>Tests and quality gates</h2>
+    <p>Tests use <code>node:test</code> in adjacent <code>.test.mjs</code> files. <code>tests/test-helpers.mjs</code> provides isolated Git repositories, environment/global-state helpers and bounded subprocess runners. The FIFO fetch implementation in <code>tests/support/fetch-harness.mjs</code> backs in-process mocks and <code>tests/fixtures/fetch-preload.mjs</code>. The preload replaces fetch in CLI subprocesses, records requests with redacted authorisation, and rejects unused or unexpected responses. CLI subprocess tests check streams, exit codes and signals; launcher tests use temporary dotenv files, pipes and a fake <code>op</code> executable.</p>
+    <p><code>pnpm check</code> runs TypeScript checking, Biome lint/format checks, tests and Fallow. Fallow collects fresh V8 coverage, including CLI subprocess coverage, then checks dead code, duplicates, architecture boundaries and a CRAP limit of 12.</p>
+    <p>GitHub Actions checks Node 22 and 24 and runs lint and Fallow. PR mutation checks use Fallow's native node:test runner against the PR base, with the minimum score set in the <code>mutation</code> script. <code>pnpm mutation</code> defaults to <code>origin/main</code>, overridable with <code>MUTATION_BASE</code>. Full runs use <code>pnpm mutation:all</code>, report the score and run in CI only through <code>workflow_dispatch</code>. See <a href="adr/0004-quality-gates.md">ADR 0004</a>.</p>
+  </section>
+
+  <footer id="decisions">The <a href="adr/README.md">ADR index</a> records the decisions behind these rules. Keep changes proportionate to this tool's users and realistic failures, as described in <a href="adr/0003-keep-the-tool-small.md">ADR 0003</a>.</footer>
+</main>
+</body>
+</html>
