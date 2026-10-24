@@ -1718,7 +1718,17 @@ export function createBuildService({
 		}
 
 		const candidate = candidates[0];
-		const evaluationUrl = `${orgProjectUrl(ctx)}/_apis/policy/evaluations/${candidate.id}?api-version=7.1-preview.1`;
+		try {
+			return await requeueEvaluation(candidate.id);
+		} catch (error) {
+			throw new Error(
+				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Inspect it with \`pr.sh build show --latest --pr ${pr.id}\` or \`pr.sh build list --pr ${pr.id} --history\` before trying again.\n${sanitizeError(error)}`,
+			);
+		}
+	}
+
+	async function requeueEvaluation(evaluationId: string): Promise<QueuedBuild> {
+		const evaluationUrl = `${orgProjectUrl(ctx)}/_apis/policy/evaluations/${evaluationId}?api-version=7.1-preview.1`;
 		const response = requireObject(
 			await azure.request<unknown>(evaluationUrl, {
 				method: "PATCH",
@@ -1729,26 +1739,24 @@ export function createBuildService({
 			"requeued policy evaluation response",
 		);
 		const context = isObject(response.context) ? response.context : undefined;
-		if (context?.buildId !== undefined) {
-			const buildId = requirePositiveInteger(
-				context.buildId,
-				"requeued policy evaluation context.buildId",
-			);
-			return {
-				build: assertFetchedBuild(
-					await azure.request<unknown>(
-						`${buildApiUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
-						{
-							timeoutMs: READ_TIMEOUT_MS,
-							maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-						},
-					),
-					buildId,
-					"requeued build response",
+		if (context?.buildId === undefined) return { evaluationId };
+		const buildId = requirePositiveInteger(
+			context.buildId,
+			"requeued policy evaluation context.buildId",
+		);
+		return {
+			build: assertFetchedBuild(
+				await azure.request<unknown>(
+					`${buildApiUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
+					{
+						timeoutMs: READ_TIMEOUT_MS,
+						maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+					},
 				),
-			};
-		}
-		return { evaluationId: candidate.id };
+				buildId,
+				"requeued build response",
+			),
+		};
 	}
 
 	async function listBuildPolicies(): Promise<AzureObject[]> {
@@ -1838,19 +1846,24 @@ export function createBuildService({
 			);
 		}
 		const definitionId = definitions.keys().next().value as number;
-		const build = validateBuild(
-			await azure.request<unknown>(
-				`${buildApiUrl(ctx)}?api-version=${API_VERSION}`,
-				{
-					method: "POST",
-					body: { definition: { id: definitionId }, sourceBranch },
-					timeoutMs: RETRY_TIMEOUT_MS,
-					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-				},
-			),
-			"queued branch build",
-		);
-		return build;
+		try {
+			return validateBuild(
+				await azure.request<unknown>(
+					`${buildApiUrl(ctx)}?api-version=${API_VERSION}`,
+					{
+						method: "POST",
+						body: { definition: { id: definitionId }, sourceBranch },
+						timeoutMs: RETRY_TIMEOUT_MS,
+						maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+					},
+				),
+				"queued branch build",
+			);
+		} catch (error) {
+			throw new Error(
+				`Queue request for build definition ${definitionId} on ${sourceBranch} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Check that definition's runs for ${sourceBranch} in Azure DevOps before trying again.\n${sanitizeError(error)}`,
+			);
+		}
 	}
 
 	async function wait(
