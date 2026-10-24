@@ -136,6 +136,7 @@ test("bare --help and -h document every resource-first command and the batch con
 		"pr show",
 		"pr create",
 		"pr edit",
+		"pr attach",
 		"comment list",
 		"build list",
 		"build show",
@@ -155,6 +156,7 @@ test("bare --help and -h document every resource-first command and the batch con
 	}
 	assert.match(result.stderr, /--draft \| --no-draft/);
 	assert.match(result.stderr, /--image <path>/);
+	assert.match(result.stderr, /--name <file name>/);
 	assert.match(result.stderr, /--remove-image <filename>/);
 	assert.match(result.stderr, /--reviewer <email-or-display-name>/);
 	assert.match(result.stderr, /Identity \(Read\)/);
@@ -206,6 +208,7 @@ test("qualified command help succeeds after route and supplied-option validation
 		["pr", "show"],
 		["pr", "create"],
 		["pr", "edit"],
+		["pr", "attach"],
 		["comment", "list"],
 		["build", "list"],
 		["build", "show"],
@@ -1272,4 +1275,41 @@ test("latest selection parses for show/wait and keeps help validation consistent
 		runCli("build", "retry", "--build=7", "--latest"),
 		'Error: --latest is not valid for "build retry"',
 	);
+});
+
+test("pr attach parses its path and optional attachment name", () => {
+	assert.deepEqual(
+		parseOptions([
+			"pr",
+			"attach",
+			"change.patch",
+			"--pr",
+			"42",
+			"--name",
+			"change.txt",
+		]),
+		{
+			resource: "pr",
+			command: "attach",
+			path: "change.patch",
+			pr: 42,
+			name: "change.txt",
+		},
+	);
+	assert.deepEqual(parseOptions(["pr", "attach", "change.patch"]), {
+		resource: "pr",
+		command: "attach",
+		path: "change.patch",
+		pr: undefined,
+		name: undefined,
+	});
+	assertUsageError(
+		runCli("pr", "attach"),
+		'Error: a file path is required for "pr attach"',
+	);
+	assertUsageError(
+		runCli("pr", "attach", "one.patch", "two.patch"),
+		'Error: unexpected positional argument "two.patch"',
+	);
+	assertSuccessfulHelp(runCli("pr", "attach", "--help"));
 });
