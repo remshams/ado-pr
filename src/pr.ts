@@ -25,7 +25,10 @@ import {
 	buildWaitExitCode,
 	toCommentLocation,
 } from "./shared/operation-types.ts";
-import { createPullRequestService } from "./pull-requests/pull-requests.ts";
+import {
+	attachmentMarkdownLink,
+	createPullRequestService,
+} from "./pull-requests/pull-requests.ts";
 import { createThreadService } from "./comments/threads.ts";
 
 function assertNever(value: never): never {
@@ -164,7 +167,7 @@ async function runPullRequestCommand(
 				options.name,
 			);
 			console.log(`Attachment URL: ${attachment.url}`);
-			console.log(`Markdown: [${attachment.displayName}](<${attachment.url}>)`);
+			console.log(`Markdown: ${attachmentMarkdownLink(attachment)}`);
 			return;
 		}
 	}
