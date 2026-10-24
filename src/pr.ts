@@ -4,7 +4,7 @@
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var. Code (Read) is enough for PR/comment reads; Code
  * (Read & Write) is needed for PR/comment mutations. Build queries need Build (Read), also named
- * vso.build; build retries additionally need Build execute (vso.build_execute). Build commands cover
+ * vso.build; build retries and queueing additionally need Build (Read & execute, vso.build_execute). Build commands cover
  * YAML/classic Build API validations only, never Releases, external checks, or individual retries.
  * Reviewer additions additionally need Identity (Read), while reviewer removal resolves the PR's
  * current reviewers using Code access only.
@@ -89,11 +89,51 @@ async function runBuildWait(
 	}
 }
 
+async function runBuildQueue(
+	options: Extract<CliOptions, { resource: "build"; command: "queue" }>,
+	builds: ReturnType<typeof createBuildService>,
+): Promise<void> {
+	if (options.branch !== undefined) {
+		const result = await builds.queueBranch(options.branch);
+		console.log(builds.formatQueue(result));
+		return;
+	}
+	if (options.pr === undefined)
+		throw new Error("Exactly one of --pr or --branch is required.");
+	const result = await builds.queuePr(options.pr);
+	if ("build" in result) {
+		console.log(builds.formatQueue(result.build));
+		return;
+	}
+	console.log(
+		`Requeued build policy evaluation ${result.evaluationId} for PR #${options.pr}.\n` +
+			`Azure DevOps did not return the build ID yet. Check with \`pr.sh build show --latest --pr ${options.pr}\`.`,
+	);
+}
+
+async function runBuildShow(
+	options: Extract<CliOptions, { resource: "build"; command: "show" }>,
+	builds: ReturnType<typeof createBuildService>,
+): Promise<void> {
+	const result = await builds.show(options.pr, options.build ?? "latest", {
+		fullLogs: options.fullLogs,
+	});
+	console.log(
+		options.json ? JSON.stringify(result, null, 2) : builds.formatShow(result),
+	);
+	if (builds.hasLogErrors(result) || (options.latest && !result.current))
+		process.exitCode = 1;
+}
+
 async function runBuildCommand(
 	options: Extract<CliOptions, { resource: "build" }>,
 	builds: ReturnType<typeof createBuildService>,
 ): Promise<void> {
 	switch (options.command) {
+		case "wait":
+			return runBuildWait(options, builds);
+		case "queue":
+			return runBuildQueue(options, builds);
 		case "list": {
 			const result = await builds.list(options.pr, {
 				history: options.history,
@@ -105,26 +145,12 @@ async function runBuildCommand(
 			);
 			return;
 		}
-		case "show": {
-			const result = await builds.show(options.pr, options.build ?? "latest", {
-				fullLogs: options.fullLogs,
-			});
-			console.log(
-				options.json
-					? JSON.stringify(result, null, 2)
-					: builds.formatShow(result),
-			);
-			if (builds.hasLogErrors(result) || (options.latest && !result.current))
-				process.exitCode = 1;
+		case "show":
+			await runBuildShow(options, builds);
 			return;
-		}
 		case "retry": {
 			const result = await builds.retry(options.pr, options.build);
 			console.log(builds.formatRetry(result));
-			return;
-		}
-		case "wait": {
-			await runBuildWait(options, builds);
 			return;
 		}
 	}
