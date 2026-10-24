@@ -157,6 +157,16 @@ async function runPullRequestCommand(
 			console.log(pullRequestWebUrl(ctx, prId));
 			return;
 		}
+		case "attach": {
+			const attachment = await pullRequests.attach(
+				options.pr,
+				options.path,
+				options.name,
+			);
+			console.log(`Attachment URL: ${attachment.url}`);
+			console.log(`Markdown: [${attachment.displayName}](<${attachment.url}>)`);
+			return;
+		}
 	}
 	return assertNever(options);
 }

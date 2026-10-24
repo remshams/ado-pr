@@ -13,6 +13,54 @@ const webBase =
 const buildApiBase =
 	"https://dev.azure.com/acme/Test%20Project/_apis/build/builds";
 
+test("pr attach uploads a file and prints its URL and Markdown link", (t) => {
+	const cwd = createRepo(t);
+	const path = join(cwd, "change.patch");
+	writeFileSync(path, "patch bytes");
+	const result = runPr(
+		t,
+		["pr", "attach", path, "--pr", "42", "--name", "change.txt"],
+		{
+			cwd,
+			responses: [
+				{
+					json: {
+						displayName: "change.txt",
+						url: "https://files.test/change.txt",
+					},
+				},
+			],
+		},
+	);
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"Attachment URL: https://files.test/change.txt\nMarkdown: [change.txt](<https://files.test/change.txt>)\n",
+	);
+	assert.equal(result.calls[0].method, "POST");
+});
+
+test("pr attach reports Azure's rejection body and suggests --name", (t) => {
+	const cwd = createRepo(t);
+	const path = join(cwd, "change.patch");
+	writeFileSync(path, "patch bytes");
+	const result = runPr(t, ["pr", "attach", path, "--pr", "42"], {
+		cwd,
+		responses: [
+			{
+				status: 400,
+				statusText: "Bad Request",
+				body: '{"message":"Unsupported file type"}',
+			},
+		],
+	});
+	assert.equal(result.status, 1);
+	assert.match(
+		result.stderr,
+		/400 Bad Request[\s\S]*Unsupported file type[\s\S]*--name "attachment.txt"/,
+	);
+});
+
 function createRepo(t, branch = "feature/dispatch") {
 	return createTempGitRepo(t, { origin, branch });
 }
