@@ -26,6 +26,26 @@ self-contained so it works offline, with portable source links and no
 machine-specific paths. If `docs/architecture.html` does not exist yet, create it in
 the next change that updates the architecture document.
 
+## Domain language
+
+Describe architecture in Domain-Driven Design terms. This applies to architecture
+documents, ADRs, issues, PR descriptions and explanations of the code.
+
+- Use the project's ubiquitous language: the words the domain uses, such as
+  `pull request`, `review thread`, `comment` and `build pipeline`. Use the same
+  word in code, docs and conversation, and don't switch between synonyms for one
+  concept.
+- Name the parts of the model by their DDD role. An entity keeps its identity as its
+  data changes. A value object is defined by its values and is immutable. An
+  aggregate is a cluster of objects that changes only through its root.
+- Call stateless domain logic that belongs to no single type a domain service, and
+  code that runs one use case an application service.
+- Call a part of the model with its own language a bounded context. Code that maps
+  the Azure DevOps REST API to that model is an anti-corruption layer; keep Azure
+  DevOps types and names out of the rest of the code.
+- Use these terms to describe the code that exists. Don't add layers, interfaces or
+  folders just to match a DDD pattern; keeping the project small still wins.
+
 ## Development
 
 Keep the project small and simple. Split by feature where it doesn't complicate
