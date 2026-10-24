@@ -45,8 +45,8 @@ current branch where the command allows it.
   including generic attachment uploads, description images and reviewers.
 - `src/comments/`: review threads and comments, file and line anchors, and batch
   operations read from stdin.
-- `src/builds/`: PR validation builds: listing, diagnostics and logs, retries and
-  waiting for completion.
+- `src/builds/`: PR validation builds: listing, queueing, diagnostics and logs,
+  retries and waiting for completion.
 - `src/cli/`: argument parsing, validation, help and PAT lookup.
 - `src/pr.ts`: wires the modules together, dispatches commands and writes output.
 
