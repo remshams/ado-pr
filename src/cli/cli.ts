@@ -344,6 +344,55 @@ function validatePullRequestList(values: FlagValues): void {
 	}
 }
 
+function validateBuildQueueTarget(
+	values: Partial<Record<FlagName, unknown>>,
+	enforceRequired: boolean,
+	route: string,
+): void {
+	const hasPr = values.pr !== undefined;
+	const hasBranch = values.branch !== undefined;
+	if (hasPr && hasBranch) {
+		printUsageAndExit(
+			`--pr and --branch are mutually exclusive for "${route}"`,
+		);
+	}
+	if (!hasPr && !hasBranch && enforceRequired) {
+		printUsageAndExit(
+			`exactly one of --pr or --branch is required for "${route}"`,
+		);
+	}
+	if (
+		hasBranch &&
+		typeof values.branch === "string" &&
+		values.branch.trim() === ""
+	) {
+		printUsageAndExit("--branch must not be empty");
+	}
+}
+
+interface ValidationContext {
+	values: FlagValues;
+	flags: readonly FlagName[];
+	occurrences: FlagOccurrences;
+	enforceRequired: boolean;
+	route: string;
+}
+
+const VALIDATION_RULES: Record<
+	CommandValidationRule,
+	(context: ValidationContext) => void
+> = {
+	pullRequestEdit: ({ values, flags, occurrences, enforceRequired, route }) =>
+		validatePullRequestEdit(values, flags, occurrences, enforceRequired, route),
+	pullRequestList: ({ values }) => validatePullRequestList(values),
+	buildSelection: ({ values, enforceRequired, route }) =>
+		validateBuildSelection(values, enforceRequired, route),
+	buildQueueTarget: ({ values, enforceRequired, route }) =>
+		validateBuildQueueTarget(values, enforceRequired, route),
+	buildWaitBounds: ({ values }) => validateBuildWaitBounds(values),
+	commentLocation: ({ values }) => validateCommentLocation(values),
+};
+
 function parseCommandFlags<Id extends CommandId>(
 	commandId: Id,
 	route: string,
@@ -383,25 +432,16 @@ function parseCommandFlags<Id extends CommandId>(
 	if (!enforceRequired)
 		validateSuppliedRequiredFlags(values, requiredFlags, occurrences, route);
 
-	const validationRules: readonly CommandValidationRule[] | undefined =
-		"validationRules" in definition ? definition.validationRules : undefined;
-	if (validationRules?.includes("pullRequestEdit"))
-		validatePullRequestEdit(
+	const validationRules: readonly CommandValidationRule[] =
+		"validationRules" in definition ? definition.validationRules : [];
+	for (const rule of validationRules)
+		VALIDATION_RULES[rule]({
 			values,
-			definition.flags,
+			flags: definition.flags,
 			occurrences,
 			enforceRequired,
 			route,
-		);
-	if (validationRules?.includes("pullRequestList"))
-		validatePullRequestList(values);
-	if (validationRules?.includes("buildSelection"))
-		validateBuildSelection(values, enforceRequired, route);
-
-	if (validationRules?.includes("buildWaitBounds"))
-		validateBuildWaitBounds(values);
-	if (validationRules?.includes("commentLocation"))
-		validateCommentLocation(values);
+		});
 
 	if (enforceRequired) {
 		return values as ParsedCommandFlags<Id>;
@@ -487,6 +527,12 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "retry",
 		build: values.build,
 		pr: values.pr,
+	}),
+	"build.queue": (values) => ({
+		resource: "build",
+		command: "queue",
+		pr: values.pr,
+		branch: values.branch,
 	}),
 	"build.wait": (values) => ({
 		resource: "build",

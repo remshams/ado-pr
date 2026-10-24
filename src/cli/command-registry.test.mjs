@@ -1,17 +1,16 @@
-import { formatHelp } from "./command-registry.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import {
 	BATCH_COMMANDS,
 	BATCH_FIELD_DEFINITIONS,
 	COMMAND_IDS,
 	COMMAND_REGISTRY,
 	FLAG_DEFINITIONS,
-	REPEATABLE_STRING_FLAG_NAMES,
 	getBatchFields,
 	getCommandDefinition,
+	REPEATABLE_STRING_FLAG_NAMES,
 } from "../shared/command-contracts.ts";
+import { formatHelp } from "./command-registry.ts";
 
 test("registry keys, routes, and command-local schemas stay coherent", () => {
 	for (const id of COMMAND_IDS) {
@@ -165,6 +164,7 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"       pr.sh build list [--pr <id>] [--history] [--json]",
 			"       pr.sh build show (--build <id> | --latest) [--pr <id>] [--full-logs] [--json]",
 			"       pr.sh build retry --build <id> [--pr <id>]",
+			"       pr.sh build queue (--pr <id> | --branch <name>)",
 			"       pr.sh build wait (--build <id> | --latest) [--pr <id>] [--interval <seconds>] [--timeout <seconds>] [--json]",
 			"       pr.sh comment list [--pr <id>] [--json] [--exclude-own] [--exclude-resolved]",
 			'       pr.sh comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]',
@@ -184,6 +184,7 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"  build list               List PR-associated Azure Pipelines validation builds.",
 			"  build show               Inspect a PR validation build, timeline, issues, and diagnostic logs.",
 			"  build retry              Retry an eligible failed PR validation build at the whole-build level.",
+			"  build queue              Queue a validation build for a pull request or branch.",
 			"  build wait               Wait for a PR validation build to reach a terminal outcome without mutating it.",
 			"  comment list             List comment threads, optionally filtering or printing JSON.",
 			"  comment create           Create a general or file-anchored comment thread.",
@@ -209,6 +210,7 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"Options:",
 			"  --pr <id>                                  Use a specific pull request instead of the current branch's active PR.",
 			"  --build <id>                               Build ID. Required for `build retry`; choose --build or --latest for show/wait.",
+			"  --branch <name>                            Queue a validation build for this source branch.",
 			"  --latest                                   Select the newest build validating the PR head by queue time.",
 			"  --reviewing                                List active pull requests assigned to you for review.",
 			"  --all                                      List all active pull requests in the repository.",
@@ -262,12 +264,18 @@ test("help preserves the documented commands, options, and output layout", () =>
 			"  Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;",
 			"  use `build show` afterward for diagnostics.",
 			"",
+			"Build queue:",
+			"  `build queue` requires exactly one of --pr <id> or --branch <name>. PR builds requeue the PR's",
+			"  build policy evaluation; branch builds use the repository's build policy definition. Both print",
+			"  the queued build ID and URL. Multiple matching policies are reported for manual resolution.",
+			"",
 			"Requires:",
 			"  - A git checkout whose origin remote points at Azure Repos.",
 			"  - AZURE_DEVOPS_PAT exported by the caller or set in .env.",
 			"  - PAT Code (Read & Write) for PR/comment mutations; Code (Read) is sufficient for build commands.",
-			"  - Build read, also named vso.build, for build queries; Build execute, also named vso.build_execute,",
-			"    additionally for build retries.",
+			"  - Build (Read), also named vso.build, for build queries; Build (Read & execute), also named",
+			"    vso.build_execute, for build retries and queueing. The policy evaluation requeue scope has not",
+			"    been verified with a real PAT.",
 			"  - Build commands support YAML and classic Build API validation runs, not Releases, external status",
 			"    checks, or individual stage/job/task retries.",
 			"  - Identity (Read), also named vso.identity, only for --reviewer additions on pr create/edit.",
