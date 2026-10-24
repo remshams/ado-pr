@@ -6,6 +6,7 @@ import { describe, test } from "node:test";
 import { createMockFetch } from "../../tests/test-helpers.mjs";
 import { createAzureRequester } from "../shared/azure.ts";
 import {
+	attachmentMarkdownLink,
 	createPullRequestService,
 	removeAttachmentMarkdown,
 	validateImagePlaceholders,
@@ -68,6 +69,24 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		assert.equal(calls[0].method, "POST");
 		assert.match(calls[0].url, /pullRequests\/42\/attachments\/review.txt/);
 		assert.deepEqual(calls[0].body, { encoding: "base64", data: "QUI=" });
+	});
+	test("rejects an empty attachment name before any request", async (t) => {
+		const path = createTempImage(t, "change.patch");
+		const { service, calls } = createService(t);
+		await assert.rejects(
+			service.attach(42, path, ""),
+			/--name must not be empty\./,
+		);
+		assert.equal(calls.length, 0);
+	});
+	test("escapes brackets and backslashes in attachment Markdown links", () => {
+		assert.equal(
+			attachmentMarkdownLink({
+				displayName: "a\\b]c[.patch",
+				url: "https://files.test/x",
+			}),
+			"[a\\\\b\\]c\\[.patch](<https://files.test/x>)",
+		);
 	});
 	test("adds a rename suggestion to Azure upload rejection details", async (t) => {
 		const path = createTempImage(t, "change.patch");
