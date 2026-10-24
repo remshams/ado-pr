@@ -1,24 +1,23 @@
-import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
-import { formatHelp } from "./command-registry.ts";
 import minimist from "minimist";
-
+import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
 import {
 	BOOLEAN_FLAG_NAMES,
 	COMMAND_REGISTRY,
-	FLAG_DEFINITIONS,
-	REPEATABLE_STRING_FLAG_NAMES,
-	STRING_FLAG_NAMES,
-	getCommandId,
-	isResourceName,
 	type CommandId,
 	type CommandValidationRule,
+	FLAG_DEFINITIONS,
 	type FlagName,
+	getCommandId,
+	isResourceName,
 	type ParsedCommandFlags,
 	type PositiveIntegerFlagName,
+	REPEATABLE_STRING_FLAG_NAMES,
 	type RepeatableStringFlagName,
+	STRING_FLAG_NAMES,
 	type TextFlagName,
 } from "../shared/command-contracts.ts";
 import { isPositiveInteger } from "../shared/operation-types.ts";
+import { formatHelp } from "./command-registry.ts";
 import type { CliOptions } from "./operation-types.ts";
 
 const KNOWN_FLAGS = new Set<string>(Object.keys(FLAG_DEFINITIONS));
@@ -43,6 +42,23 @@ function printUsageAndExit(message?: string): never {
 	}
 	console.error(formatHelp());
 	process.exit(message ? 1 : 0);
+}
+
+function getAttachPath(
+	positional: string[],
+	isAttachCommand: boolean,
+	hasHelp: boolean,
+): string | undefined {
+	const maxPositionalArguments = isAttachCommand ? 3 : 2;
+	if (positional.length > maxPositionalArguments) {
+		printUsageAndExit(
+			`unexpected positional argument "${positional[maxPositionalArguments]}"`,
+		);
+	}
+	const path = isAttachCommand ? positional[2] : undefined;
+	if (isAttachCommand && !path && !hasHelp)
+		printUsageAndExit('a file path is required for "pr attach"');
+	return path;
 }
 
 function looksLikeOption(token: string): boolean {
@@ -384,7 +400,10 @@ type CliOptionsFor<Id extends CommandId> =
 		? Extract<CliOptions, { resource: Resource; command: Command }>
 		: never;
 type CommandOptionBuilders = {
-	[Id in CommandId]: (values: ParsedCommandFlags<Id>) => CliOptionsFor<Id>;
+	[Id in CommandId]: (
+		values: ParsedCommandFlags<Id>,
+		positionalPath?: string,
+	) => CliOptionsFor<Id>;
 };
 
 const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
@@ -392,6 +411,13 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		resource: "pr",
 		command: "list",
 		json: values.json,
+	}),
+	"pr.attach": (values, positionalPath) => ({
+		resource: "pr",
+		command: "attach",
+		pr: values.pr,
+		name: values.name,
+		path: positionalPath ?? "",
 	}),
 	"pr.show": (values) => ({
 		resource: "pr",
@@ -518,8 +544,9 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 function buildCliOptions<Id extends CommandId>(
 	commandId: Id,
 	values: ParsedCommandFlags<Id>,
+	positionalPath?: string,
 ): CliOptionsFor<Id> {
-	return COMMAND_OPTION_BUILDERS[commandId](values);
+	return COMMAND_OPTION_BUILDERS[commandId](values, positionalPath);
 }
 
 export function parseArgs(args: string[] = process.argv.slice(2)): CliOptions {
@@ -548,9 +575,12 @@ export function parseArgs(args: string[] = process.argv.slice(2)): CliOptions {
 	if (!command) {
 		printUsageAndExit(`a command is required for resource "${resource}"`);
 	}
-	if (positional.length > 2) {
-		printUsageAndExit(`unexpected positional argument "${positional[2]}"`);
-	}
+	const isAttachCommand = resource === "pr" && command === "attach";
+	const attachPath = getAttachPath(
+		positional,
+		isAttachCommand,
+		scanned.some((occurrence) => occurrence.name === "help"),
+	);
 
 	const route = `${resource} ${command}`;
 	const commandId = getCommandId(resource, command);
@@ -570,7 +600,7 @@ export function parseArgs(args: string[] = process.argv.slice(2)): CliOptions {
 		printUsageAndExit();
 	}
 	const values = parseCommandFlags(commandId, route, occurrences, true);
-	return buildCliOptions(commandId, values);
+	return buildCliOptions(commandId, values, attachPath);
 }
 
 export function getPat(): string {
