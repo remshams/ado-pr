@@ -55,6 +55,12 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Upload an image for a matching {{image:<filename>}} description placeholder.",
 	},
+	name: {
+		kind: "string",
+		usage: "--name <file name>",
+		description:
+			"Attachment filename used by `pr attach` (defaults to the path basename).",
+	},
 	"remove-image": {
 		kind: "repeatableString",
 		usage: "--remove-image <filename>",
@@ -312,6 +318,13 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 			"remove-reviewer",
 		],
 		validationRules: ["pullRequestEdit"],
+	},
+	"pr.attach": {
+		resource: "pr",
+		command: "attach",
+		usage: "pr attach <path> [--name <file name>] [--pr <id>]",
+		summary: "Upload any file as a pull request attachment.",
+		flags: ["name", "pr"],
 	},
 	"build.list": {
 		resource: "build",
