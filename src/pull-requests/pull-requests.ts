@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-
+import type { AzureRequester } from "../shared/azure.ts";
 import {
 	API_VERSION,
 	AzureRequestError,
@@ -9,9 +9,8 @@ import {
 	pullRequestWebUrl,
 	reposBaseUrl,
 } from "../shared/azure.ts";
-import type { AzureRequester } from "../shared/azure.ts";
-import { getCurrentBranch as defaultGetCurrentBranch } from "../shared/lib.ts";
 import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import { getCurrentBranch as defaultGetCurrentBranch } from "../shared/lib.ts";
 
 export interface PullRequestRepository {
 	id: string;
@@ -106,6 +105,11 @@ export interface PullRequestService {
 		options?: PullRequestReadOptions,
 	): Promise<PullRequest>;
 	resolveId(requestedPrId: number | undefined): Promise<number>;
+	attach(
+		requestedPrId: number | undefined,
+		path: string,
+		name?: string,
+	): Promise<PullRequestAttachment>;
 	format(pr: PullRequest): string;
 	formatListItem(pr: PullRequest): string;
 }
@@ -915,6 +919,35 @@ export function createPullRequestService({
 		return pr.pullRequestId;
 	}
 
+	async function attach(
+		requestedPrId: number | undefined,
+		path: string,
+		name?: string,
+	): Promise<PullRequestAttachment> {
+		const prId = await resolveId(requestedPrId);
+		const filename = name ?? basename(path);
+		const bytes = new Uint8Array(await readFile(path));
+		try {
+			return await uploadAttachment(prId, { filename, bytes });
+		} catch (error) {
+			if (
+				error instanceof AzureRequestError &&
+				error.kind === "http" &&
+				error.status !== undefined &&
+				error.status >= 400 &&
+				error.status < 500 &&
+				error.status !== 401 &&
+				error.status !== 403 &&
+				error.status !== 404
+			) {
+				throw new Error(
+					`${error.message}\nTry renaming the file with --name, for example --name "attachment.txt".`,
+				);
+			}
+			throw error;
+		}
+	}
+
 	function formatRef(ref: string | undefined): string {
 		return ref?.replace(/^refs\/heads\//, "") ?? "unknown";
 	}
@@ -949,6 +982,7 @@ export function createPullRequestService({
 		findForCurrentBranch,
 		resolve,
 		resolveId,
+		attach,
 		format,
 		formatListItem,
 	};
