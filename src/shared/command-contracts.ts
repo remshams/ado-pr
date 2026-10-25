@@ -131,7 +131,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "string",
 		usage: "--status <status>",
 		description:
-			"Resolution status: fixed, wontFix, byDesign, closed (case-insensitive; default fixed).",
+			"Thread status for `comment resolve` (default fixed) or `comment reply`: fixed, wontFix, byDesign, closed (case-insensitive).",
 	},
 	comment: {
 		kind: "positiveInteger",
@@ -232,7 +232,12 @@ export const STRING_FLAG_NAMES: StringFlagName[] = [
 
 export const BOOLEAN_FLAG_NAMES = flagNamesForKind("boolean");
 
-type BatchFieldKind = "command" | "positiveInteger" | "message" | "file";
+type BatchFieldKind =
+	| "command"
+	| "positiveInteger"
+	| "message"
+	| "file"
+	| "status";
 
 interface BatchFieldDefinition {
 	kind: BatchFieldKind;
@@ -250,6 +255,7 @@ export const BATCH_FIELD_DEFINITIONS = {
 	file: { kind: "file", required: false, example: '"..."' },
 	line: { kind: "positiveInteger", required: false, example: "n" },
 	endLine: { kind: "positiveInteger", required: false, example: "n" },
+	status: { kind: "status", required: false, example: '"fixed"' },
 } as const satisfies Record<string, BatchFieldDefinition>;
 
 export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
@@ -432,11 +438,12 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"comment.reply": {
 		resource: "comment",
 		command: "reply",
-		usage: 'comment reply --thread <id> --message "..." [--pr <id>]',
-		summary: "Reply to an existing thread.",
-		flags: ["pr", "thread", "message"],
+		usage:
+			'comment reply --thread <id> --message "..." [--pr <id>] [--status fixed|wontFix|byDesign|closed]',
+		summary: "Reply to an existing thread, optionally setting its status.",
+		flags: ["pr", "thread", "message", "status"],
 		requiredFlags: ["thread", "message"],
-		batchFields: ["command", "thread", "message", "pr"],
+		batchFields: ["command", "thread", "message", "pr", "status"],
 	},
 	"comment.edit": {
 		resource: "comment",
@@ -465,7 +472,7 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		summary: "Mark an existing thread as resolved.",
 		flags: ["pr", "thread", "status"],
 		requiredFlags: ["thread"],
-		batchFields: ["command", "thread", "pr"],
+		batchFields: ["command", "thread", "pr", "status"],
 	},
 	"comment.reopen": {
 		resource: "comment",
@@ -474,6 +481,7 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		summary: "Reopen an existing thread.",
 		flags: ["pr", "thread"],
 		requiredFlags: ["thread"],
+		batchFields: ["command", "thread", "pr"],
 	},
 	"comment.batch": {
 		resource: "comment",
