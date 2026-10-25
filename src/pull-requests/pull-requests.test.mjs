@@ -8,6 +8,7 @@ import { createAzureRequester } from "../shared/azure.ts";
 import {
 	attachmentMarkdownLink,
 	createPullRequestService,
+	formatReviewerVotes,
 	removeAttachmentMarkdown,
 	validateImagePlaceholders,
 } from "./pull-requests.ts";
@@ -500,6 +501,18 @@ describe("pull request listing, resolution, creation, and updates", () => {
 				"  Reviewers: Reject: rejected, Wait: waiting for author, None: no vote, " +
 				"Suggest: approved with suggestions, Approve: approved, Unknown: vote 3\n" +
 				"  https://dev.azure.com/test-org/test-project/_git/test-repository/pullrequest/42",
+		);
+	});
+
+	test("formatReviewerVotes labels reviewers by name and tolerates a missing list", () => {
+		assert.deepEqual(formatReviewerVotes(undefined), []);
+		assert.deepEqual(
+			formatReviewerVotes([
+				{ id: "a", displayName: "Ada", vote: 10 },
+				{ id: "b", uniqueName: "bob@example.test" },
+				{ id: "c" },
+			]),
+			["Ada: approved", "bob@example.test: no vote", "c: no vote"],
 		);
 	});
 
