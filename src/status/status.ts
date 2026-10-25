@@ -149,7 +149,7 @@ export function createStatusService({
 		const { pullRequest } = status;
 		const votes = formatReviewerVotes(pullRequest.reviewers);
 		return [
-			`PR #${pullRequest.pullRequestId}: ${pullRequest.title} (${pullRequest.status ?? "unknown"}${pullRequest.isDraft ? ", draft" : ""})`,
+			`PR #${pullRequest.pullRequestId}: ${safe(pullRequest.title)} (${safe(pullRequest.status)}${pullRequest.isDraft ? ", draft" : ""})`,
 			pullRequestWebUrl(ctx, pullRequest.pullRequestId),
 			`Head: ${status.headCommit ?? "unknown"}`,
 			`Build: ${formatBuild(status.build, status.headCommit)}`,
@@ -157,7 +157,7 @@ export function createStatusService({
 			`Unresolved threads: ${status.unresolvedThreads}`,
 			`Merge status: ${status.mergeStatus ?? "unknown"}`,
 			...formatConflicts(status.conflicts),
-			`Reviewers: ${votes.length > 0 ? votes.join(", ") : "none"}`,
+			`Reviewers: ${votes.length > 0 ? safe(votes.join(", ")) : "none"}`,
 		].join("\n");
 	}
 

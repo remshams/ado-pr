@@ -194,6 +194,19 @@ describe("status", () => {
 		assert.doesNotMatch(text, /\u001b/);
 	});
 
+	test("strips terminal controls from the title and reviewer names", async (t) => {
+		const { service } = setup(t, {
+			pr: pullRequest({
+				title: "Add\u001b[31m widgets",
+				reviewers: [{ id: "eve", displayName: "Eve\u001b[2J", vote: 10 }],
+			}),
+		});
+		const text = service.format(await service.get(42));
+		assert.doesNotMatch(text, /\u001b/);
+		assert.match(text, /^PR #42: Add.*widgets \(active\)$/m);
+		assert.match(text, /^Reviewers: Eve.*: approved$/m);
+	});
+
 	test("still reports the conflicting merge status when the conflict list fails", async (t) => {
 		const { service } = setup(t, {
 			pr: pullRequest({ mergeStatus: "Conflicts" }),
