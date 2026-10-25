@@ -508,6 +508,9 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "diff",
 		pr: values.pr,
 		sinceIteration: values["since-iteration"],
+		sinceLastReview: values["since-last-review"],
+		nameOnly: values["name-only"],
+		json: values.json,
 	}),
 	"pr.create": (values) => ({
 		resource: "pr",

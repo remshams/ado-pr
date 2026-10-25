@@ -34,6 +34,9 @@ type CliOptionsShape =
 			resource: "pr";
 			command: "diff";
 			sinceIteration?: number;
+			sinceLastReview: boolean;
+			nameOnly: boolean;
+			json: boolean;
 	  })
 	| {
 			resource: "pr";

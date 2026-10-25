@@ -506,10 +506,21 @@ test("pr diff parses an optional PR and earlier iteration", () => {
 		command: "diff",
 		pr: undefined,
 		sinceIteration: undefined,
+		sinceLastReview: false,
+		nameOnly: false,
+		json: false,
 	});
 	assert.deepEqual(
 		parseArgs(["pr", "diff", "--pr", "42", "--since-iteration", "3"]),
-		{ resource: "pr", command: "diff", pr: 42, sinceIteration: 3 },
+		{
+			resource: "pr",
+			command: "diff",
+			pr: 42,
+			sinceIteration: 3,
+			sinceLastReview: false,
+			nameOnly: false,
+			json: false,
+		},
 	);
 	assertUsageError(
 		runCli("pr", "diff", "--since-iteration", "0"),
@@ -518,6 +529,29 @@ test("pr diff parses an optional PR and earlier iteration", () => {
 	assertUsageError(
 		runCli("pr", "show", "--since-iteration", "2"),
 		'Error: --since-iteration is not valid for "pr show"',
+	);
+});
+
+test("pr diff parses --since-last-review, --name-only and --json together", () => {
+	assert.deepEqual(
+		parseArgs(["pr", "diff", "--since-last-review", "--name-only", "--json"]),
+		{
+			resource: "pr",
+			command: "diff",
+			pr: undefined,
+			sinceIteration: undefined,
+			sinceLastReview: true,
+			nameOnly: true,
+			json: true,
+		},
+	);
+	assertUsageError(
+		runCli("pr", "diff", "--since-last-review", "--since-iteration", "2"),
+		'Error: --since-iteration and --since-last-review are mutually exclusive for "pr diff"',
+	);
+	assertUsageError(
+		runCli("pr", "status", "--name-only"),
+		'Error: --name-only is not valid for "pr status"',
 	);
 });
 
