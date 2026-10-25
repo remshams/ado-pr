@@ -82,6 +82,7 @@ type CliOptionsShape =
 			resource: "build";
 			command: "queue";
 			branch?: string;
+			definition?: number;
 	  })
 	| (PullRequestTarget & {
 			resource: "build";

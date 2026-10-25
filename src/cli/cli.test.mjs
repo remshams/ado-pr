@@ -562,6 +562,7 @@ test("build queue accepts exactly one PR or branch target", () => {
 		command: "queue",
 		pr: 42,
 		branch: undefined,
+		definition: undefined,
 	});
 	const byBranch = parseArgs(["build", "queue", "--branch", "release/next"]);
 	assert.deepEqual(byBranch, {
@@ -569,7 +570,28 @@ test("build queue accepts exactly one PR or branch target", () => {
 		command: "queue",
 		pr: undefined,
 		branch: "release/next",
+		definition: undefined,
 	});
+	assert.deepEqual(
+		parseArgs(["build", "queue", "--pr", "42", "--definition", "9"]),
+		{
+			resource: "build",
+			command: "queue",
+			pr: 42,
+			branch: undefined,
+			definition: 9,
+		},
+	);
+	assert.deepEqual(
+		parseArgs(["build", "queue", "--branch", "main", "--definition", "9"]),
+		{
+			resource: "build",
+			command: "queue",
+			pr: undefined,
+			branch: "main",
+			definition: 9,
+		},
+	);
 	assertUsageError(
 		runCli("build", "queue"),
 		'Error: exactly one of --pr or --branch is required for "build queue"',
@@ -581,6 +603,18 @@ test("build queue accepts exactly one PR or branch target", () => {
 	assertUsageError(
 		runCli("build", "queue", "--branch", ""),
 		"Error: --branch must not be empty",
+	);
+	assertUsageError(
+		runCli("build", "queue", "--definition", "9"),
+		'Error: exactly one of --pr or --branch is required for "build queue"',
+	);
+	assertUsageError(
+		runCli("build", "queue", "--pr", "42", "--definition", "0"),
+		'Error: invalid --definition "0" (pass it once, as a single positive integer)',
+	);
+	assertUsageError(
+		runCli("build", "show", "--latest", "--definition", "9"),
+		'Error: --definition is not valid for "build show"',
 	);
 });
 

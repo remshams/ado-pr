@@ -126,10 +126,17 @@ Build wait:
 
 Build queue:
   \`build queue\` requires exactly one of --pr <id> or --branch <name>. PR builds requeue the PR's
-  build policy evaluation; branch builds use the repository's build policy definition. Branch builds
-  print the queued build ID and URL. PR builds print them when Azure returns the build ID, and
-  otherwise print the requeued evaluation ID. Multiple matching policies are reported for manual
-  resolution. A failed queue request may still have queued a build; inspect before trying again.
+  build policy evaluation; branch builds use the build pipeline of the repository's build policy.
+  Both print the queued build ID, build pipeline and URL. A PR requeue may not return the build ID;
+  it then prints the requeued evaluation ID and how to find the new build. Queued builds print a
+  ready-to-run \`build wait\` line; a branch build gets one only when the branch has an active pull
+  request, because \`build wait\` needs one. --definition <id> picks the build pipeline. With --pr
+  it selects the build policy evaluation for that build pipeline and fails, listing the candidates,
+  when none matches; it never queues a plain build. With --branch it queues that build pipeline
+  directly, even when the repository has no build policy. Without it, several matching policies or
+  evaluations are reported for manual resolution. A 401, 403, 400 or 404 means nothing was queued;
+  401 and 403 name the Build (Read & execute) scope. Any other failed queue request may still have
+  queued a build; inspect before trying again.
 
 Pull request status:
   \`pr status\` reports the head and merge commits, the latest iteration, the draft state, the build
