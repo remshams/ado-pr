@@ -142,10 +142,17 @@ export interface PullRequestBuildSummary {
 	currentMergeCommit: string | null;
 }
 
+export interface ListedBuild extends AzureBuild {
+	association: BuildAssociation;
+	current: boolean;
+}
+
 export interface BuildListEnvelope {
 	pullRequest: PullRequestBuildSummary;
 	history: boolean;
-	builds: AzureBuild[];
+	builds: ListedBuild[];
+	/** Associated builds the current-only view left out; always 0 for history. */
+	hiddenBuilds: number;
 }
 
 export interface BuildLogRange {
@@ -747,17 +754,10 @@ function appendAssociatedBuilds(
 	builds: AzureBuild[],
 	page: AzureBuild[],
 	pr: ValidatedPullRequest,
-	mergeCommit: string | undefined,
 	seenBuildIds: Set<number>,
 ): void {
 	for (const build of page) {
 		if (buildAssociationMismatch(build, pr) !== undefined) continue;
-		if (
-			mergeCommit !== undefined &&
-			!equalsIdentifier(build.sourceVersion as string, mergeCommit as string)
-		) {
-			continue;
-		}
 		const buildId = build.id as number;
 		if (seenBuildIds.has(buildId)) {
 			throw new Error(
@@ -1299,11 +1299,11 @@ function isBuildPolicyForRepository(
 	);
 }
 
-function formatBuildRow(build: AzureBuild, current: boolean): string {
+function formatBuildRow(build: ListedBuild): string {
 	return [
 		`- Build ${build.id as number}/${display(build.buildNumber)} — ${display(buildDefinitionName(build))}`,
-		`  Association: ${buildAssociation(build)}`,
-		`  Status/result: ${display(build.status)}/${display(build.result)} [${current ? "current" : "history"}]`,
+		`  Association: ${build.association}`,
+		`  Status/result: ${display(build.status)}/${display(build.result)} [${build.current ? "current" : "history"}]`,
 		`  Queue/start/finish: ${display(build.queueTime)} / ${display(build.startTime)} / ${display(build.finishTime)}`,
 		`  ${display(buildWebLink(build))}`,
 	].join("\n");
@@ -1414,7 +1414,6 @@ export function createBuildService({
 
 	async function listAssociatedBuilds(
 		pr: ValidatedPullRequest,
-		mergeCommit: string | undefined,
 		branchHead = false,
 		signal?: AbortSignal,
 	): Promise<AzureBuild[]> {
@@ -1454,7 +1453,6 @@ export function createBuildService({
 						: build.sourceBranch === `refs/pull/${pr.id}/merge`,
 				),
 				pr,
-				mergeCommit,
 				seenBuildIds,
 			);
 
@@ -1471,8 +1469,8 @@ export function createBuildService({
 		signal?: AbortSignal,
 	): Promise<AzureBuild[]> {
 		return [
-			...(await listAssociatedBuilds(pr, undefined, false, signal)),
-			...(await listAssociatedBuilds(pr, undefined, true, signal)),
+			...(await listAssociatedBuilds(pr, false, signal)),
+			...(await listAssociatedBuilds(pr, true, signal)),
 		].sort(
 			(left, right) =>
 				Date.parse(right.queueTime ?? "") - Date.parse(left.queueTime ?? ""),
@@ -1515,13 +1513,14 @@ export function createBuildService({
 	): Promise<BuildListEnvelope> {
 		const history = options.history === true;
 		const pr = await resolvePullRequest(requestedPrId);
-		let mergeCommit: string | undefined;
-		if (!history) {
-			assertActivePullRequest(pr, "list current builds");
-			mergeCommit = requireCurrentMergeCommit(pr, "list current builds");
-		}
+		if (!history) assertActivePullRequest(pr, "list current builds");
 
-		const builds = await listAssociatedBuilds(pr, mergeCommit);
+		const associated = (await listNewestBuilds(pr)).map((build) => ({
+			...build,
+			association: buildAssociation(build),
+			current: isCurrentBuild(build, pr),
+		}));
+		const builds = associated.filter((build) => history || build.current);
 
 		if (!history) {
 			const refreshed = validatePullRequest(
@@ -1529,21 +1528,23 @@ export function createBuildService({
 				"refreshed pull request",
 			);
 			assertActivePullRequest(refreshed, "finish listing current builds");
-			const refreshedMergeCommit = requireCurrentMergeCommit(
-				refreshed,
-				"finish listing current builds",
-			);
 			if (
 				refreshed.id !== pr.id ||
 				!equalsIdentifier(refreshed.repositoryId, pr.repositoryId) ||
-				!equalsIdentifier(refreshedMergeCommit, mergeCommit as string)
+				!equalsIdentifier(refreshed.mergeCommit ?? "", pr.mergeCommit ?? "") ||
+				!equalsIdentifier(refreshed.headCommit ?? "", pr.headCommit ?? "")
 			) {
 				throw new Error(
 					`PR #${pr.id} changed while current builds were being listed; rerun the command.`,
 				);
 			}
 		}
-		return { pullRequest: pr.summary, history, builds };
+		return {
+			pullRequest: pr.summary,
+			history,
+			builds,
+			hiddenBuilds: associated.length - builds.length,
+		};
 	}
 
 	async function fetchProblemLogs(
@@ -2160,24 +2161,19 @@ export function createBuildService({
 	}
 
 	function formatList(result: BuildListEnvelope): string {
-		const scope = result.history ? "history" : "current merge version";
+		const scope = result.history ? "history" : "current head";
 		if (result.builds.length === 0) {
-			return `No associated ${scope} builds found for PR #${result.pullRequest.id}.`;
+			const hint =
+				result.hiddenBuilds === 0
+					? ""
+					: ` ${result.hiddenBuilds} stale ${result.hiddenBuilds === 1 ? "build exists" : "builds exist"}; use build list --history or build show --latest.`;
+			return `No associated ${scope} builds found for PR #${result.pullRequest.id}.${hint}`;
 		}
 		return [
 			`Builds for PR #${result.pullRequest.id}: ${display(result.pullRequest.title)} (${scope})`,
 			"",
 			...result.builds.flatMap((build, index) => [
-				formatBuildRow(
-					build,
-					result.pullRequest.status !== null &&
-						normalized(result.pullRequest.status) === "active" &&
-						result.pullRequest.currentMergeCommit !== null &&
-						equalsIdentifier(
-							build.sourceVersion as string,
-							result.pullRequest.currentMergeCommit,
-						),
-				),
+				formatBuildRow(build),
 				...(index === result.builds.length - 1 ? [] : [""]),
 			]),
 		].join("\n");

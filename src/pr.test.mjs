@@ -114,12 +114,20 @@ function validationBuild(overrides = {}) {
 	};
 }
 
+const buildListUrl = (branch) =>
+	`${buildApiBase}?${branch === "merge" ? "reasonFilter=pullRequest&" : ""}branchName=${encodeURIComponent(branch === "merge" ? "refs/pull/42/merge" : "refs/heads/feature/dispatch")}&repositoryId=repo-id&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1`;
+
 test("build list dispatches through BuildService and prints a normalized JSON envelope", (t) => {
 	const cwd = createRepo(t);
 	const pr = validationPr();
 	const result = runPr(t, ["build", "list", "--pr", "42", "--json"], {
 		cwd,
-		responses: [{ json: pr }, { json: { count: 0, value: [] } }, { json: pr }],
+		responses: [
+			{ json: pr },
+			{ json: { count: 0, value: [] } },
+			{ json: { count: 0, value: [] } },
+			{ json: pr },
+		],
 	});
 
 	assertSucceeded(result);
@@ -133,11 +141,10 @@ test("build list dispatches through BuildService and prints a normalized JSON en
 		},
 		history: false,
 		builds: [],
+		hiddenBuilds: 0,
 	});
-	assert.equal(
-		result.calls[1].url,
-		`${buildApiBase}?reasonFilter=pullRequest&branchName=refs%2Fpull%2F42%2Fmerge&repositoryId=repo-id&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1`,
-	);
+	assert.equal(result.calls[1].url, buildListUrl("merge"));
+	assert.equal(result.calls[2].url, buildListUrl("branch"));
 });
 
 test("build list prints a successful explicit message for an empty current collection", (t) => {
@@ -147,6 +154,7 @@ test("build list prints a successful explicit message for an empty current colle
 		responses: [
 			{ json: validationPr() },
 			{ json: { value: [] } },
+			{ json: { value: [] } },
 			{ json: validationPr() },
 		],
 	});
@@ -154,7 +162,7 @@ test("build list prints a successful explicit message for an empty current colle
 	assertSucceeded(result);
 	assert.equal(
 		result.stdout,
-		"No associated current merge version builds found for PR #42.\n",
+		"No associated current head builds found for PR #42.\n",
 	);
 });
 
