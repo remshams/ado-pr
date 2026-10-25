@@ -187,7 +187,9 @@ export function spawnTestProcess(
  * Creates a strict FIFO fetch fake without mutating global state.
  *
  * Queue entries may be native `Response` objects or descriptors containing
- * `{ body?, json?, status?, statusText?, headers?, delayMs? }`. Every request is exposed
+ * `{ body?, json?, status?, statusText?, headers?, delayMs? }`. A conditional entry
+ * `{ whenBodyIncludes, matched, otherwise }` answers with `matched` when the request body
+ * contains the text and with `otherwise` when it does not. Every request is exposed
  * through `calls`; an unexpected request rejects immediately, and unused
  * responses fail the test during teardown.
  */

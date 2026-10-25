@@ -12,6 +12,17 @@ function queuedResponseFromDescriptor(descriptor, index) {
 		);
 	}
 
+	if (Object.hasOwn(descriptor, "whenBodyIncludes")) {
+		const matched = queuedResponseFromDescriptor(descriptor.matched, index);
+		const otherwise = queuedResponseFromDescriptor(descriptor.otherwise, index);
+		return {
+			choose: (call) =>
+				String(call.body ?? "").includes(descriptor.whenBodyIncludes)
+					? matched
+					: otherwise,
+		};
+	}
+
 	const delayMs = descriptor.delayMs ?? 0;
 	if (!Number.isFinite(delayMs) || delayMs < 0) {
 		throw new TypeError(
@@ -93,7 +104,8 @@ export function createFetchQueue(responses, { onCall } = {}) {
 			throw new Error(`Unexpected fetch request: ${call.method} ${call.url}`);
 		}
 
-		const { response, delayMs } = queue.shift();
+		const queued = queue.shift();
+		const { response, delayMs } = queued.choose?.(call) ?? queued;
 		if (delayMs > 0) {
 			const signal = init?.signal;
 			await new Promise((resolve, reject) => {
