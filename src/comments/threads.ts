@@ -21,6 +21,9 @@ export const RESOLVED_STATUSES = [
 ] as const;
 export type ResolvedStatus = (typeof RESOLVED_STATUSES)[number];
 
+/** A reply was posted, but setting the thread status afterwards failed. */
+export class ReplyStatusError extends Error {}
+
 /** Matches a status name case-insensitively and returns its canonical spelling. */
 export function findResolvedStatus(raw: string): ResolvedStatus | undefined {
 	return RESOLVED_STATUSES.find(
@@ -235,8 +238,9 @@ export function createThreadService({
 		try {
 			await setStatus(prId, threadId, status);
 		} catch (error) {
-			throw new Error(
+			throw new ReplyStatusError(
 				`Reply posted to thread ${threadId}, but setting its status to ${status} failed: ${(error as Error).message}`,
+				{ cause: error },
 			);
 		}
 	}
