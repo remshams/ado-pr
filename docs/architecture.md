@@ -115,8 +115,12 @@ if any failed. `build show` also exits 1 if diagnostics include log read errors 
 `--latest` falls back to a stale associated build. Show and wait require an explicit
 build ID or `--latest`, which selects the newest build validating the PR head. Both
 accept PR merge builds and source-branch builds under
-[ADR 0006](adr/0006-match-builds-to-the-pr-head.md). Build listing still includes
-only PR merge builds.
+[ADR 0006](adr/0006-match-builds-to-the-pr-head.md). `build list` merges both kinds,
+newest first, each labelled `pr-merge` or `branch-head`, and marks the builds that
+validate the head as current by the same rule. The default view shows only those and
+fails for an inactive PR; `--history` shows every associated build and marks none
+current for an inactive PR. An empty default view reports how many stale builds it hides.
+JSON adds `association` and `current` to each build and `hiddenBuilds` to the result.
 
 `pr status` prints one human report, or with `--json` the same fields as one JSON
 document. It reads the PR, the validating build, all threads, the latest iteration
