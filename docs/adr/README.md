@@ -35,3 +35,4 @@ review.
 | [0004](0004-quality-gates.md) | Check quality with Biome and Fallow | Accepted |
 | [0005](0005-run-typescript-directly.md) | Run TypeScript directly with Node type stripping | Accepted |
 | [0006](0006-match-builds-to-the-pr-head.md) | Match builds to the PR head | Proposed |
+| [0007](0007-report-pr-status-from-a-status-module.md) | Report PR status from a status module | Proposed |
