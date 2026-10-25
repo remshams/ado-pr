@@ -26,6 +26,7 @@ import {
 /** The conflicts resource is still a preview API in Azure DevOps 7.1. */
 const CONFLICTS_API_VERSION = "7.1-preview.1";
 const MAX_CONFLICTS = 50;
+const MAX_COPILOT_TEXT = 120;
 
 export interface PullRequestConflict {
 	path: string;
@@ -75,7 +76,11 @@ function formatBuild(build: HeadBuild | null, headCommit: string | null) {
 
 function formatCopilot(copilot: CopilotActivity): string {
 	if (copilot.state === "none") return "none";
-	return `${copilot.state} (${safe(copilot.date)})`;
+	const label =
+		copilot.state === "other"
+			? `"${safe(copilot.text).replace(/\s+/g, " ").slice(0, MAX_COPILOT_TEXT)}"`
+			: copilot.state;
+	return `${label} (${safe(copilot.date)})`;
 }
 
 function formatConflicts(conflicts: ConflictReport): string[] {

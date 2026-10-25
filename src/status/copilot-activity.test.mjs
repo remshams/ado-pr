@@ -63,7 +63,41 @@ describe("latestCopilotActivity", () => {
 		}
 	});
 
-	test("ignores ordinary comments, deleted entries and entries without a state", () => {
+	test("reports unknown wording that is newer than a requested entry as other", () => {
+		const requested = system(
+			"Copilot balanced review requested by branch policy.",
+			"2026-10-20T10:00:00Z",
+		);
+		const cancelled = system(
+			"  Copilot code review cancelled\n",
+			"2026-10-20T10:30:00Z",
+		);
+		for (const threads of [
+			[requested, cancelled],
+			[cancelled, requested],
+		]) {
+			assert.deepEqual(latestCopilotActivity(threads), {
+				state: "other",
+				text: "Copilot code review cancelled",
+				date: "2026-10-20T10:30:00Z",
+			});
+		}
+	});
+
+	test("lets a newer requested entry replace unknown wording", () => {
+		assert.deepEqual(
+			latestCopilotActivity([
+				system("Copilot code review failed", "2026-10-20T10:00:00Z"),
+				system(
+					"Copilot balanced review requested by branch policy.",
+					"2026-10-20T11:00:00Z",
+				),
+			]),
+			{ state: "requested", date: "2026-10-20T11:00:00Z" },
+		);
+	});
+
+	test("ignores ordinary comments, deleted entries and system entries about other things", () => {
 		const text = {
 			id: 2,
 			comments: [
@@ -85,10 +119,7 @@ describe("latestCopilotActivity", () => {
 			"2026-10-22T12:00:00Z",
 			{ isDeleted: true },
 		);
-		const unrelated = system(
-			"Copilot review settings changed",
-			"2026-10-22T13:00:00Z",
-		);
+		const unrelated = system("Policy status updated", "2026-10-22T13:00:00Z");
 		assert.deepEqual(
 			latestCopilotActivity([text, deletedComment, deletedThread, unrelated]),
 			{ state: "none" },
