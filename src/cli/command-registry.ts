@@ -100,6 +100,18 @@ Comment attachments:
   Markdown link is added to the comment after a blank line. If posting fails after the upload,
   the error includes the link so it can be reused instead of uploading again.
 
+Pull request completion:
+  \`pr complete\` reads the PR and completes it at the head commit it just read. Check \`pr status\`
+  first. --merge-strategy is required, because Azure DevOps does not apply the repository default
+  when no strategy is sent. Completion options set earlier, for example in the web UI, are kept,
+  and the flags given replace only their own options. Azure may still be merging when the command
+  returns; it then says so and exits 0. A merge that fails afterwards with conflicts, a policy
+  rejection or another failure prints Azure's reason and exits 1. --auto only sets auto-complete
+  for the authenticated user. Azure then completes the PR once the required policies pass, at
+  whatever head passes them, including later pushes. There is no pre-check. When Azure rejects
+  the request, the command prints Azure's message and suggests \`pr status\`. After a timeout or
+  network failure the request may have been applied, so check \`pr status\` before retrying.
+
 Build selection:
   \`build show\` and \`build wait\` require exactly one of --build <id> or --latest.
   --latest selects the newest build by queue time that validates the current PR head. It checks
