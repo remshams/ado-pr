@@ -23,6 +23,10 @@
 				"patterns": ["src/builds/**/*.ts"]
 			},
 			{
+				"name": "status",
+				"patterns": ["src/status/**/*.ts"]
+			},
+			{
 				"name": "cli",
 				"patterns": ["src/cli/**/*.ts"]
 			},
@@ -49,12 +53,23 @@
 				"allow": ["shared", "pull-requests"]
 			},
 			{
+				"from": "status",
+				"allow": ["shared", "pull-requests", "comments", "builds"]
+			},
+			{
 				"from": "cli",
 				"allow": ["shared", "pull-requests", "comments", "builds"]
 			},
 			{
 				"from": "entry",
-				"allow": ["shared", "pull-requests", "comments", "builds", "cli"]
+				"allow": [
+					"shared",
+					"pull-requests",
+					"comments",
+					"builds",
+					"status",
+					"cli"
+				]
 			}
 		]
 	},
