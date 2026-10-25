@@ -873,6 +873,41 @@ test("repeatable string flags reject empty inline and separate values during par
 	}
 });
 
+test("comment attachment flags are validated for create and reply", () => {
+	for (const prefix of [
+		["comment", "create", "--message", "x"],
+		["comment", "reply", "--thread", "1", "--message", "x"],
+	]) {
+		assertUsageError(
+			runCli(...prefix, "--attachment="),
+			"Error: --attachment must not be empty",
+		);
+		assertUsageError(
+			runCli(...prefix, "--attachment", "a.txt", "--attachment-name="),
+			"Error: --attachment-name must not be empty",
+		);
+		assertUsageError(
+			runCli(...prefix, "--attachment-name", "a.txt"),
+			"Error: --attachment-name requires --attachment",
+		);
+	}
+	assertUsageError(
+		runCli(
+			"comment",
+			"edit",
+			"--thread",
+			"1",
+			"--comment",
+			"2",
+			"--message",
+			"x",
+			"--attachment",
+			"a.txt",
+		),
+		'Error: --attachment is not valid for "comment edit"',
+	);
+});
+
 test("comment create preserves file line-range validation", () => {
 	assertUsageError(
 		runCli("comment", "create", "--message", "x", "--file", ""),
@@ -1208,6 +1243,8 @@ test("parsing returns command options with typed values and defaults", () => {
 				file: "a.ts",
 				line: 3,
 				endLine: 3,
+				attachment: undefined,
+				attachmentName: undefined,
 			},
 		],
 		[
@@ -1220,6 +1257,28 @@ test("parsing returns command options with typed values and defaults", () => {
 				file: undefined,
 				line: undefined,
 				endLine: undefined,
+				attachment: undefined,
+				attachmentName: undefined,
+			},
+		],
+		[
+			[
+				"comment",
+				"create",
+				"--message=Note",
+				"--attachment=./log.txt",
+				"--attachment-name=build.txt",
+			],
+			{
+				resource: "comment",
+				command: "create",
+				pr: undefined,
+				message: "Note",
+				file: undefined,
+				line: undefined,
+				endLine: undefined,
+				attachment: "./log.txt",
+				attachmentName: "build.txt",
 			},
 		],
 		[
@@ -1231,6 +1290,29 @@ test("parsing returns command options with typed values and defaults", () => {
 				thread: 8,
 				message: "Reply",
 				status: undefined,
+				attachment: undefined,
+				attachmentName: undefined,
+			},
+		],
+		[
+			[
+				"comment",
+				"reply",
+				"--thread=8",
+				"--message=Reply",
+				"--status=fixed",
+				"--attachment=./log.txt",
+				"--attachment-name=build.txt",
+			],
+			{
+				resource: "comment",
+				command: "reply",
+				pr: undefined,
+				thread: 8,
+				message: "Reply",
+				status: "fixed",
+				attachment: "./log.txt",
+				attachmentName: "build.txt",
 			},
 		],
 		[
@@ -1399,6 +1481,8 @@ test("reply normalizes supported statuses and leaves the status unset by default
 				thread: 9,
 				message: "Done",
 				status,
+				attachment: undefined,
+				attachmentName: undefined,
 			},
 		);
 	}
