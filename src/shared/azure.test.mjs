@@ -247,6 +247,7 @@ test("Azure requester reports the method, URL, status, status text, and response
 			assert.equal(error.kind, "http");
 			assert.equal(error.status, 429);
 			assert.equal(error.retryAfterMs, undefined);
+			assert.equal(error.azureMessage, "fake rate limit detail");
 			assert.equal(
 				error?.message,
 				`Azure DevOps API request (POST ${url}) failed: 429 Too Many Requests\n{"message":"fake rate limit detail"}`,
@@ -864,6 +865,10 @@ test("HTTP error sanitization recursively redacts credentials and terminal contr
 			assert.ok(error instanceof AzureRequestError);
 			assert.equal(error.kind, "http");
 			assert.match(error.message, /fake rate limit detail/);
+			assert.equal(
+				error.azureMessage,
+				"fake rate limit detail\n\tkept formatting",
+			);
 			assert.doesNotMatch(
 				error.message,
 				/white space token|another white space secret|test-only-fake-pat|\r|\u009b|\u202e|\u001b/,
@@ -877,6 +882,34 @@ test("HTTP error sanitization recursively redacts credentials and terminal contr
 			return true;
 		},
 	);
+});
+
+test("HTTP errors expose Azure's message only from a JSON body with a string message", async (t) => {
+	const { fetch } = createMockFetch(t, [
+		{
+			status: 409,
+			statusText: "Conflict",
+			json: { message: `TF401192: stale \u001b[31mhead ${fakePat}` },
+		},
+		{ status: 400, statusText: "Bad Request", body: "plain text failure" },
+		{ status: 400, statusText: "Bad Request", json: { message: 7 } },
+		{ status: 400, statusText: "Bad Request", body: "null" },
+	]);
+	const azure = createAzureRequester({ pat: fakePat, fetch });
+	const azureMessage = async () => {
+		try {
+			await azure.request("https://example.invalid/failure");
+		} catch (error) {
+			return Object.hasOwn(error, "azureMessage")
+				? error.azureMessage
+				: "absent";
+		}
+	};
+
+	assert.equal(await azureMessage(), "TF401192: stale head <redacted>");
+	assert.equal(await azureMessage(), "absent");
+	assert.equal(await azureMessage(), "absent");
+	assert.equal(await azureMessage(), "absent");
 });
 
 test("authenticated-user lookup requests connection data and returns its identity id", async (t) => {

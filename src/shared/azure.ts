@@ -77,17 +77,25 @@ export class AzureRequestError extends Error {
 	readonly kind: AzureRequestErrorKind;
 	declare readonly status?: number;
 	declare readonly retryAfterMs?: number;
+	/** Azure's own sanitized `message` from a JSON HTTP error body, when it has one. */
+	declare readonly azureMessage?: string;
 
 	constructor(
 		message: string,
 		kind: AzureRequestErrorKind,
-		details: { status?: number; retryAfterMs?: number } = {},
+		details: {
+			status?: number;
+			retryAfterMs?: number;
+			azureMessage?: string;
+		} = {},
 	) {
 		super(message);
 		this.kind = kind;
 		if (details.status !== undefined) this.status = details.status;
 		if (details.retryAfterMs !== undefined)
 			this.retryAfterMs = details.retryAfterMs;
+		if (details.azureMessage !== undefined)
+			this.azureMessage = details.azureMessage;
 	}
 }
 
@@ -309,6 +317,18 @@ function sanitizeErrorBody(text: string, pat: string): string {
 		);
 	} catch {
 		return sanitizeBounded(text, pat, MAX_ERROR_RESPONSE_BYTES);
+	}
+}
+
+function sanitizedAzureMessage(text: string, pat: string): string | undefined {
+	try {
+		// A `null` body throws here and counts as having no message.
+		const message = (JSON.parse(text) as { message?: unknown }).message;
+		return typeof message === "string"
+			? sanitizeBounded(message, pat, MAX_ERROR_RESPONSE_BYTES)
+			: undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -704,7 +724,11 @@ export function createAzureRequester({
 				`Azure DevOps API request (${method} ${safeUrl}) failed: ${httpResponse.status} ${statusText}` +
 					`${detail.length === 0 ? "" : `\n${detail}`}${excerpt.truncated ? "\n<response body truncated>" : ""}`,
 				"http",
-				{ status: httpResponse.status, retryAfterMs },
+				{
+					status: httpResponse.status,
+					retryAfterMs,
+					azureMessage: sanitizedAzureMessage(excerpt.text, pat),
+				},
 			);
 		};
 
