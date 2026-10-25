@@ -180,7 +180,13 @@ export type ProblemRecord =
 	| ProblemRecordWithoutLog
 	| ProblemRecordWithLogError;
 
-type BuildAssociation = "pr-merge" | "branch-head";
+export type BuildAssociation = "pr-merge" | "branch-head";
+
+export interface HeadBuild {
+	association: BuildAssociation;
+	current: boolean;
+	build: AzureBuild;
+}
 
 export interface BuildShowEnvelope {
 	association: BuildAssociation;
@@ -274,6 +280,7 @@ export interface BuildService {
 		requestedPrId: number | undefined,
 		buildId: number,
 	): Promise<AzureBuild>;
+	headBuild(pr: PullRequest): Promise<HeadBuild | null>;
 	queuePr(prId: number): Promise<QueuedBuild>;
 	queueBranch(branch: string): Promise<AzureBuild>;
 	wait(
@@ -1417,18 +1424,25 @@ export function createBuildService({
 		return builds;
 	}
 
-	async function selectLatestBuild(
+	async function listNewestBuilds(
 		pr: ValidatedPullRequest,
-		requireCurrent: boolean,
 		signal?: AbortSignal,
-	): Promise<AzureBuild> {
-		const builds = [
+	): Promise<AzureBuild[]> {
+		return [
 			...(await listAssociatedBuilds(pr, undefined, false, signal)),
 			...(await listAssociatedBuilds(pr, undefined, true, signal)),
 		].sort(
 			(left, right) =>
 				Date.parse(right.queueTime ?? "") - Date.parse(left.queueTime ?? ""),
 		);
+	}
+
+	async function selectLatestBuild(
+		pr: ValidatedPullRequest,
+		requireCurrent: boolean,
+		signal?: AbortSignal,
+	): Promise<AzureBuild> {
+		const builds = await listNewestBuilds(pr, signal);
 		const current = builds.find((build) => isCurrentBuild(build, pr));
 		if (current !== undefined) return current;
 		if (requireCurrent || builds.length === 0) {
@@ -1437,6 +1451,20 @@ export function createBuildService({
 			);
 		}
 		return builds[0];
+	}
+
+	/** The newest build validating the head, else the newest associated one marked stale; null if none exists. */
+	async function headBuild(pr: PullRequest): Promise<HeadBuild | null> {
+		const validated = validatePullRequest(pr, "pull request");
+		const builds = await listNewestBuilds(validated);
+		const current = builds.find((build) => isCurrentBuild(build, validated));
+		const build = current ?? builds[0];
+		if (build === undefined) return null;
+		return {
+			association: buildAssociation(build),
+			current: current !== undefined,
+			build,
+		};
 	}
 
 	async function list(
@@ -2194,6 +2222,7 @@ export function createBuildService({
 		list,
 		show,
 		retry,
+		headBuild,
 		queuePr,
 		queueBranch,
 		wait,
