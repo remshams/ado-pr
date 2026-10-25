@@ -10,6 +10,12 @@ const COPILOT_REVIEW = /\bcopilot\b[\s\S]*\breview\b/i;
 const COMPLETED = /\bcompleted\b/i;
 const REQUESTED = /\brequested\b/i;
 
+interface CopilotEntry {
+	state: "completed" | "requested";
+	date: string | undefined;
+	time: number;
+}
+
 function copilotState(content: string): "completed" | "requested" | undefined {
 	if (!COPILOT_REVIEW.test(content)) return undefined;
 	if (COMPLETED.test(content)) return "completed";
@@ -22,6 +28,26 @@ function timestamp(date: string | undefined): number {
 	return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }
 
+function copilotEntries(threads: CommentThread[]): CopilotEntry[] {
+	return threads
+		.filter((thread) => !thread.isDeleted)
+		.flatMap((thread) => thread.comments)
+		.flatMap((comment) => {
+			const state =
+				comment.isDeleted || comment.commentType !== "system"
+					? undefined
+					: copilotState(comment.content ?? "");
+			if (state === undefined) return [];
+			return [
+				{
+					state,
+					date: comment.publishedDate,
+					time: timestamp(comment.publishedDate),
+				},
+			];
+		});
+}
+
 /**
  * Finds the newest system comment that mentions a Copilot review, as Azure records it in the PR
  * timeline. Copilot never votes, so the timeline is the only signal. The date is omitted when Azure
@@ -30,19 +56,11 @@ function timestamp(date: string | undefined): number {
 export function latestCopilotActivity(
 	threads: CommentThread[],
 ): CopilotActivity {
-	let latest: CopilotActivity = { state: "none" };
-	let latestTime = Number.NEGATIVE_INFINITY;
-	for (const thread of threads) {
-		if (thread.isDeleted) continue;
-		for (const comment of thread.comments) {
-			if (comment.isDeleted || comment.commentType !== "system") continue;
-			const state = copilotState(comment.content ?? "");
-			if (state === undefined) continue;
-			const time = timestamp(comment.publishedDate);
-			if (latest.state !== "none" && time < latestTime) continue;
-			latest = { state, date: comment.publishedDate };
-			latestTime = time;
-		}
+	let latest: CopilotEntry | undefined;
+	for (const entry of copilotEntries(threads)) {
+		if (latest === undefined || entry.time >= latest.time) latest = entry;
 	}
-	return latest;
+	return latest === undefined
+		? { state: "none" }
+		: { state: latest.state, date: latest.date };
 }
