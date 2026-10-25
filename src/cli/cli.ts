@@ -348,6 +348,17 @@ function validatePullRequestList(values: FlagValues): void {
 	}
 }
 
+function validatePullRequestDiff(values: FlagValues): void {
+	if (
+		values["since-iteration"] !== undefined &&
+		values["since-last-review"] === true
+	) {
+		printUsageAndExit(
+			'--since-iteration and --since-last-review are mutually exclusive for "pr diff"',
+		);
+	}
+}
+
 function validateBuildQueueTarget(
 	values: Partial<Record<FlagName, unknown>>,
 	enforceRequired: boolean,
@@ -389,6 +400,7 @@ const VALIDATION_RULES: Record<
 	pullRequestEdit: ({ values, flags, occurrences, enforceRequired, route }) =>
 		validatePullRequestEdit(values, flags, occurrences, enforceRequired, route),
 	pullRequestList: ({ values }) => validatePullRequestList(values),
+	pullRequestDiff: ({ values }) => validatePullRequestDiff(values),
 	buildSelection: ({ values, enforceRequired, route }) =>
 		validateBuildSelection(values, enforceRequired, route),
 	buildQueueTarget: ({ values, enforceRequired, route }) =>
