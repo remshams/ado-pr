@@ -39,15 +39,16 @@ current branch where the command allows it.
 
 ## Modules and dependencies
 
-- `src/shared/`: Azure HTTP access, URL helpers, Git repository context and the
-  command contracts and types that several modules use.
+- `src/shared/`: Azure HTTP access, URL helpers, Git repository context, safe JSON
+  formatting for stdout and the command contracts and types that several modules use.
 - `src/pull-requests/`: finding, listing, creating and editing pull requests,
   including generic attachment uploads, description images and reviewers. It also
   reads pull request diffs: an anti-corruption layer maps Azure iteration changes,
   file diffs and file content to line blocks, and a separate domain service formats
-  those blocks as a size-limited unified diff.
+  those blocks as a size-limited unified diff or lists their changed lines for JSON.
 - `src/comments/`: review threads and comments, file and line anchors, and batch
-  operations read from stdin.
+  operations read from stdin. It also finds the user's last comment or vote in the
+  threads for `pr diff --since-last-review`.
 - `src/builds/`: PR validation builds: listing, queueing, diagnostics and logs,
   retries and waiting for completion.
 - `src/status/`: the `pr status` application service. It combines the pull request,
@@ -140,6 +141,19 @@ system comment in the threads that mentions a Copilot review, reported as
 cancellation, still counts as the newest entry and is shown as quoted text with its
 date. It is best effort because Azure's wording is unverified. See [ADR
 0007](adr/0007-report-pr-status-from-a-status-module.md).
+
+`pr diff` prints a unified diff, only one line per changed path with `--name-only`,
+or a documented JSON shape with `--json`; the two flags compose. `--name-only` reads
+no file content. Unified output stops reading content past 100,000 bytes. JSON
+measures each file entry as it will be printed: a file whose content doesn't fit is
+marked `omitted` and later files still get content, while every file stays listed.
+`--since-last-review` compares with the latest iteration created before the user's
+newest text comment or vote entry. Azure keeps no vote timestamp on reviewers, so
+votes come from the system entries in the PR threads. `src/comments/review-activity.ts`
+owns that matching, next to the thread model. The entrypoint reads the threads,
+computes the cutoff and passes it to the diff service, which selects the iteration and
+reports when there is none. The help marks the flag as a heuristic because Azure's
+vote wording is unverified.
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
 and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
