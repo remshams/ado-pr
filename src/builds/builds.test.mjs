@@ -2651,6 +2651,107 @@ test("build list excludes source-branch builds from both current and history out
 	}
 });
 
+describe("policy evaluations", () => {
+	const prWithProject = pullRequest({
+		repository: {
+			id: "Repo-ID",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
+	});
+
+	test("maps each evaluation to its policy name, blocking flag, satisfied flag and status", async (t) => {
+		const evaluation = (status, isBlocking, displayName) => ({
+			status,
+			configuration: { isBlocking, type: { displayName } },
+		});
+		const { service, calls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							evaluation("rejected", true, "Minimum number of reviewers"),
+							evaluation("queued", false, "Comment requirements"),
+							evaluation("approved", true, "Build"),
+							evaluation("NotApplicable", true, "Skipped"),
+							{ configuration: {} },
+							{},
+							{
+								status: "",
+								configuration: { isBlocking: "yes", type: { displayName: "" } },
+							},
+						],
+					},
+				},
+			],
+			{ resolveValues: [] },
+		);
+
+		const unknown = {
+			name: "unknown policy",
+			blocking: false,
+			satisfied: false,
+			status: "unknown",
+		};
+		assert.deepEqual(await service.policyEvaluations(prWithProject), [
+			{
+				name: "Minimum number of reviewers",
+				blocking: true,
+				satisfied: false,
+				status: "rejected",
+			},
+			{
+				name: "Comment requirements",
+				blocking: false,
+				satisfied: false,
+				status: "queued",
+			},
+			{ name: "Build", blocking: true, satisfied: true, status: "approved" },
+			{
+				name: "Skipped",
+				blocking: true,
+				satisfied: true,
+				status: "NotApplicable",
+			},
+			unknown,
+			unknown,
+			unknown,
+		]);
+		assert.equal(
+			calls[0].url,
+			"https://dev.azure.com/test%20org/test%2Fproject/_apis/policy/evaluations?artifactId=vstfs%3A%2F%2F%2FCodeReview%2FCodeReviewId%2Fproject-id%2F42&api-version=7.1-preview.1",
+		);
+	});
+
+	test("reports a missing project ID and malformed responses", async (t) => {
+		const noProject = setup(t, []);
+		await assert.rejects(noProject.service.policyEvaluations(pullRequest()), {
+			message:
+				"Cannot read policy evaluations for PR #42: Azure DevOps did not return its project ID.",
+		});
+		assert.deepEqual(noProject.calls, []);
+
+		const malformed = setup(t, [{ json: {} }]);
+		await assert.rejects(
+			malformed.service.policyEvaluations(prWithProject),
+			/policy evaluations response\.value must be an array/,
+		);
+
+		const notObject = setup(t, [{ json: { value: [{}, 7] } }]);
+		await assert.rejects(
+			notObject.service.policyEvaluations(prWithProject),
+			/policy evaluation 2 must be an object/,
+		);
+
+		const invalidPr = setup(t, []);
+		await assert.rejects(
+			invalidPr.service.policyEvaluations({ ...prWithProject, title: "" }),
+			/pull request\.title must be a non-empty string/,
+		);
+	});
+});
+
 describe("build queueing", () => {
 	const projectId = "project-id";
 	const buildPolicyType = "0609b952-1397-4640-95ec-e00a01b2c241";
