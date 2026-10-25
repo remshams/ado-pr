@@ -145,6 +145,12 @@ export const FLAG_DEFINITIONS = {
 		usage: "--thread <id>",
 		description: "Thread ID for reply/edit/delete/resolve/reopen.",
 	},
+	vote: {
+		kind: "string",
+		usage: "--vote <vote>",
+		description:
+			"Your vote for `pr vote`: approve, approve-with-suggestions, wait, reject or reset (case-insensitive).",
+	},
 	status: {
 		kind: "string",
 		usage: "--status <status>",
@@ -406,6 +412,31 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		usage: "pr attach <path> [--name <file name>] [--pr <id>]",
 		summary: "Upload any file as a pull request attachment.",
 		flags: ["name", "pr"],
+	},
+	"pr.vote": {
+		resource: "pr",
+		command: "vote",
+		usage:
+			"pr vote --vote approve|approve-with-suggestions|wait|reject|reset [--pr <id>]",
+		summary:
+			"Set your vote on a pull request, adding you as a reviewer if needed.",
+		flags: ["pr", "vote"],
+		requiredFlags: ["vote"],
+	},
+	"pr.abandon": {
+		resource: "pr",
+		command: "abandon",
+		usage: "pr abandon [--pr <id>]",
+		summary: "Abandon an active pull request.",
+		flags: ["pr"],
+	},
+	"pr.reactivate": {
+		resource: "pr",
+		command: "reactivate",
+		usage: "pr reactivate --pr <id>",
+		summary: "Reactivate an abandoned pull request.",
+		flags: ["pr"],
+		requiredFlags: ["pr"],
 	},
 	"build.list": {
 		resource: "build",
