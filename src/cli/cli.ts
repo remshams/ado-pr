@@ -564,6 +564,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "queue",
 		pr: values.pr,
 		branch: values.branch,
+		definition: values.definition,
 	}),
 	"build.wait": (values) => ({
 		resource: "build",
