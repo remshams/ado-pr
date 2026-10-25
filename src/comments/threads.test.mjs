@@ -7,6 +7,7 @@ import {
 	countUnresolvedThreads,
 	createThreadService,
 	findResolvedStatus,
+	ReplyStatusError,
 } from "./threads.ts";
 import { createMockFetch } from "../../tests/test-helpers.mjs";
 
@@ -492,7 +493,14 @@ test.describe("threads", () => {
 
 		await assert.rejects(
 			threads.reply(prId, 17, "Reply text", "fixed"),
-			/^Error: Reply posted to thread 17, but setting its status to fixed failed: /,
+			(error) => {
+				assert.ok(error instanceof ReplyStatusError);
+				assert.match(
+					error.message,
+					/^Reply posted to thread 17, but setting its status to fixed failed: /,
+				);
+				return true;
+			},
 		);
 		assert.equal(calls.length, 2);
 	});
