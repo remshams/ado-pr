@@ -188,7 +188,8 @@ async function runPullRequestCommand(
 			return;
 		}
 		case "status": {
-			console.log(status.format(await status.get(options.pr)));
+			const result = await status.get(options.pr);
+			console.log(options.json ? safeJson(result) : status.format(result));
 			return;
 		}
 		case "diff": {

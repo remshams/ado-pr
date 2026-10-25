@@ -2185,6 +2185,11 @@ test("build show/wait require exactly one selector before any Azure request", (t
 function statusPr(overrides = {}) {
 	return validationPr({
 		isDraft: false,
+		repository: {
+			id: "repo-id",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
 		lastMergeSourceCommit: { commitId: "head-1" },
 		mergeStatus: "succeeded",
 		reviewers: [{ id: "ada", displayName: "Ada", vote: 10 }],
@@ -2207,19 +2212,31 @@ function statusSystemThread(content, publishedDate) {
 	};
 }
 
+const policyEvaluationsUrl = `https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations?artifactId=${encodeURIComponent("vstfs:///CodeReview/CodeReviewId/project-id/42")}&api-version=7.1-preview.1`;
+
 function runStatus(
 	t,
-	{ pr = statusPr(), merge = [], branch = [], threads = [] },
+	{
+		pr = statusPr(),
+		merge = [],
+		branch = [],
+		threads = [],
+		iterations = [{ id: 1 }, { id: 2 }],
+		policies = { json: { value: [] } },
+		args = [],
+	},
 	extra = [],
 ) {
-	return runPr(t, ["pr", "status", "--pr", "42"], {
+	return runPr(t, ["pr", "status", "--pr", "42", ...args], {
 		cwd: createRepo(t),
 		responses: [
 			{ json: pr },
 			{ json: { value: merge } },
 			{ json: { value: branch } },
 			{ json: { value: threads } },
+			{ json: { value: iterations } },
 			...extra,
+			policies,
 		],
 	});
 }
@@ -2234,18 +2251,22 @@ test("pr status reports a clean PR in one call", (t) => {
 		[
 			"PR #42: Build validation (active)",
 			`${webBase}/42`,
+			"Draft: no",
 			"Head: head-1",
+			"Merge commit: merge-1",
+			"Iteration: 2",
 			"Build: succeeded - build 700 (20260818.1, pr-merge) validates the head",
 			"Copilot review (best effort): none",
 			"Unresolved threads: 0",
 			"Merge status: succeeded",
+			"Blocked by: none",
 			"Reviewers: Ada: approved",
 			"",
 		].join("\n"),
 	);
 	assert.deepEqual(
 		result.calls.map((call) => call.method),
-		["GET", "GET", "GET", "GET"],
+		["GET", "GET", "GET", "GET", "GET", "GET"],
 	);
 	assert.equal(
 		result.calls[0].url,
@@ -2255,6 +2276,157 @@ test("pr status reports a clean PR in one call", (t) => {
 		result.calls[3].url,
 		`${apiBase}/pullRequests/42/threads?api-version=7.1`,
 	);
+	assert.equal(
+		result.calls[4].url,
+		`${apiBase}/pullRequests/42/iterations?api-version=7.1`,
+	);
+	assert.equal(result.calls[5].url, policyEvaluationsUrl);
+});
+
+test("pr status --json prints the whole status as a stable document", (t) => {
+	const result = runStatus(
+		t,
+		{
+			args: ["--json"],
+			pr: statusPr({
+				isDraft: true,
+				mergeStatus: "conflicts",
+				reviewers: [
+					{ id: "ada", displayName: "Ada", vote: -10, isRequired: true },
+				],
+			}),
+			merge: [
+				validationBuild({ result: "succeeded", sourceVersion: "merge-1" }),
+			],
+			policies: {
+				json: {
+					value: [
+						{
+							status: "rejected",
+							configuration: {
+								isBlocking: true,
+								type: { displayName: "Minimum number of reviewers" },
+							},
+						},
+						{
+							status: "queued",
+							configuration: {
+								isBlocking: false,
+								type: { displayName: "Work item linking" },
+							},
+						},
+					],
+				},
+			},
+		},
+		[
+			{
+				json: {
+					value: [{ conflictPath: "/src/a.ts", conflictType: "content" }],
+				},
+			},
+		],
+	);
+	assertSucceeded(result);
+	assert.deepEqual(JSON.parse(result.stdout), {
+		id: 42,
+		title: "Build validation",
+		state: "active",
+		draft: true,
+		url: `${webBase}/42`,
+		headCommit: "head-1",
+		mergeCommit: "merge-1",
+		iteration: 2,
+		build: {
+			id: 700,
+			number: "20260818.1",
+			status: "completed",
+			result: "succeeded",
+			sourceVersion: "merge-1",
+			association: "pr-merge",
+			validatesHead: true,
+		},
+		copilot: { state: "none", text: null, date: null },
+		unresolvedThreads: 0,
+		mergeStatus: "conflicts",
+		conflicts: {
+			kind: "listed",
+			conflicts: [{ path: "/src/a.ts", type: "content" }],
+		},
+		blockingPolicies: {
+			kind: "listed",
+			policies: [{ name: "Minimum number of reviewers", status: "rejected" }],
+		},
+		reviewers: [
+			{ name: "Ada", vote: -10, voteLabel: "rejected", required: true },
+		],
+	});
+});
+
+test("pr status prints the draft state, blocking policies and required reviewers", (t) => {
+	const result = runStatus(t, {
+		pr: statusPr({
+			isDraft: true,
+			reviewers: [
+				{ id: "ada", displayName: "Ada", vote: 10, isRequired: true },
+				{ id: "bob", displayName: "Bob", vote: 0 },
+			],
+		}),
+		policies: {
+			json: {
+				value: [
+					{
+						status: "rejected",
+						configuration: {
+							isBlocking: true,
+							type: { displayName: "Minimum number of reviewers" },
+						},
+					},
+					{
+						status: "queued",
+						configuration: {
+							isBlocking: true,
+							type: { displayName: "Work item linking" },
+						},
+					},
+					{
+						status: "approved",
+						configuration: { isBlocking: true, type: { displayName: "Build" } },
+					},
+				],
+			},
+		},
+	});
+	assertSucceeded(result);
+	assert.match(result.stdout, /^Draft: yes$/m);
+	assert.match(
+		result.stdout,
+		/^Blocked by: Minimum number of reviewers \(rejected\), Work item linking \(queued\)$/m,
+	);
+	assert.match(
+		result.stdout,
+		/^Reviewers: Ada: approved \(required\), Bob: no vote$/m,
+	);
+});
+
+test("pr status keeps going when the policy evaluations cannot be read", (t) => {
+	const result = runStatus(t, {
+		policies: { status: 403, statusText: "Forbidden", body: "denied" },
+	});
+	assertSucceeded(result);
+	assert.match(result.stdout, /^Blocked by: could not be listed \(.*403/m);
+	assert.match(result.stdout, /^Iteration: 2$/m);
+});
+
+test("pr status --json reports unavailable policies without failing", (t) => {
+	const result = runStatus(t, {
+		args: ["--json"],
+		policies: { status: 403, statusText: "Forbidden", body: "denied" },
+	});
+	assertSucceeded(result);
+	const { blockingPolicies } = JSON.parse(result.stdout);
+	assert.equal(blockingPolicies.kind, "unavailable");
+	assert.match(blockingPolicies.error, /403/);
 });
 
 test("pr status accepts a source-branch build that validates the head", (t) => {
@@ -2309,10 +2481,10 @@ test("pr status lists merge conflicts from the conflicts endpoint", (t) => {
 	assertSucceeded(result);
 	assert.match(
 		result.stdout,
-		/^Merge status: conflicts\nConflicts \(2\):\n {2}- \/src\/a\.ts \(content\)\n {2}- \/src\/b\.ts \(delete\)\nReviewers:/m,
+		/^Merge status: conflicts\nConflicts \(2\):\n {2}- \/src\/a\.ts \(content\)\n {2}- \/src\/b\.ts \(delete\)\nBlocked by: none\nReviewers:/m,
 	);
 	assert.equal(
-		result.calls[4].url,
+		result.calls[5].url,
 		`${apiBase}/pullRequests/42/conflicts?$top=50&api-version=7.1-preview.1`,
 	);
 });
@@ -2398,11 +2570,13 @@ test("pr status resolves the current branch PR when --pr is omitted", (t) => {
 			{ json: { value: [] } },
 			{ json: { value: [] } },
 			{ json: { value: [] } },
+			{ json: { value: [{ id: 1 }] } },
+			{ json: { value: [] } },
 		],
 	});
 	assertSucceeded(result);
 	assert.match(result.stdout, /^PR #42: Build validation/);
-	assert.equal(result.calls.length, 5);
+	assert.equal(result.calls.length, 7);
 });
 
 test("pr status reports Azure errors and exits 1", (t) => {
