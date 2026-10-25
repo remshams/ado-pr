@@ -88,6 +88,7 @@ interface PullRequestReviewer {
 	displayName?: string;
 	uniqueName?: string;
 	vote?: number;
+	isRequired?: boolean;
 }
 
 interface PreparedImage {
@@ -330,13 +331,34 @@ const VOTE_LABELS = new Map([
 	[10, "approved"],
 ]);
 
+export interface ReviewerSummary {
+	name: string;
+	vote: number;
+	voteLabel: string;
+	required: boolean;
+}
+
+/** One summary per reviewer, in the order Azure returns them. */
+export function summarizeReviewers(
+	reviewers: PullRequest["reviewers"],
+): ReviewerSummary[] {
+	return (reviewers ?? []).map((reviewer) => {
+		const vote = reviewer.vote ?? 0;
+		return {
+			name: reviewerLabel(reviewer),
+			vote,
+			voteLabel: VOTE_LABELS.get(vote) ?? `vote ${vote}`,
+			required: reviewer.isRequired === true,
+		};
+	});
+}
+
 /** One `<reviewer>: <vote>` entry per reviewer, in the order Azure returns them. */
 export function formatReviewerVotes(
 	reviewers: PullRequest["reviewers"],
 ): string[] {
-	return (reviewers ?? []).map(
-		(reviewer) =>
-			`${reviewerLabel(reviewer)}: ${VOTE_LABELS.get(reviewer.vote ?? 0) ?? `vote ${reviewer.vote}`}`,
+	return summarizeReviewers(reviewers).map(
+		(reviewer) => `${reviewer.name}: ${reviewer.voteLabel}`,
 	);
 }
 

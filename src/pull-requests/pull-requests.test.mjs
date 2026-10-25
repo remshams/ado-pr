@@ -9,6 +9,7 @@ import {
 	attachmentMarkdownLink,
 	createPullRequestService,
 	formatReviewerVotes,
+	summarizeReviewers,
 	removeAttachmentMarkdown,
 	validateImagePlaceholders,
 } from "./pull-requests.ts";
@@ -513,6 +514,27 @@ describe("pull request listing, resolution, creation, and updates", () => {
 				{ id: "c" },
 			]),
 			["Ada: approved", "bob@example.test: no vote", "c: no vote"],
+		);
+	});
+
+	test("summarizeReviewers reports the vote, its label and the required flag", () => {
+		assert.deepEqual(summarizeReviewers(undefined), []);
+		assert.deepEqual(
+			summarizeReviewers([
+				{ id: "a", displayName: "Ada", vote: -10, isRequired: true },
+				{ id: "b", uniqueName: "bob@example.test", isRequired: false },
+				{ id: "c", vote: 3 },
+			]),
+			[
+				{ name: "Ada", vote: -10, voteLabel: "rejected", required: true },
+				{
+					name: "bob@example.test",
+					vote: 0,
+					voteLabel: "no vote",
+					required: false,
+				},
+				{ name: "c", vote: 3, voteLabel: "vote 3", required: false },
+			],
 		);
 	});
 
