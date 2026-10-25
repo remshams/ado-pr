@@ -302,6 +302,14 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		summary: "Show pull request details. Use --json for raw data.",
 		flags: ["pr", "json"],
 	},
+	"pr.status": {
+		resource: "pr",
+		command: "status",
+		usage: "pr status [--pr <id>]",
+		summary:
+			"Show head commit, validating build, Copilot review, unresolved threads, merge state and votes.",
+		flags: ["pr"],
+	},
 	"pr.create": {
 		resource: "pr",
 		command: "create",
