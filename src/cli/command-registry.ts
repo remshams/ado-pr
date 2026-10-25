@@ -84,6 +84,7 @@ Pull request diff:
   --since-iteration then. It cannot be combined with --since-iteration.
   --name-only prints only one line per file: the change, a tab and the path, with
   "<original> -> <path>" for renames. Changes are add, edit, delete or rename. It reads no content.
+  A path with control or bidi characters is quoted, with those characters as \\uXXXX escapes.
   --json prints {pullRequestId, iteration, baseIteration, lastReview, files, truncated}.
   baseIteration is null for the merge base; lastReview is the --since-last-review cutoff or null.
   Each file has path, originalPath, change, content and blocks. content is text, binary, none (a
