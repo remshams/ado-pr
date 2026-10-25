@@ -2121,6 +2121,355 @@ test("comment resolves and dispatches an anchored top-level thread", (t) => {
 	);
 });
 
+function writeAttachment(cwd, name = "log.txt") {
+	const path = join(cwd, name);
+	writeFileSync(path, "AB");
+	return path;
+}
+
+const logAttachment = {
+	displayName: "log.txt",
+	url: "https://files.test/log.txt",
+};
+const logLink = "[log.txt](<https://files.test/log.txt>)";
+
+test("comment create uploads the attachment and appends its link to the thread", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"create",
+			"--pr",
+			"42",
+			"--message",
+			"See log",
+			"--attachment",
+			path,
+		],
+		{
+			cwd,
+			responses: [{ json: logAttachment }, { json: { id: 33, comments: [] } }],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42/attachments/log.txt?api-version=7.1`,
+			method: "POST",
+			body: { encoding: "base64", data: "QUI=" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads?api-version=7.1`,
+			method: "POST",
+			body: {
+				comments: [{ content: `See log\n\n${logLink}` }],
+				status: "active",
+			},
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		`Posted new comment thread 33 on PR #42 with attachment log.txt.\n${webBase}/42?discussionId=33\n`,
+	);
+});
+
+test("comment reply uploads the attachment under --attachment-name and appends its link", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd, "raw.bin");
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"8",
+			"--message",
+			"Output attached",
+			"--attachment",
+			path,
+			"--attachment-name",
+			"log.txt",
+		],
+		{ cwd, responses: [{ json: logAttachment }, { json: { id: 2 } }] },
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42/attachments/log.txt?api-version=7.1`,
+			method: "POST",
+			body: { encoding: "base64", data: "QUI=" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/8/comments?api-version=7.1`,
+			method: "POST",
+			body: { content: `Output attached\n\n${logLink}` },
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		`Posted reply to thread 8 on PR #42 with attachment log.txt.\n`,
+	);
+});
+
+test("comment create uploads first, then anchors the thread and appends the link", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"create",
+			"--pr",
+			"42",
+			"--message",
+			"See log",
+			"--file",
+			"src/app.ts",
+			"--line",
+			"3",
+			"--attachment",
+			path,
+		],
+		{
+			cwd,
+			responses: [
+				{ json: logAttachment },
+				{ json: { value: [{ id: 7 }] } },
+				{
+					json: {
+						changeEntries: [
+							{ changeTrackingId: 88, item: { path: "/src/app.ts" } },
+						],
+					},
+				},
+				{ json: { id: 34, comments: [] } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(
+		result.calls.map((call) => `${call.method} ${call.url.split("?")[0]}`),
+		[
+			`POST ${apiBase}/pullRequests/42/attachments/log.txt`,
+			`GET ${apiBase}/pullRequests/42/iterations`,
+			`GET ${apiBase}/pullRequests/42/iterations/7/changes`,
+			`POST ${apiBase}/pullRequests/42/threads`,
+		],
+	);
+	const thread = semanticRequest(result.calls[3]).body;
+	assert.deepEqual(thread.comments, [{ content: `See log\n\n${logLink}` }]);
+	assert.equal(thread.threadContext.filePath, "/src/app.ts");
+	assert.deepEqual(thread.threadContext.rightFileStart, {
+		line: 3,
+		offset: 1,
+	});
+	assert.equal(
+		result.stdout,
+		`Posted new comment thread 34 on PR #42 with attachment log.txt.\n${webBase}/42?discussionId=34\n`,
+	);
+});
+
+test("comment reply combines --attachment with --status", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"8",
+			"--message",
+			"Fixed, see log",
+			"--attachment",
+			path,
+			"--status",
+			"fixed",
+		],
+		{
+			cwd,
+			responses: [{ json: logAttachment }, { json: { id: 2 } }, { json: {} }],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42/attachments/log.txt?api-version=7.1`,
+			method: "POST",
+			body: { encoding: "base64", data: "QUI=" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/8/comments?api-version=7.1`,
+			method: "POST",
+			body: { content: `Fixed, see log\n\n${logLink}` },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/8?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "fixed" },
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"Posted reply to thread 8 on PR #42 with attachment log.txt and marked it as fixed.\n",
+	);
+});
+
+test("comment reply reports a posted reply when the status update fails after an attachment", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"8",
+			"--message",
+			"Fixed, see log",
+			"--attachment",
+			path,
+			"--status",
+			"fixed",
+		],
+		{
+			cwd,
+			responses: [
+				{ json: logAttachment },
+				{ json: { id: 2 } },
+				{
+					status: 500,
+					statusText: "Internal Server Error",
+					body: '{"message":"Unavailable"}',
+				},
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(result.calls.length, 3);
+	assert.match(
+		result.stderr,
+		/Reply posted to thread 8, but setting its status to fixed failed: [\s\S]*500 Internal Server Error/,
+	);
+	assert.match(
+		result.stderr,
+		/The reply includes the uploaded attachment: \[log\.txt\]\(<https:\/\/files\.test\/log\.txt>\)/,
+	);
+	assert.doesNotMatch(result.stderr, /not posted/);
+});
+
+test("comment create with an unreadable attachment sends no request", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"create",
+			"--pr",
+			"42",
+			"--message",
+			"See log",
+			"--attachment",
+			join(cwd, "missing.txt"),
+		],
+		{ cwd },
+	);
+
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /ENOENT/);
+	assert.deepEqual(result.calls, []);
+});
+
+test("comment reply posts nothing when the attachment upload fails", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"8",
+			"--message",
+			"Output attached",
+			"--attachment",
+			path,
+		],
+		{
+			cwd,
+			responses: [
+				{
+					status: 400,
+					statusText: "Bad Request",
+					body: '{"message":"Unsupported file type"}',
+				},
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.calls.length, 1);
+	assert.match(
+		result.stderr,
+		/400 Bad Request[\s\S]*Unsupported file type[\s\S]*--attachment-name "attachment.txt"/,
+	);
+	assert.doesNotMatch(result.stderr, /Reuse this link/);
+});
+
+test("comment create reports the uploaded link when posting fails", (t) => {
+	const cwd = createRepo(t);
+	const path = writeAttachment(cwd);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"create",
+			"--pr",
+			"42",
+			"--message",
+			"See log",
+			"--attachment",
+			path,
+		],
+		{
+			cwd,
+			responses: [
+				{ json: logAttachment },
+				{
+					status: 500,
+					statusText: "Internal Server Error",
+					body: '{"message":"Unavailable"}',
+				},
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(result.calls.length, 2);
+	assert.match(result.stderr, /500 Internal Server Error/);
+	assert.match(
+		result.stderr,
+		/The attachment was uploaded but the comment was not posted\. Reuse this link: \[log\.txt\]\(<https:\/\/files\.test\/log\.txt>\)/,
+	);
+});
+
 test("reply dispatches to the selected thread", (t) => {
 	const cwd = createRepo(t);
 	const result = runPr(
