@@ -135,6 +135,7 @@ test("bare --help and -h document every resource-first command and the batch con
 		"pr list",
 		"pr show",
 		"pr status",
+		"pr complete",
 		"pr create",
 		"pr edit",
 		"pr attach",
@@ -209,6 +210,7 @@ test("qualified command help succeeds after route and supplied-option validation
 		["pr", "list"],
 		["pr", "show"],
 		["pr", "status"],
+		["pr", "complete"],
 		["pr", "create"],
 		["pr", "edit"],
 		["pr", "attach"],
@@ -1618,6 +1620,67 @@ test("pr attach parses its path and optional attachment name", () => {
 		'Error: unexpected positional argument "two.patch"',
 	);
 	assertSuccessfulHelp(runCli("pr", "attach", "--help"));
+});
+
+test("pr complete requires a merge strategy and parses its options", () => {
+	assert.deepEqual(
+		parseOptions(["pr", "complete", "--merge-strategy", "squash"]),
+		{
+			resource: "pr",
+			command: "complete",
+			pr: undefined,
+			mergeStrategy: "squash",
+			deleteSourceBranch: false,
+			auto: false,
+		},
+	);
+	for (const mergeStrategy of ["merge", "squash", "rebase", "rebase-merge"]) {
+		assert.deepEqual(
+			parseOptions([
+				"pr",
+				"complete",
+				"--pr",
+				"42",
+				"--merge-strategy",
+				mergeStrategy.toUpperCase(),
+				"--delete-source-branch",
+				"--auto",
+			]),
+			{
+				resource: "pr",
+				command: "complete",
+				pr: 42,
+				mergeStrategy,
+				deleteSourceBranch: true,
+				auto: true,
+			},
+		);
+	}
+	assertUsageError(
+		runCli("pr", "complete"),
+		'Error: --merge-strategy is required for "pr complete"',
+	);
+	assertUsageError(
+		runCli("pr", "complete", "--auto"),
+		'Error: --merge-strategy is required for "pr complete"',
+	);
+	assertUsageError(
+		runCli("pr", "complete", "--merge-strategy", "noFastForward"),
+		'Error: invalid --merge-strategy "noFastForward" (must be one of: merge, squash, rebase, rebase-merge)',
+	);
+	assertUsageError(
+		runCli("pr", "complete", "--merge-strategy"),
+		"Error: --merge-strategy requires an explicit value",
+	);
+	assertUsageError(
+		runCli("pr", "complete", "--merge-strategy", "squash", "--yes"),
+		'Error: unknown option "--yes"',
+	);
+	assertUsageError(
+		runCli("pr", "edit", "--auto"),
+		'Error: --auto is not valid for "pr edit"',
+	);
+	assertSuccessfulHelp(runCli("pr", "complete", "--help"));
 });
 
 test("pr status parses an optional PR and --json, and rejects flags it does not use", () => {

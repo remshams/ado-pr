@@ -130,6 +130,23 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Target branch for `pr create`, or filter `pr list` by target branch.",
 	},
+	"merge-strategy": {
+		kind: "string",
+		usage: "--merge-strategy <strategy>",
+		description:
+			"Merge strategy for `pr complete`, required: merge, squash, rebase or rebase-merge.",
+	},
+	"delete-source-branch": {
+		kind: "boolean",
+		usage: "--delete-source-branch",
+		description: "Delete the source branch after `pr complete` merges it.",
+	},
+	auto: {
+		kind: "boolean",
+		usage: "--auto",
+		description:
+			"Set auto-complete; Azure DevOps merges whatever head passes policy, including later pushes. `pr complete` only.",
+	},
 	draft: {
 		kind: "boolean",
 		usage: "--draft",
@@ -405,6 +422,16 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 			"remove-reviewer",
 		],
 		validationRules: ["pullRequestEdit"],
+	},
+	"pr.complete": {
+		resource: "pr",
+		command: "complete",
+		usage:
+			"pr complete --merge-strategy merge|squash|rebase|rebase-merge [--delete-source-branch] [--auto] [--pr <id>]",
+		summary:
+			"Complete a pull request at its current head, or set auto-complete with --auto.",
+		flags: ["pr", "merge-strategy", "delete-source-branch", "auto"],
+		requiredFlags: ["merge-strategy"],
 	},
 	"pr.attach": {
 		resource: "pr",

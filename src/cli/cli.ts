@@ -1,9 +1,9 @@
 import minimist from "minimist";
+import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
 import {
-	findResolvedStatus,
-	RESOLVED_STATUSES,
-	type ResolvedStatus,
-} from "../comments/threads.ts";
+	MERGE_STRATEGIES,
+	type MergeStrategy,
+} from "../pull-requests/completion.ts";
 import {
 	BOOLEAN_FLAG_NAMES,
 	COMMAND_REGISTRY,
@@ -217,17 +217,27 @@ type FlagValues = Partial<
 	Record<FlagName, string | string[] | number | boolean>
 >;
 
-function parseResolvedStatus(
+const CHOICE_FLAG_VALUES: Partial<Record<TextFlagName, readonly string[]>> = {
+	status: RESOLVED_STATUSES,
+	"merge-strategy": MERGE_STRATEGIES,
+};
+
+/** Matches a choice case-insensitively and returns its canonical spelling. */
+function parseChoiceFlag(
 	raw: string | undefined,
-): ResolvedStatus | undefined {
+	flag: TextFlagName,
+	allowed: readonly string[],
+): string | undefined {
 	if (raw === undefined) return undefined;
-	const status = findResolvedStatus(raw);
-	if (!status) {
+	const value = allowed.find(
+		(choice) => choice.toLowerCase() === raw.toLowerCase(),
+	);
+	if (value === undefined) {
 		printUsageAndExit(
-			`invalid --status "${raw}" (must be one of: ${RESOLVED_STATUSES.join(", ")})`,
+			`invalid --${flag} "${raw}" (must be one of: ${allowed.join(", ")})`,
 		);
 	}
-	return status;
+	return value;
 }
 
 function parseVote(raw: string | undefined): VoteName | undefined {
@@ -255,8 +265,9 @@ function parseFlagValue(
 			flag as RepeatableStringFlagName,
 		);
 	const raw = parseStringFlag(occurrences, flag as TextFlagName);
-	if (flag === "status") return parseResolvedStatus(raw);
-	return flag === "vote" ? parseVote(raw) : raw;
+	if (flag === "vote") return parseVote(raw);
+	const choices = CHOICE_FLAG_VALUES[flag as TextFlagName];
+	return choices ? parseChoiceFlag(raw, flag as TextFlagName, choices) : raw;
 }
 
 function validatePullRequestEdit(
@@ -566,6 +577,14 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		resource: "pr",
 		command: "reactivate",
 		pr: values.pr,
+	}),
+	"pr.complete": (values) => ({
+		resource: "pr",
+		command: "complete",
+		pr: values.pr,
+		mergeStrategy: values["merge-strategy"] as MergeStrategy,
+		deleteSourceBranch: values["delete-source-branch"],
+		auto: values.auto,
 	}),
 	"pr.create": (values) => ({
 		resource: "pr",

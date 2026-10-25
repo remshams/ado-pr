@@ -1,5 +1,6 @@
 import type { ResolvedStatus } from "../comments/threads.ts";
 import type { VoteName } from "../pull-requests/state-changes.ts";
+import type { MergeStrategy } from "../pull-requests/completion.ts";
 import type { CommandId } from "../shared/command-contracts.ts";
 
 interface PullRequestTarget {
@@ -53,6 +54,13 @@ type CliOptionsShape =
 			command: "reactivate";
 			pr: number;
 	  }
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "complete";
+			mergeStrategy: MergeStrategy;
+			deleteSourceBranch: boolean;
+			auto: boolean;
+	  })
 	| {
 			resource: "pr";
 			command: "create";
