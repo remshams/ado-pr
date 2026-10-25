@@ -436,6 +436,29 @@ describe("pull request diff", () => {
 		assert.equal(calls.length, 2);
 	});
 
+	test("quotes --name-only paths that contain control or bidi characters", async (t) => {
+		const { service } = createService(t, [
+			iterations(1),
+			changes([
+				change("add", "/tab\there.txt"),
+				change("edit", '/esc\u001b[31m"red".txt'),
+				change("edit, rename", "/new\u202eline.txt", {
+					originalPath: "/old\nname.txt",
+				}),
+			]),
+		]);
+
+		assert.equal(
+			await service.diff(42, { nameOnly: true }),
+			[
+				'add\t"tab\\u0009here.txt"',
+				'edit\t"esc\\u001b[31m\\"red\\".txt"',
+				'rename\t"old\\u000aname.txt" -> "new\\u202eline.txt"',
+				"",
+			].join("\n"),
+		);
+	});
+
 	test("prints nothing for --name-only without file changes", async (t) => {
 		const { service } = createService(t, [iterations(1), changes([])]);
 		assert.equal(await service.diff(42, { nameOnly: true }), "");
