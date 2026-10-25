@@ -1,5 +1,5 @@
 /**
- * Creates, lists, inspects, and edits Azure DevOps pull requests, and manages their comment threads
+ * Creates, lists, inspects, edits, and completes Azure DevOps pull requests, and manages their comment threads
  * from a git checkout whose origin remote points at Azure Repos.
  *
  * Auth: requires an AZURE_DEVOPS_PAT env var. Code (Read) is enough for PR/comment reads; Code
@@ -30,6 +30,7 @@ import {
 	buildWaitExitCode,
 	toCommentLocation,
 } from "./shared/operation-types.ts";
+import { createPullRequestCompletionService } from "./pull-requests/completion.ts";
 import { createPullRequestDiffService } from "./pull-requests/diff.ts";
 import {
 	attachmentMarkdownLink,
@@ -215,6 +216,7 @@ async function runPullRequestCommand(
 	status: ReturnType<typeof createStatusService>,
 	diffs: ReturnType<typeof createPullRequestDiffService>,
 	lastReviewOf: (prId: number) => Promise<Date | null>,
+	completions: ReturnType<typeof createPullRequestCompletionService>,
 	ctx: AzureDevOpsRepoContext,
 ): Promise<void> {
 	switch (options.command) {
@@ -246,6 +248,11 @@ async function runPullRequestCommand(
 			const prId = await pullRequests.edit(options.pr, options);
 			console.log(`Updated PR #${prId}.`);
 			console.log(pullRequestWebUrl(ctx, prId));
+			return;
+		}
+		case "complete": {
+			const result = await completions.complete(options.pr, options);
+			console.log(completions.format(result));
 			return;
 		}
 		case "attach": {
@@ -468,6 +475,11 @@ async function main(): Promise<void> {
 		const userId = await getAuthenticatedUserId(azure, ctx.organization);
 		return latestReviewActivity(await threads.listAll(prId), userId) ?? null;
 	};
+	const completions = createPullRequestCompletionService({
+		azure,
+		ctx,
+		pullRequests,
+	});
 
 	const stateChanges = createPullRequestStateChangeService({
 		azure,
@@ -485,6 +497,7 @@ async function main(): Promise<void> {
 			status,
 			diffs,
 			lastReviewOf,
+			completions,
 			ctx,
 		);
 	return runCommentCommand(options, pullRequests, threads, batch);
