@@ -90,6 +90,31 @@ test("createMockFetch cancels a delayed response through the request signal", as
 	assert.equal(calls.length, 1);
 });
 
+test("createMockFetch answers a conditional entry by the request body", async (t) => {
+	const conditional = {
+		whenBodyIncludes: '"head":"a"',
+		matched: { json: { matched: true } },
+		otherwise: { status: 409, json: { matched: false } },
+	};
+	const { fetch } = createMockFetch(t, [conditional, conditional]);
+	const send = (head) =>
+		fetch("https://example.invalid/", {
+			method: "PATCH",
+			body: JSON.stringify({ head }),
+		});
+
+	const matched = await send("a");
+	const otherwise = await send("b");
+	assert.deepEqual(
+		[matched.status, await matched.json()],
+		[200, { matched: true }],
+	);
+	assert.deepEqual(
+		[otherwise.status, await otherwise.json()],
+		[409, { matched: false }],
+	);
+});
+
 test("createMockFetch validates queued response fixtures eagerly", (t) => {
 	assert.throws(() => createMockFetch(t, {}), {
 		name: "TypeError",
