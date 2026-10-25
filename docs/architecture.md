@@ -155,6 +155,16 @@ computes the cutoff and passes it to the diff service, which selects the iterati
 reports when there is none. The help marks the flag as a heuristic because Azure's
 vote wording is unverified.
 
+Comment commands accept one `--attachment`. Azure DevOps has no comment attachments, so
+the entrypoint uploads the file with the pull request attachment upload that `pr attach`
+uses, appends the Markdown link to the message after a blank line and then posts.
+The entrypoint joins the two because `src/comments/` cannot import `src/pull-requests/`.
+The file is read and the upload succeeds before anything is posted, so a failed
+upload posts nothing. If posting fails after the upload, the error includes the
+uploaded link for reuse. On `comment reply --status`, the status is set after the reply
+is posted; if only that update fails, the error says the reply was posted and still
+names the attachment. Batch operations have no attachments.
+
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
 and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
 143 respectively, without a final result or cancellation of the remote build.
