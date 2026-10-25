@@ -79,7 +79,7 @@
     <h2>Modules and dependencies</h2>
     <div class="modules">
       <div class="module"><code>src/shared/</code><br>Azure HTTP access, URL helpers, Git repository context, command contracts and shared types.</div>
-      <div class="module"><code>src/pull-requests/</code><br>Finding, listing, creating and editing pull requests, including generic attachment uploads, description images and reviewers.</div>
+      <div class="module"><code>src/pull-requests/</code><br>Finding, listing, creating and editing pull requests, including generic attachment uploads, description images and reviewers. It also reads pull request diffs: an anti-corruption layer maps Azure iteration changes, file diffs and file content to line blocks, and a separate domain service formats those blocks as a size-limited unified diff.</div>
       <div class="module"><code>src/comments/</code><br>Review threads and comments, file and line anchors, and batch operations read from stdin.</div>
       <div class="module"><code>src/builds/</code><br>PR validation builds: listing, queueing, diagnostics and logs, retries and waiting for completion.</div>
       <div class="module"><code>src/status/</code><br>The <code>pr status</code> application service: combines the pull request, the build validating its head, review threads and merge conflicts into one report, and owns the best-effort Copilot review matching.</div>
