@@ -386,6 +386,38 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		assert.equal(calls[0].body, null);
 	});
 
+	test("lists the active pull requests for a named branch without reading the checkout", async (t) => {
+		const { service, calls } = createService(
+			t,
+			[
+				{
+					json: {
+						value: [
+							pullRequest({ pullRequestId: 81 }),
+							pullRequest({ pullRequestId: 82 }),
+						],
+					},
+				},
+				{ json: { value: [] } },
+			],
+			async () => {
+				throw new Error("must not read the current branch");
+			},
+		);
+
+		const found = await service.findActiveForBranch("feature/a+b");
+		assert.deepEqual(
+			found.map((pr) => pr.pullRequestId),
+			[81, 82],
+		);
+		assert.deepEqual(await service.findActiveForBranch("refs/heads/none"), []);
+		assert.equal(
+			calls[0].url,
+			`${repositoryUrl}/pullrequests?searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fa%2Bb&searchCriteria.status=active&api-version=7.1`,
+		);
+		assert.match(calls[1].url, /sourceRefName=refs%2Fheads%2Fnone&/);
+	});
+
 	test("hydrates branch search results so the full description is returned", async (t) => {
 		const candidate = pullRequest({
 			pullRequestId: 74,
