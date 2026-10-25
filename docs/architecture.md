@@ -1,7 +1,7 @@
 # Architecture
 
 ado-pr is a small TypeScript CLI for developers' coding agents working in Azure
-Repos checkouts. It manages pull requests, review comments and PR validation builds.
+Repos checkouts. It manages pull requests, review comments and PR validation builds, and reports a PR's state in one call.
 It runs from source on Node >= 22.6 with native type stripping and no build step,
 as recorded in [ADR 0005](adr/0005-run-typescript-directly.md).
 
@@ -47,6 +47,9 @@ current branch where the command allows it.
   operations read from stdin.
 - `src/builds/`: PR validation builds: listing, queueing, diagnostics and logs,
   retries and waiting for completion.
+- `src/status/`: the `pr status` application service. It combines the pull request,
+  the build validating its head, review threads and merge conflicts into one report,
+  and owns the best-effort Copilot review matching.
 - `src/cli/`: argument parsing, validation, help and PAT lookup.
 - `src/pr.ts`: wires the modules together, dispatches commands and writes output.
 
@@ -59,19 +62,26 @@ flowchart TD
     Entry --> PR[src/pull-requests/]
     Entry --> Comments[src/comments/]
     Entry --> Builds[src/builds/]
+    Entry --> Status[src/status/]
     Entry --> Shared[src/shared/]
     CLI --> PR
     CLI --> Comments
     CLI --> Builds
     CLI --> Shared
+    Status --> PR
+    Status --> Comments
+    Status --> Builds
+    Status --> Shared
     Builds --> PR
     Builds --> Shared
     PR --> Shared
     Comments --> Shared
 ```
 
-Features depend on shared code; builds may also depend on pull requests. Only the
-CLI and entrypoint may wire features together. Shared code cannot depend on a
+Features depend on shared code; builds may also depend on pull requests. Status
+may depend on pull requests, comments and builds, so those features stay independent
+of each other ([ADR 0007](adr/0007-report-pr-status-from-a-status-module.md)). Only
+the CLI and entrypoint may wire features together. Shared code cannot depend on a
 feature, and features cannot depend on the CLI. `.fallowrc.json` declares these
 folders as boundary zones with explicit allowed dependencies.
 `pnpm fallow:architecture` rejects violations. See
@@ -103,6 +113,17 @@ build ID or `--latest`, which selects the newest build validating the PR head. B
 accept PR merge builds and source-branch builds under
 [ADR 0006](adr/0006-match-builds-to-the-pr-head.md). Build listing still includes
 only PR merge builds.
+
+`pr status` prints one human report and has no `--json` yet. It reads the PR, the
+validating build, all threads and, only when `mergeStatus` is `conflicts`, the
+conflict list, one request after another. A build that does not validate the head is
+marked stale; with no build it says so. Both exit 0. If the conflict list cannot be
+read, the report says so and still shows the merge status. The Copilot line is the
+newest system comment in the threads that mentions a Copilot review, reported as
+`completed` or `requested` with its date, or `none`. Other wording, such as a
+cancellation, still counts as the newest entry and is shown as quoted text with its
+date. It is best effort because Azure's wording is unverified. See
+[ADR 0007](adr/0007-report-pr-status-from-a-status-module.md).
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
 and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
