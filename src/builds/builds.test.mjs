@@ -2427,6 +2427,21 @@ describe("head-aware build selection", () => {
 		});
 	});
 
+	test("headBuild treats a build on the head of a completed PR as current", async (t) => {
+		const completed = { ...headPr(), status: "completed" };
+		const branch = branchBuild({ id: 702 });
+		const { service } = setup(
+			t,
+			[{ json: { value: [] } }, { json: { value: [branch] } }],
+			{ resolveValues: [completed] },
+		);
+		assert.deepEqual(await service.headBuild(completed), {
+			association: "branch-head",
+			current: true,
+			build: branch,
+		});
+	});
+
 	test("headBuild returns null when no associated build exists", async (t) => {
 		const { service } = setup(
 			t,

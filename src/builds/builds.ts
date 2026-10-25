@@ -580,14 +580,21 @@ function buildAssociation(build: AzureBuild): BuildAssociation {
 		: "pr-merge";
 }
 
-function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
+/** Whether the build ran on the PR's current head, whatever the PR status. */
+function validatesHead(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 	const commit =
 		buildAssociation(build) === "branch-head" ? pr.headCommit : pr.mergeCommit;
 	return (
-		pr.status !== undefined &&
-		normalized(pr.status) === "active" &&
 		commit !== undefined &&
 		equalsIdentifier(build.sourceVersion as string, commit)
+	);
+}
+
+function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
+	return (
+		pr.status !== undefined &&
+		normalized(pr.status) === "active" &&
+		validatesHead(build, pr)
 	);
 }
 
@@ -1457,7 +1464,7 @@ export function createBuildService({
 	async function headBuild(pr: PullRequest): Promise<HeadBuild | null> {
 		const validated = validatePullRequest(pr, "pull request");
 		const builds = await listNewestBuilds(validated);
-		const current = builds.find((build) => isCurrentBuild(build, validated));
+		const current = builds.find((build) => validatesHead(build, validated));
 		const build = current ?? builds[0];
 		if (build === undefined) return null;
 		return {
