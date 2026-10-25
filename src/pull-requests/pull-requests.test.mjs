@@ -64,7 +64,7 @@ describe("pull request listing, resolution, creation, and updates", () => {
 				},
 			},
 		]);
-		assert.deepEqual(await service.attach(42, path, "review.txt"), {
+		assert.deepEqual(await service.attach(42, path, { name: "review.txt" }), {
 			displayName: "review.txt",
 			url: "https://files.test/review.txt",
 		});
@@ -76,10 +76,32 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		const path = createTempImage(t, "change.patch");
 		const { service, calls } = createService(t);
 		await assert.rejects(
-			service.attach(42, path, ""),
+			service.attach(42, path, { name: "" }),
 			/--name must not be empty\./,
 		);
 		assert.equal(calls.length, 0);
+	});
+	test("names the caller's flag in attachment name errors", async (t) => {
+		const path = createTempImage(t, "change.patch");
+		const { service, calls } = createService(t, [
+			{
+				status: 400,
+				statusText: "Bad Request",
+				body: '{"message":"Unsupported file"}',
+			},
+		]);
+		await assert.rejects(
+			service.attach(42, path, {
+				name: "",
+				nameFlag: "--attachment-name",
+			}),
+			/--attachment-name must not be empty\./,
+		);
+		assert.equal(calls.length, 0);
+		await assert.rejects(
+			service.attach(42, path, { nameFlag: "--attachment-name" }),
+			/Try renaming the file with --attachment-name, for example --attachment-name "attachment.txt"/,
+		);
 	});
 	test("escapes brackets and backslashes in attachment Markdown links", () => {
 		assert.equal(
