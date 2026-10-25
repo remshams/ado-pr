@@ -107,6 +107,8 @@ type CliOptionsShape =
 			file?: string;
 			line?: number;
 			endLine?: number;
+			attachment?: string;
+			attachmentName?: string;
 	  })
 	| (PullRequestTarget & {
 			resource: "comment";
@@ -114,6 +116,8 @@ type CliOptionsShape =
 			thread: number;
 			message: string;
 			status?: ResolvedStatus;
+			attachment?: string;
+			attachmentName?: string;
 	  })
 	| (PullRequestTarget & {
 			resource: "comment";

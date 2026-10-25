@@ -94,6 +94,12 @@ Pull request diff:
   path, originalPath and change. The limit covers the printed JSON, but every file is listed, so
   a pull request with thousands of files can exceed it.
 
+Comment attachments:
+  \`comment create\` and \`comment reply\` accept one --attachment. Azure DevOps has no comment
+  attachments, so the file is uploaded as a pull request attachment (like \`pr attach\`) and its
+  Markdown link is added to the comment after a blank line. If posting fails after the upload,
+  the error includes the link so it can be reused instead of uploading again.
+
 Build selection:
   \`build show\` and \`build wait\` require exactly one of --build <id> or --latest.
   --latest selects the newest build by queue time that validates the current PR head. It checks
