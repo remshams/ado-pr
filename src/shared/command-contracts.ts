@@ -25,6 +25,12 @@ export const FLAG_DEFINITIONS = {
 		usage: "--branch <name>",
 		description: "Queue a validation build for this source branch.",
 	},
+	definition: {
+		kind: "positiveInteger",
+		usage: "--definition <id>",
+		description:
+			"Queue this build pipeline (definition ID) instead of the one found from the repository's build policies; `build queue` only.",
+	},
 	latest: {
 		kind: "boolean",
 		usage: "--latest",
@@ -417,9 +423,9 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"build.queue": {
 		resource: "build",
 		command: "queue",
-		usage: "build queue (--pr <id> | --branch <name>)",
+		usage: "build queue (--pr <id> | --branch <name>) [--definition <id>]",
 		summary: "Queue a validation build for a pull request or branch.",
-		flags: ["pr", "branch"],
+		flags: ["pr", "branch", "definition"],
 		validationRules: ["buildQueueTarget"],
 	},
 	"build.wait": {
