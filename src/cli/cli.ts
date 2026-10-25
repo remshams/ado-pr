@@ -486,6 +486,12 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "status",
 		pr: values.pr,
 	}),
+	"pr.diff": (values) => ({
+		resource: "pr",
+		command: "diff",
+		pr: values.pr,
+		sinceIteration: values["since-iteration"],
+	}),
 	"pr.create": (values) => ({
 		resource: "pr",
 		command: "create",

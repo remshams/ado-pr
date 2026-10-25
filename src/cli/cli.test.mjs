@@ -499,6 +499,27 @@ test("pr list parses all filters and rejects mutually exclusive modes", () => {
 	);
 });
 
+test("pr diff parses an optional PR and earlier iteration", () => {
+	assert.deepEqual(parseArgs(["pr", "diff"]), {
+		resource: "pr",
+		command: "diff",
+		pr: undefined,
+		sinceIteration: undefined,
+	});
+	assert.deepEqual(
+		parseArgs(["pr", "diff", "--pr", "42", "--since-iteration", "3"]),
+		{ resource: "pr", command: "diff", pr: 42, sinceIteration: 3 },
+	);
+	assertUsageError(
+		runCli("pr", "diff", "--since-iteration", "0"),
+		'Error: invalid --since-iteration "0" (pass it once, as a single positive integer)',
+	);
+	assertUsageError(
+		runCli("pr", "show", "--since-iteration", "2"),
+		'Error: --since-iteration is not valid for "pr show"',
+	);
+});
+
 test("build queue accepts exactly one PR or branch target", () => {
 	const byPr = parseArgs(["build", "queue", "--pr", "42"]);
 	assert.deepEqual(byPr, {
