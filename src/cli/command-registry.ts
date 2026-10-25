@@ -154,6 +154,13 @@ Pull request status:
   Other wording, such as a cancellation, is shown as quoted text with its date. Copilot never votes,
   so reviewer votes do not show it. --json prints the same fields as one JSON document.
 
+Pull request votes and status:
+  \`pr vote\` sets your vote with PUT to the reviewers endpoint and adds you as a reviewer if you are
+  not one yet. \`pr abandon\` and \`pr reactivate\` set the pull request status to abandoned or active.
+  Abandoned pull requests are not found from the current branch, so \`pr reactivate\` requires
+  --pr <id>. If Azure rejects a request, for example when reactivating a completed pull request,
+  the error includes Azure's status and message.
+
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
   - AZURE_DEVOPS_PAT exported by the caller or set in .env.
