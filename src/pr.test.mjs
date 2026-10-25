@@ -478,6 +478,7 @@ test("build queue --branch queues the repository policy build and prints its ID 
 				},
 			},
 			{ json: returned },
+			{ json: { value: [validationPr({ pullRequestId: 55 })] } },
 		],
 	});
 
@@ -501,10 +502,79 @@ test("build queue --branch queues the repository policy build and prints its ID 
 				sourceBranch: "refs/heads/release/next",
 			}),
 		},
+		{
+			url: `${apiBase}/pullrequests?searchCriteria.sourceRefName=refs%2Fheads%2Frelease%2Fnext&searchCriteria.status=active&api-version=7.1`,
+			method: "GET",
+			body: null,
+		},
 	]);
 	assert.equal(
 		result.stdout,
-		"Azure DevOps queued build 702/20260818.1.\nURL: https://dev.azure.com/acme/build/702\n",
+		"Azure DevOps queued build 702/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/702\n" +
+			"Wait with: pr.sh build wait --build 702 --pr 55\n",
+	);
+});
+
+test("build queue --branch prints no wait line when the branch has no active pull request", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--branch", "feature/x", "--definition", "9"],
+		{
+			cwd,
+			responses: [
+				{
+					json: validationBuild({
+						id: 705,
+						sourceBranch: "refs/heads/feature/x",
+					}),
+				},
+				{ json: { value: [] } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"Azure DevOps queued build 705/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/700\n" +
+			"`build wait` needs a pull request for the branch, and none was found for feature/x.\n",
+	);
+	assert.doesNotMatch(result.stdout, /Wait with/);
+});
+
+test("build queue --branch keeps the queued build output when several pull requests share the branch", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--branch", "feature/x", "--definition", "9"],
+		{
+			cwd,
+			responses: [
+				{
+					json: validationBuild({
+						id: 706,
+						sourceBranch: "refs/heads/feature/x",
+					}),
+				},
+				{
+					json: {
+						value: [
+							validationPr({ pullRequestId: 55 }),
+							validationPr({ pullRequestId: 56 }),
+						],
+					},
+				},
+			],
+		},
+	);
+
+	assert.equal(result.status, 0);
+	assert.match(result.stdout, /^Azure DevOps queued build 706\//);
+	assert.doesNotMatch(result.stdout, /Wait with|none was found/);
+	assert.match(
+		result.stderr,
+		/Multiple active pull requests have feature\/x as their source: #55, #56\./,
 	);
 });
 
@@ -563,7 +633,7 @@ test("build queue --pr reports when the requeued evaluation has no build ID", (t
 	assert.equal(
 		result.stdout,
 		"Requeued build policy evaluation evaluation-id for PR #42.\n" +
-			"Azure DevOps did not return the build ID yet. Check with `pr.sh build show --latest --pr 42`.\n",
+			"Azure DevOps did not return the build ID yet. When `pr.sh build show --latest --pr 42` shows a new build ID, run `pr.sh build wait --build <id> --pr 42`.\n",
 	);
 	assert.equal(result.status, 0);
 });
@@ -629,7 +699,240 @@ test("build queue --pr fetches and prints the build ID from evaluation context",
 	);
 	assert.equal(
 		result.stdout,
-		"Azure DevOps queued build 701/20260818.1.\nURL: https://dev.azure.com/acme/build/701\n",
+		"Azure DevOps queued build 701/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/701\n" +
+			"Wait with: pr.sh build wait --build 701 --pr 42\n",
+	);
+});
+
+const buildPolicyTypeId = "0609b952-1397-4640-95ec-e00a01b2c241";
+
+function queueEvaluations(...evaluations) {
+	return {
+		json: {
+			value: evaluations.map(([evaluationId, definitionId]) => ({
+				evaluationId,
+				configuration: {
+					name: `Pipeline ${definitionId}`,
+					type: { id: buildPolicyTypeId },
+					settings: { buildDefinitionId: definitionId },
+				},
+			})),
+		},
+	};
+}
+
+const queuePr = () =>
+	validationPr({
+		repository: {
+			id: "repo-id",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
+		lastMergeSourceCommit: { commitId: "head-1" },
+	});
+
+test("build queue --pr --definition requeues the evaluation for that pipeline and prints the wait line", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--pr", "42", "--definition", "12"],
+		{
+			cwd,
+			responses: [
+				{ json: queuePr() },
+				queueEvaluations(["first-evaluation", 9], ["second-evaluation", 12]),
+				{
+					json: {
+						evaluationId: "second-evaluation",
+						status: "queued",
+						context: { buildId: 703 },
+					},
+				},
+				{
+					json: validationBuild({
+						id: 703,
+						_links: { web: { href: "https://dev.azure.com/acme/build/703" } },
+					}),
+				},
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.equal(
+		result.calls[2].url,
+		"https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations/second-evaluation?api-version=7.1-preview.1",
+	);
+	assert.equal(result.calls[2].method, "PATCH");
+	assert.equal(
+		result.stdout,
+		"Azure DevOps queued build 703/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/703\n" +
+			"Wait with: pr.sh build wait --build 703 --pr 42\n",
+	);
+});
+
+test("build queue --pr --definition fails with the candidates and queues nothing when no evaluation matches", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--pr", "42", "--definition", "77"],
+		{
+			cwd,
+			responses: [
+				{ json: queuePr() },
+				queueEvaluations(["first-evaluation", 9], ["second-evaluation", 12]),
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(
+		result.stderr,
+		"No build policy evaluation for build pipeline (definition) 77 was found for PR #42. Candidates: evaluation first-evaluation (Pipeline 9), build pipeline 9; evaluation second-evaluation (Pipeline 12), build pipeline 12.\n",
+	);
+	assert.deepEqual(
+		result.calls.map(({ method }) => method),
+		["GET", "GET"],
+	);
+});
+
+test("build queue --branch --definition queues that pipeline when the repository has build policies", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--branch", "feature/x", "--definition", "21"],
+		{
+			cwd,
+			responses: [
+				{
+					json: validationBuild({
+						id: 704,
+						sourceBranch: "refs/heads/feature/x",
+						definition: { id: 21, name: "Other Repo CI" },
+						_links: { web: { href: "https://dev.azure.com/acme/build/704" } },
+					}),
+				},
+				{ json: { value: [validationPr({ pullRequestId: 55 })] } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(request), [
+		{
+			url: `${buildApiBase}?api-version=7.1`,
+			method: "POST",
+			body: JSON.stringify({
+				definition: { id: 21 },
+				sourceBranch: "refs/heads/feature/x",
+			}),
+		},
+		{
+			url: `${apiBase}/pullrequests?searchCriteria.sourceRefName=refs%2Fheads%2Ffeature%2Fx&searchCriteria.status=active&api-version=7.1`,
+			method: "GET",
+			body: null,
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"Azure DevOps queued build 704/20260818.1.\nBuild pipeline: Other Repo CI (21)\nURL: https://dev.azure.com/acme/build/704\n" +
+			"Wait with: pr.sh build wait --build 704 --pr 55\n",
+	);
+});
+
+test("build queue --branch without --definition points to it when the repository has no build policy", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["build", "queue", "--branch", "feature/x"], {
+		cwd,
+		responses: [{ json: { id: "repo-id" } }, { json: { value: [] } }],
+	});
+
+	assert.equal(result.status, 1);
+	assert.match(
+		result.stderr,
+		/No build policy was found.*Pass --definition <id>/,
+	);
+	assert.equal(result.calls.length, 2);
+});
+
+test("build queue names the Build (Read & execute) scope on 403", (t) => {
+	const cwd = createRepo(t);
+	const forbidden = { status: 403, statusText: "Forbidden", body: "denied" };
+
+	const branch = runPr(
+		t,
+		["build", "queue", "--branch", "main", "--definition", "9"],
+		{
+			cwd,
+			responses: [forbidden],
+		},
+	);
+	assert.equal(branch.status, 1);
+	assert.match(
+		branch.stderr,
+		/rejected with HTTP 403; Azure DevOps took no action\. The PAT needs the Build \(Read & execute\) scope, also named vso\.build_execute, and the account needs permission to queue builds for that build pipeline\.\n/,
+	);
+	assert.doesNotMatch(branch.stderr, /unverified/);
+
+	const pr = runPr(t, ["build", "queue", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: queuePr() },
+			queueEvaluations(["evaluation-id", 9]),
+			forbidden,
+		],
+	});
+	assert.equal(pr.status, 1);
+	assert.match(
+		pr.stderr,
+		/rejected with HTTP 403; Azure DevOps took no action\. The PAT needs the Build \(Read & execute\) scope/,
+	);
+	assert.match(
+		pr.stderr,
+		/Requeueing a policy evaluation may need more than that; this is unverified\./,
+	);
+});
+
+test("build queue --branch --definition reports a nonexistent build pipeline as rejected, not uncertain", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["build", "queue", "--branch", "main", "--definition", "999"],
+		{
+			cwd,
+			responses: [
+				{ status: 404, statusText: "Not Found", body: "definition not found" },
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(
+		result.stderr,
+		/^Queue request for build pipeline 999 on refs\/heads\/main was rejected with HTTP 404; Azure DevOps took no action\.\n/,
+	);
+	assert.doesNotMatch(result.stderr, /uncertain|vso\.build_execute/);
+});
+
+test("build retry names the Build (Read & execute) scope on 401", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["build", "retry", "--build", "700", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: validationPr() },
+			{ json: validationBuild() },
+			{ json: validationPr({ isDraft: false }) },
+			{ json: validationBuild() },
+			{ status: 401, statusText: "Unauthorized", body: "denied" },
+		],
+	});
+
+	assert.equal(result.status, 1);
+	assert.match(
+		result.stderr,
+		/Retry request for build 700 was rejected with HTTP 401; Azure DevOps took no action\. The PAT needs the Build \(Read & execute\) scope/,
 	);
 });
 
