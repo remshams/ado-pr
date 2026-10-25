@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createAzureRequester } from "../shared/azure.ts";
 import { createFileAnchorService } from "./file-anchors.ts";
-import { createThreadService } from "./threads.ts";
+import { countUnresolvedThreads, createThreadService } from "./threads.ts";
 import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
@@ -91,6 +91,38 @@ test.describe("threads", () => {
 				body: null,
 			},
 		]);
+	});
+
+	test("listAll returns system and deleted threads unfiltered", async (t) => {
+		const system = thread(2, {
+			comments: [
+				{
+					id: 20,
+					content: "Copilot code review completed",
+					commentType: "system",
+				},
+			],
+		});
+		const all = [thread(1, { isDeleted: true }), system];
+		const { calls, threads } = createServices(t, [{ json: { value: all } }]);
+		assert.deepEqual(await threads.listAll(prId), all);
+		assert.equal(calls[0].url, `${apiBase}/threads?api-version=7.1`);
+	});
+
+	test("countUnresolvedThreads counts active, pending and status-less review threads", () => {
+		const system = { id: 9, content: "Policy updated", commentType: "system" };
+		assert.equal(
+			countUnresolvedThreads([
+				thread(1),
+				thread(2, { status: "pending" }),
+				thread(3, { status: undefined }),
+				thread(4, { status: "fixed" }),
+				thread(5, { status: "closed" }),
+				thread(6, { isDeleted: true }),
+				thread(7, { comments: [system] }),
+			]),
+			3,
+		);
 	});
 
 	test("list keeps only active, pending, and status-less threads when excluding resolved", async (t) => {

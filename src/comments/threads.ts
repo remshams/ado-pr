@@ -26,6 +26,7 @@ interface Comment {
 	content?: string;
 	author?: { id?: string; displayName: string };
 	commentType?: string;
+	publishedDate?: string;
 	isDeleted?: boolean;
 }
 
@@ -39,6 +40,8 @@ export interface CommentThread {
 }
 
 export interface ThreadService {
+	/** Every thread as Azure returns it, including deleted threads and system entries. */
+	listAll(prId: number): Promise<CommentThread[]>;
 	list(
 		prId: number,
 		options: { excludeResolved: boolean; excludeOwn: boolean },
@@ -85,6 +88,13 @@ function isRealComment(
 
 function isUnresolvedThread(thread: CommentThread): boolean {
 	return UNRESOLVED_STATUSES.has(thread.status);
+}
+
+/** Counts review threads that still need attention, ignoring deleted threads and system entries. */
+export function countUnresolvedThreads(threads: CommentThread[]): number {
+	return threads.filter(
+		(thread) => isRelevantThread(thread) && isUnresolvedThread(thread),
+	).length;
 }
 
 /** Basic sanity filter applied regardless of any --exclude-* flags: drop deleted/empty threads. */
@@ -274,6 +284,7 @@ export function createThreadService({
 	}
 
 	return {
+		listAll: getThreads,
 		list,
 		comment,
 		reply,
