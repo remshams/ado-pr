@@ -3,6 +3,9 @@
 	"private": true,
 	"description": "A resource-first CLI for managing Azure DevOps pull requests and review comments from Azure Repos checkouts.",
 	"type": "module",
+	"bin": {
+		"pr.sh": "./pr.sh"
+	},
 	"scripts": {
 		"test": "node --disable-warning=ExperimentalWarning --experimental-strip-types --test \"src/**/*.test.mjs\" \"tests/*.test.mjs\"",
 		"typecheck": "tsc --noEmit",
