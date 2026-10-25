@@ -481,6 +481,11 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		pr: values.pr,
 		json: values.json,
 	}),
+	"pr.status": (values) => ({
+		resource: "pr",
+		command: "status",
+		pr: values.pr,
+	}),
 	"pr.create": (values) => ({
 		resource: "pr",
 		command: "create",
