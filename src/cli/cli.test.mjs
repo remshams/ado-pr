@@ -1468,20 +1468,22 @@ test("pr attach parses its path and optional attachment name", () => {
 	assertSuccessfulHelp(runCli("pr", "attach", "--help"));
 });
 
-test("pr status parses an optional PR and rejects flags it does not use", () => {
+test("pr status parses an optional PR and --json, and rejects flags it does not use", () => {
 	assert.deepEqual(parseOptions(["pr", "status", "--pr", "42"]), {
 		resource: "pr",
 		command: "status",
 		pr: 42,
+		json: false,
 	});
-	assert.deepEqual(parseOptions(["pr", "status"]), {
+	assert.deepEqual(parseOptions(["pr", "status", "--json"]), {
 		resource: "pr",
 		command: "status",
 		pr: undefined,
+		json: true,
 	});
 	assertUsageError(
-		runCli("pr", "status", "--json"),
-		'Error: --json is not valid for "pr status"',
+		runCli("pr", "status", "--history"),
+		'Error: --history is not valid for "pr status"',
 	);
 	assertSuccessfulHelp(runCli("pr", "status", "--help"));
 });

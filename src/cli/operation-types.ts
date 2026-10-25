@@ -28,6 +28,7 @@ type CliOptionsShape =
 	| (PullRequestTarget & {
 			resource: "pr";
 			command: "status";
+			json: boolean;
 	  })
 	| (PullRequestTarget & {
 			resource: "pr";

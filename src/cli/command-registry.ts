@@ -110,12 +110,14 @@ Build queue:
   resolution. A failed queue request may still have queued a build; inspect before trying again.
 
 Pull request status:
-  \`pr status\` reports the head commit, the build validating it (or a stale marker), the unresolved
-  thread count, the merge status with conflicts, and reviewer votes in one call. The build lookup
-  needs Build (Read). The Copilot review line is best effort: it reports the newest PR timeline entry
-  that mentions a Copilot review as requested or completed with its date, or none. Other wording,
-  such as a cancellation, is shown as quoted text with its date. Copilot never votes, so reviewer
-  votes do not show it.
+  \`pr status\` reports the head and merge commits, the latest iteration, the draft state, the build
+  validating the head (or a stale marker), the unresolved thread count, the merge status with
+  conflicts, the blocking policies and the reviewer votes with required flags in one call. The
+  "Blocked by" line lists blocking policies that are neither approved nor not applicable, or none.
+  The build lookup needs Build (Read). The Copilot review line is best effort: it reports the newest
+  PR timeline entry that mentions a Copilot review as requested or completed with its date, or none.
+  Other wording, such as a cancellation, is shown as quoted text with its date. Copilot never votes,
+  so reviewer votes do not show it. --json prints the same fields as one JSON document.
 
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
