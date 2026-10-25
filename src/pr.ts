@@ -38,6 +38,7 @@ import {
 import { latestReviewActivity } from "./comments/review-activity.ts";
 import {
 	createThreadService,
+	ReplyStatusError,
 	type ResolvedStatus,
 } from "./comments/threads.ts";
 import { createStatusService } from "./status/status.ts";
@@ -210,11 +211,9 @@ async function runPullRequestCommand(
 			return;
 		}
 		case "attach": {
-			const attachment = await pullRequests.attach(
-				options.pr,
-				options.path,
-				options.name,
-			);
+			const attachment = await pullRequests.attach(options.pr, options.path, {
+				name: options.name,
+			});
 			console.log(`Attachment URL: ${attachment.url}`);
 			console.log(`Markdown: ${attachmentMarkdownLink(attachment)}`);
 			return;
@@ -275,6 +274,42 @@ function markedSuffix(status: ResolvedStatus | undefined): string {
 	return status ? ` and marked it as ${status}` : "";
 }
 
+/**
+ * Uploads the optional attachment, appends its Markdown link to the message and posts it.
+ * Comments cannot import pull requests, so the entrypoint joins the two. Nothing is posted if
+ * the upload fails; if posting fails, the error carries the link so the upload can be reused.
+ * A reply whose status update failed was posted, so that error keeps its wording.
+ * `note` extends the confirmation line when a file was attached.
+ */
+async function postWithAttachment<T>(
+	pullRequests: ReturnType<typeof createPullRequestService>,
+	prId: number,
+	options: { message: string; attachment?: string; attachmentName?: string },
+	post: (message: string) => Promise<T>,
+): Promise<{ result: T; note: string }> {
+	if (options.attachment === undefined)
+		return { result: await post(options.message), note: "" };
+	const attachment = await pullRequests.attach(prId, options.attachment, {
+		name: options.attachmentName,
+		nameFlag: "--attachment-name",
+	});
+	const link = attachmentMarkdownLink(attachment);
+	try {
+		return {
+			result: await post(`${options.message}\n\n${link}`),
+			note: ` with attachment ${attachment.displayName}`,
+		};
+	} catch (error) {
+		const detail = (error as Error).message;
+		throw new Error(
+			error instanceof ReplyStatusError
+				? `${detail}\nThe reply includes the uploaded attachment: ${link}`
+				: `${detail}\nThe attachment was uploaded but the comment was not posted. Reuse this link: ${link}`,
+			{ cause: error },
+		);
+	}
+}
+
 async function runCommentCommand(
 	options: Extract<CliOptions, { resource: "comment" }>,
 	pullRequests: ReturnType<typeof createPullRequestService>,
@@ -307,20 +342,28 @@ async function runCommentCommand(
 		}
 		case "create": {
 			const location = toCommentLocation(options);
-			const thread = await threads.comment(prId, options.message, location);
-			console.log(`Posted new comment thread ${thread.id} on PR #${prId}.`);
+			const { result: thread, note } = await postWithAttachment(
+				pullRequests,
+				prId,
+				options,
+				(message) => threads.comment(prId, message, location),
+			);
+			console.log(
+				`Posted new comment thread ${thread.id} on PR #${prId}${note}.`,
+			);
 			console.log(threads.webUrl(prId, thread.id));
 			return;
 		}
 		case "reply": {
-			await threads.reply(
+			const { note } = await postWithAttachment(
+				pullRequests,
 				prId,
-				options.thread,
-				options.message,
-				options.status,
+				options,
+				(message) =>
+					threads.reply(prId, options.thread, message, options.status),
 			);
 			console.log(
-				`Posted reply to thread ${options.thread} on PR #${prId}${markedSuffix(options.status)}.`,
+				`Posted reply to thread ${options.thread} on PR #${prId}${note}${markedSuffix(options.status)}.`,
 			);
 			return;
 		}
