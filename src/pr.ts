@@ -25,6 +25,7 @@ import {
 	buildWaitExitCode,
 	toCommentLocation,
 } from "./shared/operation-types.ts";
+import { createPullRequestDiffService } from "./pull-requests/diff.ts";
 import {
 	attachmentMarkdownLink,
 	createPullRequestService,
@@ -162,6 +163,7 @@ async function runPullRequestCommand(
 	options: Extract<CliOptions, { resource: "pr" }>,
 	pullRequests: ReturnType<typeof createPullRequestService>,
 	status: ReturnType<typeof createStatusService>,
+	diffs: ReturnType<typeof createPullRequestDiffService>,
 	ctx: AzureDevOpsRepoContext,
 ): Promise<void> {
 	switch (options.command) {
@@ -184,6 +186,14 @@ async function runPullRequestCommand(
 		}
 		case "status": {
 			console.log(status.format(await status.get(options.pr)));
+			return;
+		}
+		case "diff": {
+			process.stdout.write(
+				await diffs.diff(options.pr, {
+					sinceIteration: options.sinceIteration,
+				}),
+			);
 			return;
 		}
 		case "edit": {
@@ -335,10 +345,11 @@ async function main(): Promise<void> {
 		builds,
 		threads,
 	});
+	const diffs = createPullRequestDiffService({ azure, ctx, pullRequests });
 
 	if (options.resource === "build") return runBuildCommand(options, builds);
 	if (options.resource === "pr")
-		return runPullRequestCommand(options, pullRequests, status, ctx);
+		return runPullRequestCommand(options, pullRequests, status, diffs, ctx);
 	return runCommentCommand(options, pullRequests, threads, batch);
 }
 
