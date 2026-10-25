@@ -25,6 +25,10 @@ type CliOptionsShape =
 			command: "show";
 			json: boolean;
 	  })
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "status";
+	  })
 	| {
 			resource: "pr";
 			command: "create";

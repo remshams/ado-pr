@@ -103,6 +103,14 @@ Build queue:
   otherwise print the requeued evaluation ID. Multiple matching policies are reported for manual
   resolution. A failed queue request may still have queued a build; inspect before trying again.
 
+Pull request status:
+  \`pr status\` reports the head commit, the build validating it (or a stale marker), the unresolved
+  thread count, the merge status with conflicts, and reviewer votes in one call. The build lookup
+  needs Build (Read). The Copilot review line is best effort: it reports the newest PR timeline entry
+  that mentions a Copilot review as requested or completed with its date, or none. Other wording,
+  such as a cancellation, is shown as quoted text with its date. Copilot never votes, so reviewer
+  votes do not show it.
+
 Requires:
   - A git checkout whose origin remote points at Azure Repos.
   - AZURE_DEVOPS_PAT exported by the caller or set in .env.

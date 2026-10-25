@@ -134,6 +134,7 @@ test("bare --help and -h document every resource-first command and the batch con
 	for (const command of [
 		"pr list",
 		"pr show",
+		"pr status",
 		"pr create",
 		"pr edit",
 		"pr attach",
@@ -206,6 +207,7 @@ test("qualified command help succeeds after route and supplied-option validation
 	for (const [resource, command] of [
 		["pr", "list"],
 		["pr", "show"],
+		["pr", "status"],
 		["pr", "create"],
 		["pr", "edit"],
 		["pr", "attach"],
@@ -1394,4 +1396,22 @@ test("pr attach parses its path and optional attachment name", () => {
 		'Error: unexpected positional argument "two.patch"',
 	);
 	assertSuccessfulHelp(runCli("pr", "attach", "--help"));
+});
+
+test("pr status parses an optional PR and rejects flags it does not use", () => {
+	assert.deepEqual(parseOptions(["pr", "status", "--pr", "42"]), {
+		resource: "pr",
+		command: "status",
+		pr: 42,
+	});
+	assert.deepEqual(parseOptions(["pr", "status"]), {
+		resource: "pr",
+		command: "status",
+		pr: undefined,
+	});
+	assertUsageError(
+		runCli("pr", "status", "--json"),
+		'Error: --json is not valid for "pr status"',
+	);
+	assertSuccessfulHelp(runCli("pr", "status", "--help"));
 });
