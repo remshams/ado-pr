@@ -1815,6 +1815,121 @@ for (const [command, flags, status, confirmation] of [
 	});
 }
 
+test("reply --status posts the reply, then sets the thread status", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"9",
+			"--message",
+			"Done",
+			"--status",
+			"ByDesign",
+		],
+		{ cwd, responses: [{ json: { id: 2 } }, { json: { id: 9 } }] },
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42/threads/9/comments?api-version=7.1`,
+			method: "POST",
+			body: { content: "Done" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/9?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "byDesign" },
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"Posted reply to thread 9 on PR #42 and marked it as byDesign.\n",
+	);
+});
+
+test("reply --status reports the posted reply when the status update fails", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		[
+			"comment",
+			"reply",
+			"--pr",
+			"42",
+			"--thread",
+			"9",
+			"--message",
+			"Done",
+			"--status",
+			"fixed",
+		],
+		{
+			cwd,
+			responses: [
+				{ json: { id: 2 } },
+				{ status: 500, statusText: "Server Error", body: "boom" },
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(
+		result.stderr,
+		/Reply posted to thread 9, but setting its status to fixed failed: /,
+	);
+});
+
+test("batch dispatches reply and resolve statuses and reopen", (t) => {
+	const cwd = createRepo(t);
+	const operations = [
+		{ command: "comment.reply", thread: 8, message: "Done", status: "closed" },
+		{ command: "comment.resolve", thread: 9, status: "wontFix" },
+		{ command: "comment.reopen", pr: 77, thread: 10 },
+	];
+	const result = runPr(t, ["comment", "batch", "--pr", "42"], {
+		cwd,
+		stdin: JSON.stringify(operations),
+		responses: [{ json: {} }, { json: {} }, { json: {} }, { json: {} }],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42/threads/8/comments?api-version=7.1`,
+			method: "POST",
+			body: { content: "Done" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/8?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "closed" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42/threads/9?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "wontFix" },
+		},
+		{
+			url: `${apiBase}/pullRequests/77/threads/10?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "active" },
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"[1/3] comment.reply: posted reply to thread 8 on PR #42 and marked it as closed\n" +
+			"[2/3] comment.resolve: marked thread 9 on PR #42 as wontFix\n" +
+			"[3/3] comment.reopen: reopened thread 10 on PR #77\n",
+	);
+});
+
 test("batch reads stdin and dispatches operations in order with per-operation PR overrides", (t) => {
 	const cwd = createRepo(t);
 	const operations = [
@@ -1873,7 +1988,7 @@ test("batch reads stdin and dispatches operations in order with per-operation PR
 			`[2/5] comment.reply: posted reply to thread 8 on PR #77\n` +
 			`[3/5] comment.edit: edited comment 3 in thread 9 on PR #42\n` +
 			`[4/5] comment.delete: deleted comment 4 from thread 10 on PR #42\n` +
-			`[5/5] comment.resolve: marked thread 11 on PR #42 as resolved\n`,
+			`[5/5] comment.resolve: marked thread 11 on PR #42 as fixed\n`,
 	);
 });
 

@@ -30,7 +30,10 @@ import {
 	attachmentMarkdownLink,
 	createPullRequestService,
 } from "./pull-requests/pull-requests.ts";
-import { createThreadService } from "./comments/threads.ts";
+import {
+	createThreadService,
+	type ResolvedStatus,
+} from "./comments/threads.ts";
 import { createStatusService } from "./status/status.ts";
 
 function assertNever(value: never): never {
@@ -245,6 +248,10 @@ async function runPullRequestList(
 	console.log(prs.map((pr) => pullRequests.formatListItem(pr)).join("\n\n"));
 }
 
+function markedSuffix(status: ResolvedStatus | undefined): string {
+	return status ? ` and marked it as ${status}` : "";
+}
+
 async function runCommentCommand(
 	options: Extract<CliOptions, { resource: "comment" }>,
 	pullRequests: ReturnType<typeof createPullRequestService>,
@@ -283,8 +290,15 @@ async function runCommentCommand(
 			return;
 		}
 		case "reply": {
-			await threads.reply(prId, options.thread, options.message);
-			console.log(`Posted reply to thread ${options.thread} on PR #${prId}.`);
+			await threads.reply(
+				prId,
+				options.thread,
+				options.message,
+				options.status,
+			);
+			console.log(
+				`Posted reply to thread ${options.thread} on PR #${prId}${markedSuffix(options.status)}.`,
+			);
 			return;
 		}
 		case "edit": {
