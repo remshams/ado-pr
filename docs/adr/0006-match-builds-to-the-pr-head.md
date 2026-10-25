@@ -35,14 +35,16 @@ commit and exits 1. Wait fails with an error naming the head commit. If no
 associated build exists, show also fails with that error.
 
 Retry uses the same current-version rule and retains its existing status, result
-and refresh checks. `build list` continues to query only PR merge builds. Branch
-build listing belongs to issue #14.
+and refresh checks. `build list` merges both kinds, newest first, each labelled, and
+marks a build current by the same rule as `--latest`. The default view lists only
+current builds and fails for inactive PRs; `--history` lists every associated build
+and marks none current for an inactive PR.
 
 ## Consequences
 
 Agents can distinguish current validation from stale results and inspect manual
-source-branch runs on draft PRs. Latest selection needs a second paged build query
-without a reason filter. Both queries use the existing pagination limits.
+source-branch runs on draft PRs. Latest selection and build listing need a second paged
+build query without a reason filter. Both queries use the existing pagination limits.
 
 Build selection uses the PR metadata read at command start. Waiting follows the
 selected build ID; it does not switch builds when the PR changes. A branch-head
