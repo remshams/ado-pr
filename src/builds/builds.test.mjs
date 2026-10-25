@@ -45,6 +45,22 @@ function build(overrides = {}) {
 	};
 }
 
+function headPr() {
+	return pullRequest({
+		lastMergeSourceCommit: { commitId: "HEAD-1" },
+		isDraft: true,
+	});
+}
+
+function branchBuild(overrides = {}) {
+	return build({
+		reason: "manual",
+		sourceBranch: "refs/heads/feature/widgets",
+		sourceVersion: "head-1",
+		...overrides,
+	});
+}
+
 function createPullRequestStub(
 	resolveValues = [pullRequest()],
 	getValues = resolveValues,
@@ -101,6 +117,13 @@ function listUrl(continuation) {
 			? ""
 			: `continuationToken=${encodeURIComponent(continuation)}&`) +
 		"api-version=7.1"
+	);
+}
+
+function branchListUrl() {
+	return (
+		`${buildBase}?branchName=refs%2Fheads%2Ffeature%2Fwidgets&` +
+		"repositoryId=Repo-ID&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1"
 	);
 }
 
@@ -184,22 +207,32 @@ function createWaitHarness(
 }
 
 describe("build discovery", () => {
-	test("lists only current associated builds with exact query semantics and a normalized envelope", async (t) => {
-		const current = build();
-		const stale = build({ id: 701, sourceVersion: "older" });
+	test("lists current PR merge and branch builds, newest first, labelled and marked current", async (t) => {
+		const merge = build({ queueTime: "2026-08-18T10:00:00Z" });
+		const staleMerge = build({ id: 701, sourceVersion: "older" });
 		const unrelatedBranch = build({
 			id: 702,
 			sourceBranch: "refs/pull/99/merge",
 		});
 		const unrelatedReason = build({ id: 703, reason: "manual" });
-		const { service, calls, pullRequestCalls } = setup(t, [
-			{
-				json: {
-					count: 4,
-					value: [current, stale, unrelatedBranch, unrelatedReason],
+		const branch = branchBuild({ id: 704, queueTime: "2026-08-18T11:00:00Z" });
+		const staleBranch = branchBuild({ id: 705, sourceVersion: "old-head" });
+		const otherBranch = branchBuild({
+			id: 706,
+			sourceBranch: "refs/heads/other",
+		});
+		const { service, calls, pullRequestCalls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [merge, staleMerge, unrelatedBranch, unrelatedReason],
+					},
 				},
-			},
-		]);
+				{ json: { value: [branch, staleBranch, otherBranch] } },
+			],
+			{ resolveValues: [headPr()] },
+		);
 
 		const result = await service.list(undefined);
 
@@ -208,11 +241,15 @@ describe("build discovery", () => {
 				id: 42,
 				title: "Validate widgets",
 				status: "active",
-				draft: false,
+				draft: true,
 				currentMergeCommit: "ABCDEF123",
 			},
 			history: false,
-			builds: [current],
+			builds: [
+				{ ...branch, association: "branch-head", current: true },
+				{ ...merge, association: "pr-merge", current: true },
+			],
+			hiddenBuilds: 2,
 		});
 		assert.deepEqual(pullRequestCalls, [
 			{ method: "resolve", requestedPrId: undefined },
@@ -225,12 +262,30 @@ describe("build discovery", () => {
 				headers: { authorization: "<redacted>" },
 				body: null,
 			},
+			{
+				url: branchListUrl(),
+				method: "GET",
+				headers: { authorization: "<redacted>" },
+				body: null,
+			},
 		]);
 	});
 
-	test("history follows and encodes every continuation page while preserving response order", async (t) => {
-		const first = build({ id: 702, sourceVersion: "old-two" });
-		const second = build({ id: 701, sourceVersion: "old-one" });
+	test("history follows and encodes every continuation page and merges both build kinds newest first without marking inactive PRs current", async (t) => {
+		const first = build({
+			id: 702,
+			sourceVersion: "old-two",
+			queueTime: "2026-08-18T10:00:00Z",
+		});
+		const second = build({
+			id: 701,
+			sourceVersion: "old-one",
+			queueTime: "2026-08-18T08:00:00Z",
+		});
+		const middle = branchBuild({
+			id: 703,
+			queueTime: "2026-08-18T09:00:00Z",
+		});
 		const token = "next/page +?#&=";
 		const completed = pullRequest({
 			status: "completed",
@@ -245,6 +300,7 @@ describe("build discovery", () => {
 					headers: { "x-ms-continuationtoken": token },
 				},
 				{ json: { value: [second] } },
+				{ json: { value: [middle] } },
 			],
 			{ resolveValues: [completed] },
 		);
@@ -252,7 +308,12 @@ describe("build discovery", () => {
 		const result = await service.list(42, { history: true });
 
 		assert.equal(result.history, true);
-		assert.deepEqual(result.builds, [first, second]);
+		assert.equal(result.hiddenBuilds, 0);
+		assert.deepEqual(result.builds, [
+			{ ...first, association: "pr-merge", current: false },
+			{ ...middle, association: "branch-head", current: false },
+			{ ...second, association: "pr-merge", current: false },
+		]);
 		assert.deepEqual(result.pullRequest, {
 			id: 42,
 			title: "Validate widgets",
@@ -262,7 +323,7 @@ describe("build discovery", () => {
 		});
 		assert.deepEqual(
 			calls.map(({ url }) => url),
-			[listUrl(), listUrl(token)],
+			[listUrl(), listUrl(token), branchListUrl()],
 		);
 	});
 
@@ -306,7 +367,11 @@ describe("build discovery", () => {
 	});
 
 	test("rejects a current-list result if the PR changes during pagination", async (t) => {
-		const changedCommit = setup(t, [{ json: { value: [build()] } }], {
+		const pages = () => [
+			{ json: { value: [build()] } },
+			{ json: { value: [] } },
+		];
+		const changedCommit = setup(t, pages(), {
 			getValues: [pullRequest({ lastMergeCommit: { commitId: "new-merge" } })],
 		});
 		await assert.rejects(
@@ -314,7 +379,27 @@ describe("build discovery", () => {
 			/changed while current builds were being listed/,
 		);
 
-		const changedStatus = setup(t, [{ json: { value: [build()] } }], {
+		const changedHead = setup(t, pages(), {
+			resolveValues: [headPr()],
+			getValues: [
+				pullRequest({ lastMergeSourceCommit: { commitId: "new-head" } }),
+			],
+		});
+		await assert.rejects(
+			changedHead.service.list(42),
+			/changed while current builds were being listed/,
+		);
+
+		const gainedMerge = setup(t, pages(), {
+			resolveValues: [pullRequest({ lastMergeCommit: undefined })],
+			getValues: [pullRequest()],
+		});
+		await assert.rejects(
+			gainedMerge.service.list(42),
+			/changed while current builds were being listed/,
+		);
+
+		const changedStatus = setup(t, pages(), {
 			getValues: [pullRequest({ status: "completed" })],
 		});
 		await assert.rejects(
@@ -323,24 +408,54 @@ describe("build discovery", () => {
 		);
 	});
 
-	test("current listing rejects inactive and merge-less PRs before the Build API", async (t) => {
+	test("current listing rejects inactive PRs before the Build API", async (t) => {
 		const inactive = setup(t, [], {
 			resolveValues: [pullRequest({ status: "abandoned" })],
 		});
 		await assert.rejects(
 			inactive.service.list(42),
-			/only active pull requests are eligible/,
+			/Cannot list current builds: PR #42 is abandoned; only active pull requests are eligible/,
 		);
 		assert.deepEqual(inactive.calls, []);
+	});
 
-		const missingCommit = setup(t, [], {
-			resolveValues: [pullRequest({ lastMergeCommit: undefined })],
-		});
-		await assert.rejects(
-			missingCommit.service.list(42),
-			/no lastMergeCommit\.commitId.*current merge version will not be guessed/,
+	test("counts the stale builds an empty current listing hides", async (t) => {
+		const { service } = setup(t, [
+			{ json: { value: [build({ id: 701, sourceVersion: "older" })] } },
+			{ json: { value: [branchBuild({ id: 702, sourceVersion: "old" })] } },
+		]);
+
+		const result = await service.list(42);
+
+		assert.deepEqual(result.builds, []);
+		assert.equal(result.hiddenBuilds, 2);
+		assert.equal(
+			service.formatList(result),
+			"No associated current head builds found for PR #42. 2 stale builds exist; use build list --history or build show --latest.",
 		);
-		assert.deepEqual(missingCommit.calls, []);
+	});
+
+	test("current listing of a PR without a merge commit still shows branch builds validating the head", async (t) => {
+		const branch = branchBuild();
+		const { service } = setup(
+			t,
+			[{ json: { value: [build()] } }, { json: { value: [branch] } }],
+			{
+				resolveValues: [
+					pullRequest({
+						lastMergeCommit: undefined,
+						lastMergeSourceCommit: { commitId: "HEAD-1" },
+					}),
+				],
+			},
+		);
+
+		const result = await service.list(42);
+
+		assert.deepEqual(result.builds, [
+			{ ...branch, association: "branch-head", current: true },
+		]);
+		assert.equal(result.pullRequest.currentMergeCommit, null);
 	});
 
 	test("fails on malformed association-critical PR and Build list data", async (t) => {
@@ -374,7 +489,20 @@ describe("build discovery", () => {
 			status: "inProgress",
 			result: undefined,
 		});
-		const { service } = setup(t, [{ json: { value: [build(), historical] } }]);
+		const branch = branchBuild({
+			id: 698,
+			queueTime: "2026-08-17T10:00:00Z",
+			status: "completed",
+			result: "succeeded",
+		});
+		const { service } = setup(
+			t,
+			[
+				{ json: { value: [build(), historical] } },
+				{ json: { value: [branch] } },
+			],
+			{ resolveValues: [headPr()] },
+		);
 		const result = await service.list(42, { history: true });
 
 		assert.equal(
@@ -387,12 +515,25 @@ describe("build discovery", () => {
 				"- Build 699/2026.8.18.1 — Widget CI\n" +
 				"  Association: pr-merge\n  Status/result: inProgress/unknown [history]\n" +
 				"  Queue/start/finish: 2026-08-18T10:00:00Z / 2026-08-18T10:01:00Z / 2026-08-18T10:04:00Z\n" +
+				"  https://dev.azure.com/build/700\n\n" +
+				"- Build 698/2026.8.18.1 — Widget CI\n" +
+				"  Association: branch-head\n  Status/result: completed/succeeded [current]\n" +
+				"  Queue/start/finish: 2026-08-17T10:00:00Z / 2026-08-18T10:01:00Z / 2026-08-18T10:04:00Z\n" +
 				"  https://dev.azure.com/build/700",
 		);
 
+		const empty = { ...result, history: false, builds: [] };
 		assert.equal(
-			service.formatList({ ...result, history: false, builds: [] }),
-			"No associated current merge version builds found for PR #42.",
+			service.formatList({ ...empty, hiddenBuilds: 0 }),
+			"No associated current head builds found for PR #42.",
+		);
+		assert.equal(
+			service.formatList({ ...empty, hiddenBuilds: 1 }),
+			"No associated current head builds found for PR #42. 1 stale build exists; use build list --history or build show --latest.",
+		);
+		assert.equal(
+			service.formatList({ ...empty, hiddenBuilds: 3 }),
+			"No associated current head builds found for PR #42. 3 stale builds exist; use build list --history or build show --latest.",
 		);
 	});
 });
@@ -2224,19 +2365,6 @@ describe("build output contracts", () => {
 });
 
 describe("head-aware build selection", () => {
-	const headPr = () =>
-		pullRequest({
-			lastMergeSourceCommit: { commitId: "HEAD-1" },
-			isDraft: true,
-		});
-	const branchBuild = (overrides = {}) =>
-		build({
-			reason: "manual",
-			sourceBranch: "refs/heads/feature/widgets",
-			sourceVersion: "head-1",
-			...overrides,
-		});
-
 	test("classifies current and stale merge and source-branch builds", async (t) => {
 		for (const [candidate, association, current] of [
 			[build(), "pr-merge", true],
@@ -2633,22 +2761,6 @@ describe("head metadata and latest selection contracts", () => {
 		);
 		assert.equal(queries, 2);
 	});
-});
-
-test("build list excludes source-branch builds from both current and history output", async (t) => {
-	for (const history of [false, true]) {
-		const merge = build();
-		const branch = build({
-			id: 701,
-			reason: "manual",
-			sourceBranch: "refs/heads/feature/widgets",
-		});
-		const { service, calls } = setup(t, [{ json: { value: [merge, branch] } }]);
-		const result = await service.list(42, { history });
-		assert.deepEqual(result.builds, [merge]);
-		assert.equal(calls.length, 1);
-		assert.equal(calls[0].url, listUrl());
-	}
 });
 
 describe("policy evaluations", () => {
