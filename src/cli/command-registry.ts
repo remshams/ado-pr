@@ -73,6 +73,12 @@ ${batchShapes}
 Options:
 ${options}
 
+Pull request diff:
+  \`pr diff\` prints a unified diff read from Azure DevOps. The first line names the latest iteration
+  and what it is compared with: the merge base, or the iteration given with --since-iteration.
+  Binary files are listed without content. Output stops after 100,000 bytes and ends with a
+  notice naming where it was cut.
+
 Build selection:
   \`build show\` and \`build wait\` require exactly one of --build <id> or --latest.
   --latest selects the newest build by queue time that validates the current PR head. It checks

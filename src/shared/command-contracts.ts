@@ -31,6 +31,12 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Select the newest build validating the PR head by queue time.",
 	},
+	"since-iteration": {
+		kind: "positiveInteger",
+		usage: "--since-iteration <n>",
+		description:
+			"Show only what changed since this pull request iteration; `pr diff` only.",
+	},
 	reviewing: {
 		kind: "boolean",
 		usage: "--reviewing",
@@ -309,6 +315,13 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		summary:
 			"Show head commit, validating build, Copilot review, unresolved threads, merge state and votes.",
 		flags: ["pr"],
+	},
+	"pr.diff": {
+		resource: "pr",
+		command: "diff",
+		usage: "pr diff [--pr <id>] [--since-iteration <n>]",
+		summary: "Print the pull request diff from Azure DevOps as a unified diff.",
+		flags: ["pr", "since-iteration"],
 	},
 	"pr.create": {
 		resource: "pr",

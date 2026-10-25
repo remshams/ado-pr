@@ -29,6 +29,11 @@ type CliOptionsShape =
 			resource: "pr";
 			command: "status";
 	  })
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "diff";
+			sinceIteration?: number;
+	  })
 	| {
 			resource: "pr";
 			command: "create";
