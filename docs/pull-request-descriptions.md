@@ -49,6 +49,8 @@ Choose `small`, `medium`, or `high` and explain the rating in terms of what coul
 
 Name the main failure case, the validation that reduces the risk, and any remaining uncertainty. Explain recovery steps when reverting the commit alone would not restore service or data.
 
+End the section with the human review decision, for example "Human review: required, because `pr complete` merges code." See [Human review label](#human-review-label).
+
 ## Evidence
 
 Show concrete before and after evidence that the change works.
@@ -68,3 +70,21 @@ For each skipped step, name it and explain why it is unnecessary for this PR's s
 Direct the reviewer to the parts that need judgment. Link the relevant files, tests, or ADRs and explain what to verify, such as PR/build association, cancellation, JSON output compatibility, or file comment anchors. Mention test gaps and assumptions that need confirmation.
 
 Keep this specific to the PR. "Check that build wait progress stays on stderr when `--json` is set" gives the reviewer a useful question; "review the code carefully" does not.
+
+## Human review label
+
+When you open a PR, decide whether a maintainer has to review it before it merges. If so, add the `human review required` label, for example with `gh pr create --label "human review required"` or `gh pr edit <n> --add-label "human review required"`. The label is not a section of the description. Record the decision and its reason at the end of the Risk section.
+
+Add the label when any of these apply:
+
+- The risk is `medium` or `high`.
+- The PR changes Azure DevOps state in a new way, such as completing, abandoning or voting on a pull request, or queueing builds.
+- The PR changes the CLI contract: commands, flags, output, `--json` shapes, exit codes or the batch schema.
+- The PR touches authentication, PAT scopes, credentials or the redaction of sensitive output.
+- The PR changes dependencies, CI, the quality gates or the launcher.
+- The PR records a new architecture decision or changes module boundaries.
+- New behavior rests on Azure DevOps responses nobody has checked against a real organization.
+
+Leave the label off for `small` changes with no behavior change, such as documentation, test-only changes, formatting or refactors that keep the CLI contract. If you are unsure, add it.
+
+Decide again when the scope changes, and add or remove the label to match.
