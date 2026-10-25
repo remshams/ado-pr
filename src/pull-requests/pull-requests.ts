@@ -322,6 +322,24 @@ function reviewerLabel(reviewer: PullRequestReviewer): string {
 	return reviewer.displayName ?? reviewer.uniqueName ?? reviewer.id;
 }
 
+const VOTE_LABELS = new Map([
+	[-10, "rejected"],
+	[-5, "waiting for author"],
+	[0, "no vote"],
+	[5, "approved with suggestions"],
+	[10, "approved"],
+]);
+
+/** One `<reviewer>: <vote>` entry per reviewer, in the order Azure returns them. */
+export function formatReviewerVotes(
+	reviewers: PullRequest["reviewers"],
+): string[] {
+	return (reviewers ?? []).map(
+		(reviewer) =>
+			`${reviewerLabel(reviewer)}: ${VOTE_LABELS.get(reviewer.vote ?? 0) ?? `vote ${reviewer.vote}`}`,
+	);
+}
+
 /** Turns a plain branch name into a full ref, leaving an already-qualified ref untouched. */
 function toFullRef(branch: string): string {
 	return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
@@ -1005,17 +1023,7 @@ export function createPullRequestService({
 	}
 
 	function formatListItem(pr: PullRequest): string {
-		const voteLabels = new Map([
-			[-10, "rejected"],
-			[-5, "waiting for author"],
-			[0, "no vote"],
-			[5, "approved with suggestions"],
-			[10, "approved"],
-		]);
-		const reviewerVotes = (pr.reviewers ?? []).map(
-			(reviewer) =>
-				`${reviewerLabel(reviewer)}: ${voteLabels.get(reviewer.vote ?? 0) ?? `vote ${reviewer.vote}`}`,
-		);
+		const reviewerVotes = formatReviewerVotes(pr.reviewers);
 		return [
 			`- PR #${pr.pullRequestId}: ${pr.title}${pr.isDraft ? " [draft]" : ""}`,
 			`  ${formatRef(pr.sourceRefName)} -> ${formatRef(pr.targetRefName)}`,
