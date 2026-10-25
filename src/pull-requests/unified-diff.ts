@@ -96,6 +96,36 @@ function alignBlocks(
 	return aligned;
 }
 
+/** A line block with the text it removes and adds, without context lines. */
+export interface LineChange extends LineBlock {
+	removed: string[];
+	added: string[];
+}
+
+/** Lists a text file's changed blocks with their lines, using the same alignment as the formatter. */
+export function lineChanges(
+	path: string,
+	original: string,
+	modified: string,
+	blocks: readonly LineBlock[],
+): LineChange[] {
+	const originalLines = splitLines(original);
+	const modifiedLines = splitLines(modified);
+	return alignBlocks(path, blocks, originalLines, modifiedLines).map(
+		(block) => ({
+			...block,
+			removed: originalLines.lines.slice(
+				block.originalStart - 1,
+				block.originalStart - 1 + block.originalCount,
+			),
+			added: modifiedLines.lines.slice(
+				block.modifiedStart - 1,
+				block.modifiedStart - 1 + block.modifiedCount,
+			),
+		}),
+	);
+}
+
 function groupHunks(blocks: LineBlock[]): LineBlock[][] {
 	const hunks: LineBlock[][] = [];
 	for (const block of blocks) {

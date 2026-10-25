@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import {
 	createDiffOutput,
 	formatFileDiff,
+	lineChanges,
 	wholeFileBlocks,
 } from "./unified-diff.ts";
 
@@ -211,6 +212,35 @@ describe("unified diff formatting", () => {
 				/^Error: Line diff blocks for a\.txt do not match the file content\.$/,
 			);
 		}
+	});
+});
+
+describe("line changes", () => {
+	test("lists the removed and added lines of each aligned block", () => {
+		const original = lines(6);
+		const modified = original
+			.replace("line 2\n", "two\n")
+			.replace("line 4\n", "line 4\nnew a\nnew b\n")
+			.replace("line 6\n", "");
+		assert.deepEqual(
+			lineChanges("a.txt", original, modified, [
+				block(2, 1, 2, 1),
+				block(99, 0, 5, 2),
+				block(6, 1, 99, 0),
+			]),
+			[
+				{ ...block(2, 1, 2, 1), removed: ["line 2"], added: ["two"] },
+				{ ...block(5, 0, 5, 2), removed: [], added: ["new a", "new b"] },
+				{ ...block(6, 1, 8, 0), removed: ["line 6"], added: [] },
+			],
+		);
+	});
+
+	test("rejects blocks that do not match the content", () => {
+		assert.throws(
+			() => lineChanges("a.txt", lines(1), lines(1), [block(3, 1, 3, 1)]),
+			/^Error: Line diff blocks for a\.txt do not match the file content\.$/,
+		);
 	});
 });
 
