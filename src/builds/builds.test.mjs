@@ -2395,6 +2395,47 @@ describe("head-aware build selection", () => {
 		);
 	});
 
+	test("headBuild reports the newest validating build of either kind", async (t) => {
+		const branch = branchBuild({ id: 701 });
+		const { service, calls } = setup(
+			t,
+			[
+				{ json: { value: [build({ sourceVersion: "old-merge" })] } },
+				{ json: { value: [branch] } },
+			],
+			{ resolveValues: [headPr()] },
+		);
+		assert.deepEqual(await service.headBuild(headPr()), {
+			association: "branch-head",
+			current: true,
+			build: branch,
+		});
+		assert.equal(calls.length, 2);
+	});
+
+	test("headBuild marks the newest associated build stale when none validates the head", async (t) => {
+		const stale = build({ sourceVersion: "old-merge" });
+		const { service } = setup(
+			t,
+			[{ json: { value: [stale] } }, { json: { value: [] } }],
+			{ resolveValues: [headPr()] },
+		);
+		assert.deepEqual(await service.headBuild(headPr()), {
+			association: "pr-merge",
+			current: false,
+			build: stale,
+		});
+	});
+
+	test("headBuild returns null when no associated build exists", async (t) => {
+		const { service } = setup(
+			t,
+			[{ json: { value: [] } }, { json: { value: [] } }],
+			{ resolveValues: [headPr()] },
+		);
+		assert.equal(await service.headBuild(headPr()), null);
+	});
+
 	test("show latest returns the newest associated stale build with its commit", async (t) => {
 		const stale = branchBuild({
 			sourceVersion: "old-head",
