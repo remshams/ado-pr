@@ -51,8 +51,9 @@ current branch where the command allows it.
 - `src/builds/`: PR validation builds: listing, queueing, diagnostics and logs,
   retries and waiting for completion.
 - `src/status/`: the `pr status` application service. It combines the pull request,
-  the build validating its head, review threads and merge conflicts into one report,
-  and owns the best-effort Copilot review matching.
+  the build validating its head, review threads, the latest iteration, merge
+  conflicts and blocking policies into one report, and owns the best-effort Copilot
+  review matching.
 - `src/cli/`: argument parsing, validation, help and PAT lookup.
 - `src/pr.ts`: wires the modules together, dispatches commands and writes output.
 
@@ -117,16 +118,24 @@ accept PR merge builds and source-branch builds under
 [ADR 0006](adr/0006-match-builds-to-the-pr-head.md). Build listing still includes
 only PR merge builds.
 
-`pr status` prints one human report and has no `--json` yet. It reads the PR, the
-validating build, all threads and, only when `mergeStatus` is `conflicts`, the
-conflict list, one request after another. A build that does not validate the head is
-marked stale; with no build it says so. Both exit 0. If the conflict list cannot be
-read, the report says so and still shows the merge status. The Copilot line is the
-newest system comment in the threads that mentions a Copilot review, reported as
+`pr status` prints one human report, or with `--json` the same fields as one JSON
+document. It reads the PR, the validating build, all threads, the latest iteration
+and the policy evaluations and, only when `mergeStatus` is `conflicts`, the conflict
+list, one request after another. The result is a domain value, not the raw Azure
+objects: id, title, state, draft, URL, head and merge commit, iteration, build,
+Copilot activity, unresolved thread count, merge status, conflicts, blocking
+policies and reviewers with vote and required flag. The builds module exposes the
+policy evaluation lookup it already uses for `build queue --pr`. It marks an
+evaluation satisfied when it is approved or not applicable, and status keeps the
+blocking ones that are not satisfied and prints them as the `Blocked by:` line. A
+build that does not validate the head is marked stale; with no build it says so.
+Both exit 0. If the conflict list, the iteration or the policy evaluations cannot be
+read, the report says so and still shows the rest. The Copilot line is the newest
+system comment in the threads that mentions a Copilot review, reported as
 `completed` or `requested` with its date, or `none`. Other wording, such as a
 cancellation, still counts as the newest entry and is shown as quoted text with its
-date. It is best effort because Azure's wording is unverified. See
-[ADR 0007](adr/0007-report-pr-status-from-a-status-module.md).
+date. It is best effort because Azure's wording is unverified. See [ADR
+0007](adr/0007-report-pr-status-from-a-status-module.md).
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
 and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
