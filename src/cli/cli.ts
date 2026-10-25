@@ -1,5 +1,9 @@
 import minimist from "minimist";
-import { RESOLVED_STATUSES, type ResolvedStatus } from "../comments/threads.ts";
+import {
+	findResolvedStatus,
+	RESOLVED_STATUSES,
+	type ResolvedStatus,
+} from "../comments/threads.ts";
 import {
 	BOOLEAN_FLAG_NAMES,
 	COMMAND_REGISTRY,
@@ -208,11 +212,11 @@ type FlagValues = Partial<
 	Record<FlagName, string | string[] | number | boolean>
 >;
 
-function parseResolvedStatus(raw: string | undefined): ResolvedStatus {
-	if (raw === undefined) return "fixed";
-	const status = RESOLVED_STATUSES.find(
-		(value) => value.toLowerCase() === raw.toLowerCase(),
-	);
+function parseResolvedStatus(
+	raw: string | undefined,
+): ResolvedStatus | undefined {
+	if (raw === undefined) return undefined;
+	const status = findResolvedStatus(raw);
 	if (!status) {
 		printUsageAndExit(
 			`invalid --status "${raw}" (must be one of: ${RESOLVED_STATUSES.join(", ")})`,
@@ -578,6 +582,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		pr: values.pr,
 		thread: values.thread,
 		message: values.message,
+		status: values.status as ResolvedStatus | undefined,
 	}),
 	"comment.edit": (values) => ({
 		resource: "comment",
@@ -599,7 +604,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		command: "resolve",
 		pr: values.pr,
 		thread: values.thread,
-		status: values.status as ResolvedStatus,
+		status: (values.status as ResolvedStatus | undefined) ?? "fixed",
 	}),
 	"comment.reopen": (values) => ({
 		resource: "comment",
