@@ -609,6 +609,12 @@ function validatesHead(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 	);
 }
 
+/** Queue time in milliseconds; a missing or invalid time sorts as the oldest. */
+function queuedAt(build: AzureBuild): number {
+	const time = Date.parse(build.queueTime ?? "");
+	return Number.isNaN(time) ? 0 : time;
+}
+
 function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 	return (
 		pr.status !== undefined &&
@@ -1471,10 +1477,7 @@ export function createBuildService({
 		return [
 			...(await listAssociatedBuilds(pr, false, signal)),
 			...(await listAssociatedBuilds(pr, true, signal)),
-		].sort(
-			(left, right) =>
-				Date.parse(right.queueTime ?? "") - Date.parse(left.queueTime ?? ""),
-		);
+		].sort((left, right) => queuedAt(right) - queuedAt(left));
 	}
 
 	async function selectLatestBuild(
