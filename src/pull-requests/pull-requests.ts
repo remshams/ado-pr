@@ -108,6 +108,10 @@ export interface PullRequestService {
 	update(prId: number, options: UpdatePullRequestOptions): Promise<PullRequest>;
 	get(prId: number, options?: PullRequestReadOptions): Promise<PullRequest>;
 	findForCurrentBranch(options?: PullRequestReadOptions): Promise<PullRequest>;
+	findActiveForBranch(
+		branch: string,
+		options?: PullRequestReadOptions,
+	): Promise<PullRequest[]>;
 	resolve(
 		requestedPrId: number | undefined,
 		options?: PullRequestReadOptions,
@@ -686,6 +690,27 @@ export function createPullRequestService({
 		await azure.request(url, { method: "DELETE", responseType: "none" });
 	}
 
+	/** Lists the active pull requests whose source is the branch (a short name or a full ref). */
+	async function findActiveForBranch(
+		branch: string,
+		options: PullRequestReadOptions = {},
+	): Promise<PullRequest[]> {
+		const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(toFullRef(branch))}&searchCriteria.status=active&api-version=${API_VERSION}`;
+		const data = await azure.request<{ value: PullRequest[] }>(url, options);
+		if (!Array.isArray(data.value)) {
+			throw new Error(
+				"Malformed Azure DevOps response: pull request collection value must be an array.",
+			);
+		}
+		for (const [index, candidate] of data.value.entries()) {
+			assertPullRequestId(
+				candidate?.pullRequestId,
+				`pull request collection value[${index}].pullRequestId`,
+			);
+		}
+		return data.value;
+	}
+
 	async function findForCurrentBranch(
 		options: PullRequestReadOptions = {},
 	): Promise<PullRequest> {
@@ -707,33 +732,21 @@ export function createPullRequestService({
 				"abort",
 			);
 		}
-		const url = `${reposBaseUrl(ctx)}/pullrequests?searchCriteria.sourceRefName=${encodeURIComponent(toFullRef(branch))}&searchCriteria.status=active&api-version=${API_VERSION}`;
-		const data = await azure.request<{ value: PullRequest[] }>(url, options);
-		if (!Array.isArray(data.value)) {
-			throw new Error(
-				"Malformed Azure DevOps response: pull request collection value must be an array.",
-			);
-		}
-		for (const [index, candidate] of data.value.entries()) {
-			assertPullRequestId(
-				candidate?.pullRequestId,
-				`pull request collection value[${index}].pullRequestId`,
-			);
-		}
+		const candidates = await findActiveForBranch(branch, options);
 
-		if (data.value.length === 0) {
+		if (candidates.length === 0) {
 			throw new Error(
 				`No active pull request found for branch "${branch}" in ${ctx.organization}/${ctx.project}/${ctx.repository}.`,
 			);
 		}
-		if (data.value.length > 1) {
+		if (candidates.length > 1) {
 			throw new Error(
-				`Multiple active pull requests found for branch "${branch}"; pass --pr <id> to disambiguate:\n${data.value
+				`Multiple active pull requests found for branch "${branch}"; pass --pr <id> to disambiguate:\n${candidates
 					.map((pr) => `  #${pr.pullRequestId}: ${pr.title}`)
 					.join("\n")}`,
 			);
 		}
-		return data.value[0];
+		return candidates[0];
 	}
 
 	/**
@@ -1063,6 +1076,7 @@ export function createPullRequestService({
 		update,
 		get,
 		findForCurrentBranch,
+		findActiveForBranch,
 		resolve,
 		resolveId,
 		attach,
