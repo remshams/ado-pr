@@ -37,6 +37,18 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"Show only what changed since this pull request iteration; `pr diff` only.",
 	},
+	"since-last-review": {
+		kind: "boolean",
+		usage: "--since-last-review",
+		description:
+			"Heuristic: show what changed since your last comment or vote; `pr diff` only.",
+	},
+	"name-only": {
+		kind: "boolean",
+		usage: "--name-only",
+		description:
+			"List changed paths with their change type and no content; `pr diff` only.",
+	},
 	reviewing: {
 		kind: "boolean",
 		usage: "--reviewing",
@@ -186,7 +198,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "boolean",
 		usage: "--json",
 		description:
-			"Print normalized build output, the PR status document, or raw JSON for PR/comment list and PR show.",
+			"Print normalized build output, the PR status document and PR diffs, or raw JSON for PR/comment list and PR show.",
 	},
 	help: {
 		kind: "boolean",
@@ -263,6 +275,7 @@ export type BatchFieldName = keyof typeof BATCH_FIELD_DEFINITIONS;
 export type CommandValidationRule =
 	| "pullRequestList"
 	| "pullRequestEdit"
+	| "pullRequestDiff"
 	| "commentLocation"
 	| "buildWaitBounds"
 	| "buildSelection"
@@ -325,9 +338,12 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"pr.diff": {
 		resource: "pr",
 		command: "diff",
-		usage: "pr diff [--pr <id>] [--since-iteration <n>]",
-		summary: "Print the pull request diff from Azure DevOps as a unified diff.",
-		flags: ["pr", "since-iteration"],
+		usage:
+			"pr diff [--pr <id>] [--since-iteration <n> | --since-last-review] [--name-only] [--json]",
+		summary:
+			"Print the pull request diff from Azure DevOps as a unified diff, changed paths or JSON.",
+		flags: ["pr", "since-iteration", "since-last-review", "name-only", "json"],
+		validationRules: ["pullRequestDiff"],
 	},
 	"pr.create": {
 		resource: "pr",
