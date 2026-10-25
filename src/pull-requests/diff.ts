@@ -293,9 +293,32 @@ function printedEnvelopeBytes(envelope: PullRequestDiffJson): number {
 	);
 }
 
+/** Control and bidi characters a path must not print raw: they would break the tab format or the terminal. */
+const UNSAFE_PATH_CHARACTERS =
+	/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+
+/**
+ * Quotes a path that contains control or bidi characters, as git does, so each entry stays on one
+ * line: the path is wrapped in double quotes and those characters are written as \uXXXX escapes.
+ */
+function quotePath(path: string): string {
+	if (path.search(UNSAFE_PATH_CHARACTERS) === -1) return path;
+	const escaped = path
+		.replace(/[\\"]/g, (character) => `\\${character}`)
+		.replace(
+			UNSAFE_PATH_CHARACTERS,
+			(character) =>
+				`\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+		);
+	return `"${escaped}"`;
+}
+
 function formatNameOnly(file: ChangedFile): string {
 	const { path, originalPath } = fileNames(file);
-	const paths = path === originalPath ? path : `${originalPath} -> ${path}`;
+	const paths =
+		path === originalPath
+			? quotePath(path)
+			: `${quotePath(originalPath)} -> ${quotePath(path)}`;
 	return `${file.change}\t${paths}\n`;
 }
 
