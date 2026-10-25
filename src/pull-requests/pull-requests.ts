@@ -33,6 +33,9 @@ export interface PullRequest {
 	lastMergeCommit?: PullRequestCommit;
 	lastMergeSourceCommit?: PullRequestCommit;
 	mergeStatus?: string;
+	mergeFailureMessage?: string;
+	/** Azure's completion options, kept as sent so a completion can carry them over. */
+	completionOptions?: Record<string, unknown>;
 	reviewers?: PullRequestReviewer[];
 }
 
