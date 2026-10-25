@@ -30,6 +30,7 @@ import {
 	createPullRequestService,
 } from "./pull-requests/pull-requests.ts";
 import { createThreadService } from "./comments/threads.ts";
+import { createStatusService } from "./status/status.ts";
 
 function assertNever(value: never): never {
 	throw new Error(`Unhandled command: ${JSON.stringify(value)}`);
@@ -160,6 +161,7 @@ async function runBuildCommand(
 async function runPullRequestCommand(
 	options: Extract<CliOptions, { resource: "pr" }>,
 	pullRequests: ReturnType<typeof createPullRequestService>,
+	status: ReturnType<typeof createStatusService>,
 	ctx: AzureDevOpsRepoContext,
 ): Promise<void> {
 	switch (options.command) {
@@ -178,6 +180,10 @@ async function runPullRequestCommand(
 			console.log(
 				options.json ? JSON.stringify(pr, null, 2) : pullRequests.format(pr),
 			);
+			return;
+		}
+		case "status": {
+			console.log(status.format(await status.get(options.pr)));
 			return;
 		}
 		case "edit": {
@@ -322,10 +328,17 @@ async function main(): Promise<void> {
 	const threads = createThreadService({ azure, ctx, fileAnchors });
 	const batch = createBatchRunner({ threads });
 	const builds = createBuildService({ azure, ctx, pullRequests });
+	const status = createStatusService({
+		azure,
+		ctx,
+		pullRequests,
+		builds,
+		threads,
+	});
 
 	if (options.resource === "build") return runBuildCommand(options, builds);
 	if (options.resource === "pr")
-		return runPullRequestCommand(options, pullRequests, ctx);
+		return runPullRequestCommand(options, pullRequests, status, ctx);
 	return runCommentCommand(options, pullRequests, threads, batch);
 }
 
