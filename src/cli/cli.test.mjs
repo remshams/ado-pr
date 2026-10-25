@@ -172,10 +172,11 @@ test("bare --help and -h document every resource-first command and the batch con
 
 	for (const shape of [
 		'{"command":"comment.create","message":"...","pr"?:n,"file"?:"...","line"?:n,"endLine"?:n}',
-		'{"command":"comment.reply","thread":n,"message":"...","pr"?:n}',
+		'{"command":"comment.reply","thread":n,"message":"...","pr"?:n,"status"?:"fixed"}',
 		'{"command":"comment.edit","thread":n,"comment":n,"message":"...","pr"?:n}',
 		'{"command":"comment.delete","thread":n,"comment":n,"pr"?:n}',
-		'{"command":"comment.resolve","thread":n,"pr"?:n}',
+		'{"command":"comment.resolve","thread":n,"pr"?:n,"status"?:"fixed"}',
+		'{"command":"comment.reopen","thread":n,"pr"?:n}',
 	]) {
 		assert.ok(result.stderr.includes(shape));
 	}
@@ -1161,6 +1162,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				pr: 7,
 				thread: 8,
 				message: "Reply",
+				status: undefined,
 			},
 		],
 		[
@@ -1307,6 +1309,53 @@ test("resolve normalizes all supported statuses and defaults to fixed", () => {
 		parseOptions(["comment", "resolve", "--thread", "9"]).status,
 		"fixed",
 	);
+});
+
+test("reply normalizes supported statuses and leaves the status unset by default", () => {
+	for (const status of ["fixed", "wontFix", "byDesign", "closed"]) {
+		assert.deepEqual(
+			parseOptions([
+				"comment",
+				"reply",
+				"--thread",
+				"9",
+				"--message",
+				"Done",
+				"--status",
+				status.toUpperCase(),
+			]),
+			{
+				resource: "comment",
+				command: "reply",
+				pr: undefined,
+				thread: 9,
+				message: "Done",
+				status,
+			},
+		);
+	}
+	assert.equal(
+		parseOptions(["comment", "reply", "--thread", "9", "--message", "Done"])
+			.status,
+		undefined,
+	);
+});
+
+test("reply rejects statuses outside the resolution set", () => {
+	for (const value of ["active", "unknown"]) {
+		assertUsageError(
+			runCli(
+				"comment",
+				"reply",
+				"--thread",
+				"9",
+				"--message",
+				"Done",
+				`--status=${value}`,
+			),
+			`Error: invalid --status "${value}" (must be one of: fixed, wontFix, byDesign, closed)`,
+		);
+	}
 });
 
 test("resolve rejects invalid and missing status values", () => {

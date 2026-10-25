@@ -108,6 +108,7 @@ type CliOptionsShape =
 			command: "reply";
 			thread: number;
 			message: string;
+			status?: ResolvedStatus;
 	  })
 	| (PullRequestTarget & {
 			resource: "comment";
