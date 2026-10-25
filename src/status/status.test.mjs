@@ -240,6 +240,41 @@ describe("status", () => {
 		}
 	});
 
+	test("prints unknown Copilot wording as sanitized text with its date", async (t) => {
+		const requested = copilotThread(
+			"Copilot balanced review requested by branch policy.",
+			"2026-10-20T10:00:00Z",
+		);
+		const cancelled = {
+			...copilotThread(
+				"Copilot code review\u001b[31m cancelled\nby the author",
+				"2026-10-20T10:30:00Z",
+			),
+			id: 91,
+		};
+		const { service } = setup(t, { threads: [requested, cancelled] });
+		assert.match(
+			service.format(await service.get(42)),
+			/^Copilot review \(best effort\): "Copilot code review.* cancelled by the author" \(2026-10-20T10:30:00Z\)$/m,
+		);
+	});
+
+	test("bounds long unknown Copilot wording", async (t) => {
+		const { service } = setup(t, {
+			threads: [
+				copilotThread(
+					`Copilot review ${"x".repeat(500)}`,
+					"2026-10-20T10:30:00Z",
+				),
+			],
+		});
+		const line = service
+			.format(await service.get(42))
+			.split("\n")
+			.find((entry) => entry.startsWith("Copilot review"));
+		assert.ok(line.length < 200, line);
+	});
+
 	test("shows draft PRs, unknown fields and reviewers without votes", async (t) => {
 		const { service } = setup(t, {
 			pr: pullRequest({
