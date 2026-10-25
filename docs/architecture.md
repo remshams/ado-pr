@@ -42,7 +42,8 @@ current branch where the command allows it.
 - `src/shared/`: Azure HTTP access, URL helpers, Git repository context, safe JSON
   formatting for stdout and the command contracts and types that several modules use.
 - `src/pull-requests/`: finding, listing, creating and editing pull requests,
-  including generic attachment uploads, description images and reviewers. It also
+  including generic attachment uploads, description images and reviewers. It sets
+  the user's vote and abandons or reactivates a pull request. It also
   reads pull request diffs: an anti-corruption layer maps Azure iteration changes,
   file diffs and file content to line blocks, and a separate domain service formats
   those blocks as a size-limited unified diff or lists their changed lines for JSON.
