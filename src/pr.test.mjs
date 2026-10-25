@@ -117,6 +117,34 @@ function validationBuild(overrides = {}) {
 const buildListUrl = (branch) =>
 	`${buildApiBase}?${branch === "merge" ? "reasonFilter=pullRequest&" : ""}branchName=${encodeURIComponent(branch === "merge" ? "refs/pull/42/merge" : "refs/heads/feature/dispatch")}&repositoryId=repo-id&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1`;
 
+function headValidationPr(overrides = {}) {
+	return validationPr({
+		lastMergeSourceCommit: { commitId: "head-2" },
+		...overrides,
+	});
+}
+
+function listBuilds() {
+	const branch = (id, sourceVersion, queueTime) =>
+		validationBuild({
+			id,
+			reason: "manual",
+			sourceBranch: "refs/heads/feature/dispatch",
+			sourceVersion,
+			queueTime,
+		});
+	return {
+		merge: validationBuild({ id: 702, queueTime: "2026-08-18T11:00:00Z" }),
+		staleMerge: validationBuild({
+			id: 700,
+			sourceVersion: "merge-0",
+			queueTime: "2026-08-18T09:00:00Z",
+		}),
+		branch: branch(703, "head-2", "2026-08-18T12:00:00Z"),
+		staleBranch: branch(701, "head-1", "2026-08-18T10:00:00Z"),
+	};
+}
+
 test("build list dispatches through BuildService and prints a normalized JSON envelope", (t) => {
 	const cwd = createRepo(t);
 	const pr = validationPr();
@@ -145,6 +173,112 @@ test("build list dispatches through BuildService and prints a normalized JSON en
 	});
 	assert.equal(result.calls[1].url, buildListUrl("merge"));
 	assert.equal(result.calls[2].url, buildListUrl("branch"));
+});
+
+test("build list --json merges PR and branch builds newest first with the label and current marker", (t) => {
+	const cwd = createRepo(t);
+	const { merge, staleMerge, branch, staleBranch } = listBuilds();
+	const pr = headValidationPr();
+	const result = runPr(t, ["build", "list", "--pr", "42", "--json"], {
+		cwd,
+		responses: [
+			{ json: pr },
+			{ json: { value: [merge, staleMerge] } },
+			{ json: { value: [staleBranch, branch] } },
+			{ json: pr },
+		],
+	});
+
+	assertSucceeded(result);
+	const { builds } = JSON.parse(result.stdout);
+	assert.deepEqual(
+		builds.map(({ id, association, current }) => [id, association, current]),
+		[
+			[703, "branch-head", true],
+			[702, "pr-merge", true],
+		],
+	);
+	assert.equal(builds[0].sourceVersion, "head-2");
+	assert.equal(builds[0].queueTime, "2026-08-18T12:00:00Z");
+});
+
+test("build list --history prints every associated build newest first with labels", (t) => {
+	const cwd = createRepo(t);
+	const { merge, staleMerge, branch, staleBranch } = listBuilds();
+	const result = runPr(
+		t,
+		["build", "list", "--pr", "42", "--history", "--json"],
+		{
+			cwd,
+			responses: [
+				{ json: headValidationPr() },
+				{ json: { value: [merge, staleMerge] } },
+				{ json: { value: [staleBranch, branch] } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(
+		JSON.parse(result.stdout).builds.map(({ id, association, current }) => [
+			id,
+			association,
+			current,
+		]),
+		[
+			[703, "branch-head", true],
+			[702, "pr-merge", true],
+			[701, "branch-head", false],
+			[700, "pr-merge", false],
+		],
+	);
+});
+
+test("build list --history human output labels both build kinds and marks current builds", (t) => {
+	const cwd = createRepo(t);
+	const { merge, branch } = listBuilds();
+	const result = runPr(t, ["build", "list", "--pr", "42", "--history"], {
+		cwd,
+		responses: [
+			{ json: headValidationPr() },
+			{ json: { value: [merge] } },
+			{ json: { value: [branch] } },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.match(
+		result.stdout,
+		/Builds for PR #42: Build validation \(history\)/,
+	);
+	assert.match(
+		result.stdout,
+		/Build 703\/[^\n]*\n {2}Association: branch-head\n {2}Status\/result: completed\/failed \[current\]/,
+	);
+	assert.match(
+		result.stdout,
+		/Build 702\/[^\n]*\n {2}Association: pr-merge\n {2}Status\/result: completed\/failed \[current\]/,
+	);
+});
+
+test("build list explains an empty current view that hides stale builds", (t) => {
+	const cwd = createRepo(t);
+	const { staleMerge, staleBranch } = listBuilds();
+	const result = runPr(t, ["build", "list", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: headValidationPr() },
+			{ json: { value: [staleMerge] } },
+			{ json: { value: [staleBranch] } },
+			{ json: headValidationPr() },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"No associated current head builds found for PR #42. 2 stale builds exist; use build list --history or build show --latest.\n",
+	);
 });
 
 test("build list prints a successful explicit message for an empty current collection", (t) => {
