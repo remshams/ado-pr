@@ -3,7 +3,11 @@ import test from "node:test";
 
 import { createAzureRequester } from "../shared/azure.ts";
 import { createFileAnchorService } from "./file-anchors.ts";
-import { countUnresolvedThreads, createThreadService } from "./threads.ts";
+import {
+	countUnresolvedThreads,
+	createThreadService,
+	findResolvedStatus,
+} from "./threads.ts";
 import { createMockFetch } from "../../tests/test-helpers.mjs";
 
 const ctx = {
@@ -459,6 +463,43 @@ test.describe("threads", () => {
 				},
 			},
 		]);
+	});
+
+	test("reply with a status posts the comment, then patches the thread", async (t) => {
+		const { calls, threads } = createServices(t, [{ json: {} }, { json: {} }]);
+
+		await threads.reply(prId, 17, "Reply text", "byDesign");
+
+		assert.deepEqual(requestShapes(calls), [
+			{
+				url: `${apiBase}/threads/17/comments?api-version=7.1`,
+				method: "POST",
+				body: { content: "Reply text" },
+			},
+			{
+				url: `${apiBase}/threads/17?api-version=7.1`,
+				method: "PATCH",
+				body: { status: "byDesign" },
+			},
+		]);
+	});
+
+	test("reply says the comment was posted when the status update fails", async (t) => {
+		const { calls, threads } = createServices(t, [
+			{ json: {} },
+			{ status: 500, statusText: "Server Error", body: "boom" },
+		]);
+
+		await assert.rejects(
+			threads.reply(prId, 17, "Reply text", "fixed"),
+			/^Error: Reply posted to thread 17, but setting its status to fixed failed: /,
+		);
+		assert.equal(calls.length, 2);
+	});
+
+	test("findResolvedStatus matches case-insensitively", () => {
+		assert.equal(findResolvedStatus("BYdesign"), "byDesign");
+		assert.equal(findResolvedStatus("active"), undefined);
 	});
 
 	test("resolve sends the fixed-status request", async (t) => {

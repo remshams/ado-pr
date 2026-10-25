@@ -21,6 +21,13 @@ export const RESOLVED_STATUSES = [
 ] as const;
 export type ResolvedStatus = (typeof RESOLVED_STATUSES)[number];
 
+/** Matches a status name case-insensitively and returns its canonical spelling. */
+export function findResolvedStatus(raw: string): ResolvedStatus | undefined {
+	return RESOLVED_STATUSES.find(
+		(value) => value.toLowerCase() === raw.toLowerCase(),
+	);
+}
+
 interface Comment {
 	id: number;
 	content?: string;
@@ -51,7 +58,12 @@ export interface ThreadService {
 		message: string,
 		location?: CommentLocation,
 	): Promise<CommentThread>;
-	reply(prId: number, threadId: number, message: string): Promise<void>;
+	reply(
+		prId: number,
+		threadId: number,
+		message: string,
+		status?: ResolvedStatus,
+	): Promise<void>;
 	edit(
 		prId: number,
 		threadId: number,
@@ -206,13 +218,23 @@ export function createThreadService({
 		});
 	}
 
+	/** Posts a reply and, when a status is given, sets the thread status afterwards. */
 	async function reply(
 		prId: number,
 		threadId: number,
 		message: string,
+		status?: ResolvedStatus,
 	): Promise<void> {
 		const url = `${pullRequestApiUrl(ctx, prId, `/threads/${threadId}/comments`)}?api-version=${API_VERSION}`;
 		await azure.request(url, { method: "POST", body: { content: message } });
+		if (!status) return;
+		try {
+			await setStatus(prId, threadId, status);
+		} catch (error) {
+			throw new Error(
+				`Reply posted to thread ${threadId}, but setting its status to ${status} failed: ${(error as Error).message}`,
+			);
+		}
 	}
 
 	async function edit(
