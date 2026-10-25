@@ -78,6 +78,20 @@ Pull request diff:
   and what it is compared with: the merge base, or the iteration given with --since-iteration.
   Binary files are listed without content. Output stops after 100,000 bytes and ends with a
   notice naming where it was cut.
+  --since-last-review is a heuristic. It compares with the latest iteration created before your
+  newest comment or vote. Votes come from the system entries Azure posts in the PR threads, such
+  as "<name> voted 10". It fails when you have no such activity or no iteration predates it; pass
+  --since-iteration then. It cannot be combined with --since-iteration.
+  --name-only prints only one line per file: the change, a tab and the path, with
+  "<original> -> <path>" for renames. Changes are add, edit, delete or rename. It reads no content.
+  --json prints {pullRequestId, iteration, baseIteration, lastReview, files, truncated}.
+  baseIteration is null for the merge base; lastReview is the --since-last-review cutoff or null.
+  Each file has path, originalPath, change, content and blocks. content is text, binary, none (a
+  pure rename) or omitted (did not fit the 100,000-byte limit, which sets truncated). Each block
+  has originalStart, originalCount, modifiedStart, modifiedCount and the removed and added lines;
+  an empty side starts at the line the change comes before. With --name-only, files have only
+  path, originalPath and change. The limit covers the printed JSON, but every file is listed, so
+  a pull request with thousands of files can exceed it.
 
 Build selection:
   \`build show\` and \`build wait\` require exactly one of --build <id> or --latest.
