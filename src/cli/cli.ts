@@ -489,6 +489,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		resource: "pr",
 		command: "status",
 		pr: values.pr,
+		json: values.json,
 	}),
 	"pr.diff": (values) => ({
 		resource: "pr",
