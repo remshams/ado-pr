@@ -1639,3 +1639,46 @@ test("pr status parses an optional PR and --json, and rejects flags it does not 
 	);
 	assertSuccessfulHelp(runCli("pr", "status", "--help"));
 });
+
+test("vote requires a valid vote and accepts any case", () => {
+	assertUsageError(
+		runCli("pr", "vote"),
+		'Error: --vote is required for "pr vote"',
+	);
+	assertUsageError(
+		runCli("pr", "vote", "--vote", "maybe"),
+		'Error: invalid --vote "maybe" (must be one of: approve, approve-with-suggestions, wait, reject, reset)',
+	);
+	assertUsageError(
+		runCli("pr", "vote", "--vote", "approve", "--status", "fixed"),
+		'Error: --status is not valid for "pr vote"',
+	);
+	assert.deepEqual(
+		parseOptions(["pr", "vote", "--vote", "Wait", "--pr", "7"]),
+		{
+			resource: "pr",
+			command: "vote",
+			pr: 7,
+			vote: "wait",
+		},
+	);
+	assert.equal(parseOptions(["pr", "vote", "--vote", "approve"]).pr, undefined);
+});
+
+test("abandon takes an optional PR and reactivate requires one", () => {
+	assert.deepEqual(parseOptions(["pr", "abandon"]), {
+		resource: "pr",
+		command: "abandon",
+		pr: undefined,
+	});
+	assert.equal(parseOptions(["pr", "abandon", "--pr", "7"]).pr, 7);
+	assert.deepEqual(parseOptions(["pr", "reactivate", "--pr", "7"]), {
+		resource: "pr",
+		command: "reactivate",
+		pr: 7,
+	});
+	assertUsageError(
+		runCli("pr", "reactivate"),
+		'Error: --pr is required for "pr reactivate" (abandoned pull requests are not found from the current branch)',
+	);
+});

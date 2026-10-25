@@ -20,6 +20,11 @@ import {
 	STRING_FLAG_NAMES,
 	type TextFlagName,
 } from "../shared/command-contracts.ts";
+import {
+	findVoteName,
+	VOTE_NAMES,
+	type VoteName,
+} from "../pull-requests/state-changes.ts";
 import { isPositiveInteger } from "../shared/operation-types.ts";
 import { formatHelp } from "./command-registry.ts";
 import type { CliOptions } from "./operation-types.ts";
@@ -225,6 +230,17 @@ function parseResolvedStatus(
 	return status;
 }
 
+function parseVote(raw: string | undefined): VoteName | undefined {
+	if (raw === undefined) return undefined;
+	const vote = findVoteName(raw);
+	if (!vote) {
+		printUsageAndExit(
+			`invalid --vote "${raw}" (must be one of: ${VOTE_NAMES.join(", ")})`,
+		);
+	}
+	return vote;
+}
+
 function parseFlagValue(
 	occurrences: FlagOccurrences,
 	flag: FlagName,
@@ -239,7 +255,8 @@ function parseFlagValue(
 			flag as RepeatableStringFlagName,
 		);
 	const raw = parseStringFlag(occurrences, flag as TextFlagName);
-	return flag === "status" ? parseResolvedStatus(raw) : raw;
+	if (flag === "status") return parseResolvedStatus(raw);
+	return flag === "vote" ? parseVote(raw) : raw;
 }
 
 function validatePullRequestEdit(
@@ -309,6 +326,11 @@ function validateCommentAttachment(values: FlagValues): void {
 	}
 }
 
+const REQUIRED_FLAG_HINTS: Record<string, string> = {
+	"pr reactivate":
+		" (abandoned pull requests are not found from the current branch)",
+};
+
 function validateRequiredFlag(
 	flag: FlagName,
 	value: FlagValues[FlagName],
@@ -317,7 +339,9 @@ function validateRequiredFlag(
 	route: string,
 ): void {
 	if (enforceRequired && requiredFlags.has(flag) && !value) {
-		printUsageAndExit(`--${flag} is required for "${route}"`);
+		printUsageAndExit(
+			`--${flag} is required for "${route}"${REQUIRED_FLAG_HINTS[route] ?? ""}`,
+		);
 	}
 }
 
@@ -526,6 +550,22 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		sinceLastReview: values["since-last-review"],
 		nameOnly: values["name-only"],
 		json: values.json,
+	}),
+	"pr.vote": (values) => ({
+		resource: "pr",
+		command: "vote",
+		pr: values.pr,
+		vote: values.vote as VoteName,
+	}),
+	"pr.abandon": (values) => ({
+		resource: "pr",
+		command: "abandon",
+		pr: values.pr,
+	}),
+	"pr.reactivate": (values) => ({
+		resource: "pr",
+		command: "reactivate",
+		pr: values.pr,
 	}),
 	"pr.create": (values) => ({
 		resource: "pr",

@@ -1,4 +1,5 @@
 import type { ResolvedStatus } from "../comments/threads.ts";
+import type { VoteName } from "../pull-requests/state-changes.ts";
 import type { CommandId } from "../shared/command-contracts.ts";
 
 interface PullRequestTarget {
@@ -38,6 +39,20 @@ type CliOptionsShape =
 			nameOnly: boolean;
 			json: boolean;
 	  })
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "vote";
+			vote: VoteName;
+	  })
+	| (PullRequestTarget & {
+			resource: "pr";
+			command: "abandon";
+	  })
+	| {
+			resource: "pr";
+			command: "reactivate";
+			pr: number;
+	  }
 	| {
 			resource: "pr";
 			command: "create";
