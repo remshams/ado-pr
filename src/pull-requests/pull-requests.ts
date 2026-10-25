@@ -70,6 +70,13 @@ export interface PullRequestReadOptions {
 	maxResponseBytes?: number;
 }
 
+interface AttachOptions {
+	/** Attachment filename; defaults to the path basename. */
+	name?: string;
+	/** Flag named in errors about `name`, for callers that expose it under another flag. */
+	nameFlag?: string;
+}
+
 interface PullRequestAttachment {
 	displayName: string;
 	url: string;
@@ -120,7 +127,7 @@ export interface PullRequestService {
 	attach(
 		requestedPrId: number | undefined,
 		path: string,
-		name?: string,
+		options?: AttachOptions,
 	): Promise<PullRequestAttachment>;
 	format(pr: PullRequest): string;
 	formatListItem(pr: PullRequest): string;
@@ -1022,9 +1029,9 @@ export function createPullRequestService({
 	async function attach(
 		requestedPrId: number | undefined,
 		path: string,
-		name?: string,
+		{ name, nameFlag = "--name" }: AttachOptions = {},
 	): Promise<PullRequestAttachment> {
-		if (name === "") throw new Error("--name must not be empty.");
+		if (name === "") throw new Error(`${nameFlag} must not be empty.`);
 		const prId = await resolveId(requestedPrId);
 		const filename = name ?? basename(path);
 		const bytes = new Uint8Array(await readFile(path));
@@ -1033,7 +1040,7 @@ export function createPullRequestService({
 		} catch (error) {
 			if (isRenameableUploadRejection(error)) {
 				throw new Error(
-					`${error.message}\nTry renaming the file with --name, for example --name "attachment.txt".`,
+					`${error.message}\nTry renaming the file with ${nameFlag}, for example ${nameFlag} "attachment.txt".`,
 				);
 			}
 			throw error;
