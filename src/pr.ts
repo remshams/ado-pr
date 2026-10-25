@@ -41,6 +41,7 @@ import {
 	ReplyStatusError,
 	type ResolvedStatus,
 } from "./comments/threads.ts";
+import { createPullRequestStateChangeService } from "./pull-requests/state-changes.ts";
 import { createStatusService } from "./status/status.ts";
 
 function assertNever(value: never): never {
@@ -171,8 +172,45 @@ async function runBuildCommand(
 	return assertNever(options);
 }
 
+const STATE_CHANGE_COMMANDS = ["vote", "abandon", "reactivate"] as const;
+type StateChangeOptions = Extract<
+	CliOptions,
+	{ resource: "pr"; command: (typeof STATE_CHANGE_COMMANDS)[number] }
+>;
+
+function isStateChange(options: CliOptions): options is StateChangeOptions {
+	return (
+		options.resource === "pr" &&
+		(STATE_CHANGE_COMMANDS as readonly string[]).includes(options.command)
+	);
+}
+
+async function runStateChangeCommand(
+	options: StateChangeOptions,
+	stateChanges: ReturnType<typeof createPullRequestStateChangeService>,
+): Promise<void> {
+	switch (options.command) {
+		case "vote": {
+			const prId = await stateChanges.vote(options.pr, options.vote);
+			console.log(`Set your vote on PR #${prId} to ${options.vote}.`);
+			return;
+		}
+		case "abandon": {
+			const prId = await stateChanges.abandon(options.pr);
+			console.log(`Abandoned PR #${prId}.`);
+			return;
+		}
+		case "reactivate": {
+			const prId = await stateChanges.reactivate(options.pr);
+			console.log(`Reactivated PR #${prId}.`);
+			return;
+		}
+	}
+	return assertNever(options);
+}
+
 async function runPullRequestCommand(
-	options: Extract<CliOptions, { resource: "pr" }>,
+	options: Exclude<Extract<CliOptions, { resource: "pr" }>, StateChangeOptions>,
 	pullRequests: ReturnType<typeof createPullRequestService>,
 	status: ReturnType<typeof createStatusService>,
 	diffs: ReturnType<typeof createPullRequestDiffService>,
@@ -431,7 +469,15 @@ async function main(): Promise<void> {
 		return latestReviewActivity(await threads.listAll(prId), userId) ?? null;
 	};
 
+	const stateChanges = createPullRequestStateChangeService({
+		azure,
+		ctx,
+		pullRequests,
+	});
+
 	if (options.resource === "build") return runBuildCommand(options, builds);
+	if (isStateChange(options))
+		return runStateChangeCommand(options, stateChanges);
 	if (options.resource === "pr")
 		return runPullRequestCommand(
 			options,

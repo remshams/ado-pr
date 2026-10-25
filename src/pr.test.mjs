@@ -3901,3 +3901,173 @@ test("pr diff --json --name-only prints only paths and change types", (t) => {
 	});
 	assert.equal(result.calls.length, 2);
 });
+
+test("pr vote puts the vote for the authenticated user and names it", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "vote", "--vote", "approve-with-suggestions", "--pr", "42"],
+		{
+			cwd,
+			responses: [
+				{ json: { authenticatedUser: { id: "user-1" } } },
+				{ json: { id: "user-1", vote: 5 } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url:
+				"https://dev.azure.com/acme/_apis/connectionData?" +
+				"connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
+			method: "GET",
+			body: null,
+		},
+		{
+			url: `${apiBase}/pullRequests/42/reviewers/user-1?api-version=7.1`,
+			method: "PUT",
+			body: { vote: 5 },
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		"Set your vote on PR #42 to approve-with-suggestions.\n",
+	);
+});
+
+test("pr vote sends each vote value and defaults to the branch's active PR", (t) => {
+	const cases = [
+		["approve", 10],
+		["wait", -5],
+		["reject", -10],
+		["reset", 0],
+	];
+	for (const [vote, value] of cases) {
+		const cwd = createRepo(t);
+		const result = runPr(t, ["pr", "vote", "--vote", vote], {
+			cwd,
+			responses: [
+				{ json: { value: [{ pullRequestId: 7, title: "Branch PR" }] } },
+				{ json: { authenticatedUser: { id: "user-1" } } },
+				{ json: {} },
+			],
+		});
+
+		assertSucceeded(result);
+		assert.deepEqual(semanticRequest(result.calls[2]), {
+			url: `${apiBase}/pullRequests/7/reviewers/user-1?api-version=7.1`,
+			method: "PUT",
+			body: { vote: value },
+		});
+		assert.equal(result.stdout, `Set your vote on PR #7 to ${vote}.\n`);
+	}
+});
+
+test("pr vote rejects a missing or unknown vote before any Azure request", (t) => {
+	const cwd = createRepo(t);
+	for (const [args, error] of [
+		[["pr", "vote"], '--vote is required for "pr vote"'],
+		[
+			["pr", "vote", "--vote", "maybe"],
+			'invalid --vote "maybe" (must be one of: approve, approve-with-suggestions, wait, reject, reset)',
+		],
+	]) {
+		const result = runPr(t, args, { cwd, responses: [] });
+		assert.equal(result.status, 1);
+		assert.equal(result.stdout, "");
+		assert.ok(result.stderr.startsWith(`Error: ${error}\n`), result.stderr);
+		assert.deepEqual(result.calls, []);
+	}
+});
+
+test("pr abandon patches the status of an explicit PR", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "abandon", "--pr", "42"], {
+		cwd,
+		responses: [{ json: { pullRequestId: 42, status: "abandoned" } }],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "abandoned" },
+		},
+	]);
+	assert.equal(result.stdout, "Abandoned PR #42.\n");
+});
+
+test("pr abandon resolves the branch's active PR", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "abandon"], {
+		cwd,
+		responses: [
+			{ json: { value: [{ pullRequestId: 7, title: "Branch PR" }] } },
+			{ json: { pullRequestId: 7, status: "abandoned" } },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(semanticRequest(result.calls[1]), {
+		url: `${apiBase}/pullRequests/7?api-version=7.1`,
+		method: "PATCH",
+		body: { status: "abandoned" },
+	});
+	assert.equal(result.stdout, "Abandoned PR #7.\n");
+});
+
+test("pr reactivate patches an abandoned PR back to active", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "reactivate", "--pr", "42"], {
+		cwd,
+		responses: [{ json: { pullRequestId: 42, status: "active" } }],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42?api-version=7.1`,
+			method: "PATCH",
+			body: { status: "active" },
+		},
+	]);
+	assert.equal(result.stdout, "Reactivated PR #42.\n");
+});
+
+test("pr reactivate requires --pr before any Azure request", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "reactivate"], { cwd, responses: [] });
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.ok(
+		result.stderr.startsWith(
+			'Error: --pr is required for "pr reactivate" (abandoned pull requests are not found from the current branch)\n',
+		),
+		result.stderr,
+	);
+	assert.deepEqual(result.calls, []);
+});
+
+test("pr abandon and reactivate report Azure's status and message", (t) => {
+	const cwd = createRepo(t);
+	for (const [command, message] of [
+		["reactivate", "Pull request 42 is completed and cannot be reactivated."],
+		["abandon", "Pull request 42 is already abandoned."],
+	]) {
+		const result = runPr(t, ["pr", command, "--pr", "42"], {
+			cwd,
+			responses: [{ status: 400, statusText: "Bad Request", body: message }],
+		});
+
+		assert.equal(result.status, 1);
+		assert.equal(result.stdout, "");
+		assert.equal(
+			result.stderr,
+			`Azure DevOps API request (PATCH ${apiBase}/pullRequests/42?api-version=7.1) failed: 400 Bad Request\n${message}\n`,
+		);
+	}
+});
