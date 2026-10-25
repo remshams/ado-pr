@@ -61,6 +61,282 @@ test("pr attach reports Azure's rejection body and suggests --name", (t) => {
 	);
 });
 
+const completeHead = "2222222222222222222222222222222222222222";
+const pushedHead = "4444444444444444444444444444444444444444";
+const completeUrl = `${apiBase}/pullRequests/42?api-version=7.1`;
+const statusHint =
+	"Run `pr.sh pr status --pr 42` to see blocking policies, merge conflicts and the current head.";
+
+function completablePr(overrides = {}) {
+	return {
+		pullRequestId: 42,
+		title: "Add widgets",
+		status: "active",
+		sourceRefName: "refs/heads/feature/dispatch",
+		lastMergeSourceCommit: { commitId: completeHead },
+		mergeStatus: "succeeded",
+		...overrides,
+	};
+}
+
+// Azure error bodies carry the reason in `message`; statuses and wording are not verified.
+function azureRejection(status, statusText, message) {
+	return {
+		status,
+		statusText,
+		json: { $id: "1", innerException: null, message, errorCode: 0 },
+	};
+}
+
+// The server accepts only the head it has now and rejects any other head with 409.
+function serverAtHead(serverHead) {
+	return {
+		whenBodyIncludes: `"lastMergeSourceCommit":{"commitId":"${serverHead}"}`,
+		matched: { json: completablePr({ status: "completed" }) },
+		otherwise: azureRejection(
+			409,
+			"Conflict",
+			"TF401192: The source branch has been updated since the pull request was last merged.",
+		),
+	};
+}
+
+test("pr complete completes the branch PR at the head it just read", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "complete", "--merge-strategy", "squash"], {
+		cwd,
+		responses: [
+			{ json: { count: 1, value: [completablePr()] } },
+			{ json: completablePr() },
+			{ json: completablePr({ status: "completed", mergeStatus: "queued" }) },
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.slice(1).map(semanticRequest), [
+		{ url: completeUrl, method: "GET", body: null },
+		{
+			url: completeUrl,
+			method: "PATCH",
+			body: {
+				status: "completed",
+				lastMergeSourceCommit: { commitId: completeHead },
+				completionOptions: { mergeStrategy: "squash" },
+			},
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		[
+			"Requested completion of PR #42: Add widgets",
+			`Head commit: ${completeHead}`,
+			"Azure DevOps is still merging (merge status: queued). Run `pr.sh pr status --pr 42` to check the result.",
+			"Options: merge strategy squash",
+			`${webBase}/42`,
+			"",
+		].join("\n"),
+	);
+});
+
+test("pr complete keeps earlier completion options and overlays the flags given", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		[
+			"pr",
+			"complete",
+			"--pr",
+			"42",
+			"--merge-strategy",
+			"rebase-merge",
+			"--delete-source-branch",
+		],
+		{
+			cwd,
+			responses: [
+				{
+					json: completablePr({
+						completionOptions: {
+							transitionWorkItems: true,
+							mergeStrategy: "squash",
+						},
+					}),
+				},
+				serverAtHead(completeHead),
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(semanticRequest(result.calls[1]).body, {
+		status: "completed",
+		lastMergeSourceCommit: { commitId: completeHead },
+		completionOptions: {
+			transitionWorkItems: true,
+			mergeStrategy: "rebaseMerge",
+			deleteSourceBranch: true,
+		},
+	});
+	assert.equal(
+		result.stdout,
+		[
+			"Completed PR #42: Add widgets",
+			`Head commit: ${completeHead}`,
+			"Options: merge strategy rebase-merge, delete source branch",
+			`${webBase}/42`,
+			"",
+		].join("\n"),
+	);
+});
+
+test("pr complete --auto sets auto-complete for the authenticated user", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "complete", "--pr", "42", "--auto", "--merge-strategy", "squash"],
+		{
+			cwd,
+			responses: [
+				{ json: completablePr() },
+				{ json: { authenticatedUser: { id: "user-1" } } },
+				{ json: completablePr({ autoCompleteSetBy: { id: "user-1" } }) },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{ url: completeUrl, method: "GET", body: null },
+		{
+			url:
+				"https://dev.azure.com/acme/_apis/connectionData?" +
+				"connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1",
+			method: "GET",
+			body: null,
+		},
+		{
+			url: completeUrl,
+			method: "PATCH",
+			body: {
+				autoCompleteSetBy: { id: "user-1" },
+				completionOptions: { mergeStrategy: "squash" },
+			},
+		},
+	]);
+	assert.equal(
+		result.stdout,
+		[
+			"Set auto-complete on PR #42: Add widgets",
+			"Azure DevOps completes it once the required policies pass, at whatever head passes them, including later pushes.",
+			"Options: merge strategy squash",
+			`${webBase}/42`,
+			"",
+		].join("\n"),
+	);
+});
+
+test("pr complete reports Azure's rejection of a changed head", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "complete", "--pr", "42", "--merge-strategy", "merge"],
+		{
+			cwd,
+			responses: [{ json: completablePr() }, serverAtHead(pushedHead)],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.deepEqual(semanticRequest(result.calls[1]).body, {
+		status: "completed",
+		lastMergeSourceCommit: { commitId: completeHead },
+		completionOptions: { mergeStrategy: "noFastForward" },
+	});
+	assert.equal(
+		result.stderr,
+		[
+			"Azure DevOps rejected completing PR #42 (HTTP 409): TF401192: The source branch has been updated since the pull request was last merged.",
+			`Sent head commit ${completeHead}. If the source branch has moved since, review the new commits before completing again.`,
+			statusHint,
+			"",
+		].join("\n"),
+	);
+});
+
+test("pr complete reports a policy rejection with the pr status hint", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "complete", "--pr", "42", "--merge-strategy", "squash"],
+		{
+			cwd,
+			responses: [
+				{ json: completablePr() },
+				azureRejection(
+					409,
+					"Conflict",
+					"The pull request cannot be completed because required policies are not satisfied.",
+				),
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(
+		result.stderr,
+		[
+			"Azure DevOps rejected completing PR #42 (HTTP 409): The pull request cannot be completed because required policies are not satisfied.",
+			`Sent head commit ${completeHead}. If the source branch has moved since, review the new commits before completing again.`,
+			statusHint,
+			"",
+		].join("\n"),
+	);
+});
+
+test("pr complete exits 1 when the merge fails after the request", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "complete", "--pr", "42", "--merge-strategy", "squash"],
+		{
+			cwd,
+			responses: [
+				{ json: completablePr() },
+				{
+					json: completablePr({
+						mergeStatus: "conflicts",
+						mergeFailureMessage: "Merge conflicts in src/widgets.ts.",
+					}),
+				},
+			],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(
+		result.stderr,
+		`Azure DevOps could not merge PR #42 (merge status: conflicts): Merge conflicts in src/widgets.ts.\n${statusHint}\n`,
+	);
+});
+
+test("pr complete requires a merge strategy before any Azure request", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "complete", "--pr", "42", "--auto"], {
+		cwd,
+	});
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(
+		result.stderr,
+		/^Error: --merge-strategy is required for "pr complete"\n/,
+	);
+	assert.deepEqual(result.calls, []);
+});
+
 function createRepo(t, branch = "feature/dispatch") {
 	return createTempGitRepo(t, { origin, branch });
 }
