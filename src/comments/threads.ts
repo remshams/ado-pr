@@ -41,6 +41,10 @@ export interface CommentThread {
 	id: number;
 	status?: string;
 	isDeleted?: boolean;
+	/** Typed values, for example `{ "$type": "System.String", "$value": "VoteUpdate" }`. */
+	properties?: Record<string, { $value?: unknown } | undefined>;
+	/** Identities that properties such as `CodeReviewVotedByIdentity` refer to by key. */
+	identities?: Record<string, { id?: string } | undefined>;
 	threadContext?: CommentThreadContext;
 	pullRequestThreadContext?: PullRequestThreadContext;
 	comments: Comment[];
