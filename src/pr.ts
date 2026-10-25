@@ -14,7 +14,12 @@
  * {{image:<basename>}}, and every such placeholder needs an upload. Create/edit uploads replace
  * every exact match with marked image Markdown; edit removal strips only exact marked references.
  */
-import { createAzureRequester, pullRequestWebUrl } from "./shared/azure.ts";
+import {
+	createAzureRequester,
+	getAuthenticatedUserId,
+	pullRequestWebUrl,
+} from "./shared/azure.ts";
+import { safeJson } from "./shared/json.ts";
 import { createBatchRunner } from "./comments/batch.ts";
 import { createBuildService } from "./builds/builds.ts";
 import { getPat, parseArgs } from "./cli/cli.ts";
@@ -30,6 +35,7 @@ import {
 	attachmentMarkdownLink,
 	createPullRequestService,
 } from "./pull-requests/pull-requests.ts";
+import { latestReviewActivity } from "./comments/review-activity.ts";
 import {
 	createThreadService,
 	type ResolvedStatus,
@@ -38,14 +44,6 @@ import { createStatusService } from "./status/status.ts";
 
 function assertNever(value: never): never {
 	throw new Error(`Unhandled command: ${JSON.stringify(value)}`);
-}
-
-function safeJson(value: unknown): string {
-	return JSON.stringify(value, null, 2).replace(
-		/[\u007F-\u009F\u061C\u200E\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g,
-		(character) =>
-			`\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-	);
 }
 
 async function runBuildWait(
@@ -167,6 +165,7 @@ async function runPullRequestCommand(
 	pullRequests: ReturnType<typeof createPullRequestService>,
 	status: ReturnType<typeof createStatusService>,
 	diffs: ReturnType<typeof createPullRequestDiffService>,
+	lastReviewOf: (prId: number) => Promise<Date | null>,
 	ctx: AzureDevOpsRepoContext,
 ): Promise<void> {
 	switch (options.command) {
@@ -192,14 +191,8 @@ async function runPullRequestCommand(
 			console.log(options.json ? safeJson(result) : status.format(result));
 			return;
 		}
-		case "diff": {
-			process.stdout.write(
-				await diffs.diff(options.pr, {
-					sinceIteration: options.sinceIteration,
-				}),
-			);
-			return;
-		}
+		case "diff":
+			return runPullRequestDiff(options, pullRequests, diffs, lastReviewOf);
 		case "edit": {
 			const prId = await pullRequests.edit(options.pr, options);
 			console.log(`Updated PR #${prId}.`);
@@ -218,6 +211,25 @@ async function runPullRequestCommand(
 		}
 	}
 	return assertNever(options);
+}
+
+async function runPullRequestDiff(
+	options: Extract<CliOptions, { resource: "pr"; command: "diff" }>,
+	pullRequests: ReturnType<typeof createPullRequestService>,
+	diffs: ReturnType<typeof createPullRequestDiffService>,
+	lastReviewOf: (prId: number) => Promise<Date | null>,
+): Promise<void> {
+	const prId = await pullRequests.resolveId(options.pr);
+	const diffOptions = {
+		sinceIteration: options.sinceIteration,
+		lastReview: options.sinceLastReview ? await lastReviewOf(prId) : undefined,
+		nameOnly: options.nameOnly,
+	};
+	if (options.json) {
+		console.log(safeJson(await diffs.diffJson(prId, diffOptions)));
+		return;
+	}
+	process.stdout.write(await diffs.diff(prId, diffOptions));
 }
 
 async function runPullRequestList(
@@ -361,10 +373,21 @@ async function main(): Promise<void> {
 		threads,
 	});
 	const diffs = createPullRequestDiffService({ azure, ctx, pullRequests });
+	const lastReviewOf = async (prId: number): Promise<Date | null> => {
+		const userId = await getAuthenticatedUserId(azure, ctx.organization);
+		return latestReviewActivity(await threads.listAll(prId), userId) ?? null;
+	};
 
 	if (options.resource === "build") return runBuildCommand(options, builds);
 	if (options.resource === "pr")
-		return runPullRequestCommand(options, pullRequests, status, diffs, ctx);
+		return runPullRequestCommand(
+			options,
+			pullRequests,
+			status,
+			diffs,
+			lastReviewOf,
+			ctx,
+		);
 	return runCommentCommand(options, pullRequests, threads, batch);
 }
 
