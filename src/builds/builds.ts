@@ -290,8 +290,8 @@ export interface BuildService {
 	): Promise<AzureBuild>;
 	headBuild(pr: PullRequest): Promise<HeadBuild | null>;
 	policyEvaluations(pr: PullRequest): Promise<PolicyEvaluation[]>;
-	queuePr(prId: number): Promise<QueuedBuild>;
-	queueBranch(branch: string): Promise<AzureBuild>;
+	queuePr(prId: number, definitionId?: number): Promise<QueuedBuild>;
+	queueBranch(branch: string, definitionId?: number): Promise<AzureBuild>;
 	wait(
 		requestedPrId: number | undefined,
 		buildId: number | "latest",
@@ -301,7 +301,9 @@ export interface BuildService {
 	formatList(result: BuildListEnvelope): string;
 	formatShow(result: BuildShowEnvelope): string;
 	formatRetry(build: AzureBuild): string;
-	formatQueue(build: AzureBuild): string;
+	branchPullRequestId(branch: string): Promise<number | undefined>;
+	formatQueue(build: AzureBuild, prId?: number): string;
+	formatRequeue(evaluationId: string, prId: number): string;
 	formatWaitProgress(event: BuildWaitProgress): string;
 	formatWaitResult(result: BuildWaitEnvelope): string;
 }
@@ -1236,7 +1238,20 @@ function policyEvaluationLabel(evaluation: AzureObject): string {
 		? evaluation.configuration
 		: undefined;
 	const name = configuration?.name ?? evaluation.configurationName;
-	return `evaluation ${display(evaluation.evaluationId)}${typeof name === "string" ? ` (${display(name)})` : ""}`;
+	const definitionId = evaluationDefinitionId(evaluation);
+	return `evaluation ${display(evaluation.evaluationId)}${typeof name === "string" ? ` (${display(name)})` : ""}${definitionId === undefined ? "" : `, build pipeline ${definitionId}`}`;
+}
+
+function evaluationDefinitionId(evaluation: AzureObject): number | undefined {
+	const configuration = isObject(evaluation.configuration)
+		? evaluation.configuration
+		: undefined;
+	const settings = isObject(configuration?.settings)
+		? configuration.settings
+		: undefined;
+	return typeof settings?.buildDefinitionId === "number"
+		? settings.buildDefinitionId
+		: undefined;
 }
 
 function isBuildPolicyEvaluation(evaluation: AzureObject): boolean {
@@ -1302,6 +1317,38 @@ function isBuildPolicyForRepository(
 			(scope.repositoryId == null ||
 				(typeof scope.repositoryId === "string" &&
 					equalsIdentifier(scope.repositoryId, repositoryId))),
+	);
+}
+
+const BUILD_SCOPE_HINT =
+	"The PAT needs the Build (Read & execute) scope, also named vso.build_execute, and the account needs permission to queue builds for that build pipeline.";
+const REQUEUE_SCOPE_HINT =
+	" Requeueing a policy evaluation may need more than that; this is unverified.";
+const REJECTED_STATUSES = new Set([400, 401, 403, 404]);
+const SCOPE_STATUSES = new Set([401, 403]);
+
+/**
+ * Builds the error for a failed build mutation. Azure refused 400, 401, 403 and 404 without acting,
+ * and 401 and 403 get a scope hint. Any other failure may have queued a build, so it gets the
+ * uncertain-outcome guidance.
+ */
+function buildMutationError(
+	error: unknown,
+	subject: string,
+	advice: string,
+	extraScopeHint = "",
+): Error {
+	const status = isAzureRequestError(error) ? error.status : undefined;
+	if (status !== undefined && REJECTED_STATUSES.has(status)) {
+		const hint = SCOPE_STATUSES.has(status)
+			? ` ${BUILD_SCOPE_HINT}${extraScopeHint}`
+			: "";
+		return new Error(
+			`${subject} was rejected with HTTP ${status}; Azure DevOps took no action.${hint}\n${sanitizeError(error)}`,
+		);
+	}
+	return new Error(
+		`${subject} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. ${advice}\n${sanitizeError(error)}`,
 	);
 }
 
@@ -1739,8 +1786,10 @@ export function createBuildService({
 			}
 			return returnedBuild;
 		} catch (error) {
-			throw new Error(
-				`Retry request for build ${buildId} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Inspect it with \`pr.sh build show --pr ${refreshedPr.id} --build ${buildId}\` or \`pr.sh build list --pr ${refreshedPr.id} --history\` before trying again.\n${sanitizeError(error)}`,
+			throw buildMutationError(
+				error,
+				`Retry request for build ${buildId}`,
+				`Inspect it with \`pr.sh build show --pr ${refreshedPr.id} --build ${buildId}\` or \`pr.sh build list --pr ${refreshedPr.id} --history\` before trying again.`,
 			);
 		}
 	}
@@ -1780,7 +1829,10 @@ export function createBuildService({
 		).map(toPolicyEvaluation);
 	}
 
-	async function queuePr(prId: number): Promise<QueuedBuild> {
+	async function queuePr(
+		prId: number,
+		definitionId?: number,
+	): Promise<QueuedBuild> {
 		assertRequestedPullRequestId(prId);
 		const pr = await resolvePullRequest(prId);
 		const evaluations = await fetchPolicyEvaluations(pr, "queue a build");
@@ -1793,29 +1845,68 @@ export function createBuildService({
 				);
 				return {
 					id,
+					definitionId: evaluationDefinitionId(evaluation),
 					label: policyEvaluationLabel(evaluation),
 				};
 			});
 		if (candidates.length === 0) {
 			throw new Error(`No build policy evaluation was found for PR #${pr.id}.`);
 		}
-		if (candidates.length > 1) {
+		const matches =
+			definitionId === undefined
+				? candidates
+				: candidates.filter(
+						(candidate) => candidate.definitionId === definitionId,
+					);
+		if (matches.length === 0) {
 			throw new Error(
-				`More than one build policy evaluation was found for PR #${pr.id}. Choose one manually: ${candidates.map((candidate) => candidate.label).join(", ")}.`,
+				`No build policy evaluation for build pipeline (definition) ${definitionId} was found for PR #${pr.id}. Candidates: ${candidates.map((candidate) => candidate.label).join("; ")}.`,
+			);
+		}
+		if (matches.length > 1) {
+			throw new Error(
+				`More than one build policy evaluation was found for PR #${pr.id}${definitionId === undefined ? ". Choose one with --definition <id>" : ` for build pipeline ${definitionId}`}: ${matches.map((candidate) => candidate.label).join("; ")}.`,
 			);
 		}
 
-		const candidate = candidates[0];
+		const candidate = matches[0];
+		let requeued: { buildId: number | undefined };
 		try {
-			return await requeueEvaluation(candidate.id);
+			requeued = await requeueEvaluation(candidate.id);
+		} catch (error) {
+			throw buildMutationError(
+				error,
+				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id}`,
+				`Inspect it with \`pr.sh build show --latest --pr ${pr.id}\` or \`pr.sh build list --pr ${pr.id} --history\` before trying again.`,
+				REQUEUE_SCOPE_HINT,
+			);
+		}
+		if (requeued.buildId === undefined) return { evaluationId: candidate.id };
+		try {
+			return {
+				build: assertFetchedBuild(
+					await azure.request<unknown>(
+						`${buildApiUrl(ctx)}/${requeued.buildId}?api-version=${API_VERSION}`,
+						{
+							timeoutMs: READ_TIMEOUT_MS,
+							maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+						},
+					),
+					requeued.buildId,
+					"requeued build response",
+				),
+			};
 		} catch (error) {
 			throw new Error(
-				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Inspect it with \`pr.sh build show --latest --pr ${pr.id}\` or \`pr.sh build list --pr ${pr.id} --history\` before trying again.\n${sanitizeError(error)}`,
+				`Requeued build policy evaluation ${candidate.id} on PR #${pr.id}; reading build ${requeued.buildId} failed. Check it with \`pr.sh build show --build ${requeued.buildId} --pr ${pr.id}\`.\n${sanitizeError(error)}`,
 			);
 		}
 	}
 
-	async function requeueEvaluation(evaluationId: string): Promise<QueuedBuild> {
+	/** Sends the requeue request and returns the build ID Azure names, if any. */
+	async function requeueEvaluation(
+		evaluationId: string,
+	): Promise<{ buildId: number | undefined }> {
 		const evaluationUrl = `${orgProjectUrl(ctx)}/_apis/policy/evaluations/${evaluationId}?api-version=7.1-preview.1`;
 		const response = requireObject(
 			await azure.request<unknown>(evaluationUrl, {
@@ -1827,22 +1918,11 @@ export function createBuildService({
 			"requeued policy evaluation response",
 		);
 		const context = isObject(response.context) ? response.context : undefined;
-		if (context?.buildId === undefined) return { evaluationId };
-		const buildId = requirePositiveInteger(
-			context.buildId,
-			"requeued policy evaluation context.buildId",
-		);
+		if (context?.buildId === undefined) return { buildId: undefined };
 		return {
-			build: assertFetchedBuild(
-				await azure.request<unknown>(
-					`${buildApiUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
-					{
-						timeoutMs: READ_TIMEOUT_MS,
-						maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-					},
-				),
-				buildId,
-				"requeued build response",
+			buildId: requirePositiveInteger(
+				context.buildId,
+				"requeued policy evaluation context.buildId",
 			),
 		};
 	}
@@ -1888,10 +1968,7 @@ export function createBuildService({
 		return policies;
 	}
 
-	async function queueBranch(branch: string): Promise<AzureBuild> {
-		const sourceBranch = branch.startsWith("refs/")
-			? branch
-			: `refs/heads/${branch}`;
+	async function resolveBranchDefinition(): Promise<number> {
 		const repository = requireObject(
 			await azure.request<unknown>(
 				`${reposBaseUrl(ctx)}?api-version=${API_VERSION}`,
@@ -1908,7 +1985,7 @@ export function createBuildService({
 		);
 		if (repositoryPolicies.length === 0) {
 			throw new Error(
-				`No build policy was found for repository ${ctx.repository}.`,
+				`No build policy was found for repository ${ctx.repository}. Pass --definition <id> to queue a build pipeline directly.`,
 			);
 		}
 		const definitions = new Map<number, AzureObject[]>();
@@ -1926,14 +2003,25 @@ export function createBuildService({
 			const candidates = [...definitions.entries()]
 				.map(
 					([definitionId, policies]) =>
-						`definition ${definitionId}: ${policies.map(policyConfigurationLabel).join(", ")}`,
+						`build pipeline ${definitionId}: ${policies.map(policyConfigurationLabel).join(", ")}`,
 				)
 				.join("; ");
 			throw new Error(
-				`More than one build definition was found for repository ${ctx.repository}. Choose one manually: ${candidates}.`,
+				`More than one build pipeline was found for repository ${ctx.repository}. Choose one with --definition <id>: ${candidates}.`,
 			);
 		}
-		const definitionId = definitions.keys().next().value as number;
+		return definitions.keys().next().value as number;
+	}
+
+	async function queueBranch(
+		branch: string,
+		requestedDefinitionId?: number,
+	): Promise<AzureBuild> {
+		const sourceBranch = branch.startsWith("refs/")
+			? branch
+			: `refs/heads/${branch}`;
+		const definitionId =
+			requestedDefinitionId ?? (await resolveBranchDefinition());
 		try {
 			return validateBuild(
 				await azure.request<unknown>(
@@ -1948,8 +2036,10 @@ export function createBuildService({
 				"queued branch build",
 			);
 		} catch (error) {
-			throw new Error(
-				`Queue request for build definition ${definitionId} on ${sourceBranch} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. Check that definition's runs for ${sourceBranch} in Azure DevOps before trying again.\n${sanitizeError(error)}`,
+			throw buildMutationError(
+				error,
+				`Queue request for build pipeline ${definitionId} on ${sourceBranch}`,
+				`Check that build pipeline's runs for ${sourceBranch} in Azure DevOps before trying again.`,
 			);
 		}
 	}
@@ -2221,11 +2311,42 @@ export function createBuildService({
 		].join("\n");
 	}
 
-	function formatQueue(build: AzureBuild): string {
+	function formatQueue(build: AzureBuild, prId?: number): string {
+		const definition = build.definition;
 		return [
 			`Azure DevOps queued build ${build.id as number}/${display(build.buildNumber)}.`,
+			...(typeof definition?.name === "string"
+				? [
+						`Build pipeline: ${display(definition.name)}${typeof definition.id === "number" ? ` (${definition.id})` : ""}`,
+					]
+				: []),
 			`URL: ${display(buildWebLink(build))}`,
+			...(prId === undefined
+				? []
+				: [
+						`Wait with: pr.sh build wait --build ${build.id as number} --pr ${prId}`,
+					]),
 		].join("\n");
+	}
+
+	function formatRequeue(evaluationId: string, prId: number): string {
+		return [
+			`Requeued build policy evaluation ${display(evaluationId)} for PR #${prId}.`,
+			`Azure DevOps did not return the build ID yet. When \`pr.sh build show --latest --pr ${prId}\` shows a new build ID, run \`pr.sh build wait --build <id> --pr ${prId}\`.`,
+		].join("\n");
+	}
+
+	/** The one active pull request that has the branch as its source, if any. */
+	async function branchPullRequestId(
+		branch: string,
+	): Promise<number | undefined> {
+		const found = await pullRequests.findActiveForBranch(branch);
+		if (found.length > 1) {
+			throw new Error(
+				`Multiple active pull requests have ${branch} as their source: ${found.map((pr) => `#${pr.pullRequestId}`).join(", ")}. Run \`pr.sh build wait --build <id> --pr <id>\` with the one you want.`,
+			);
+		}
+		return found[0]?.pullRequestId;
 	}
 
 	function formatWaitProgress(event: BuildWaitProgress): string {
@@ -2286,7 +2407,9 @@ export function createBuildService({
 		formatList,
 		formatShow,
 		formatRetry,
+		branchPullRequestId,
 		formatQueue,
+		formatRequeue,
 		formatWaitProgress,
 		formatWaitResult,
 	};

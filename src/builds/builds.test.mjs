@@ -64,6 +64,7 @@ function branchBuild(overrides = {}) {
 function createPullRequestStub(
 	resolveValues = [pullRequest()],
 	getValues = resolveValues,
+	branchPullRequests = [],
 ) {
 	let resolveIndex = 0;
 	let getIndex = 0;
@@ -84,14 +85,26 @@ function createPullRequestStub(
 				getIndex += 1;
 				return value;
 			},
+			async findActiveForBranch(branch) {
+				calls.push({ method: "findActiveForBranch", branch });
+				return branchPullRequests;
+			},
 		},
 	};
 }
 
-function setup(t, responses, { resolveValues, getValues } = {}) {
+function setup(
+	t,
+	responses,
+	{ resolveValues, getValues, branchPullRequests } = {},
+) {
 	const { fetch, calls } = createMockFetch(t, responses);
 	const azure = createAzureRequester({ pat, fetch });
-	const pullRequests = createPullRequestStub(resolveValues, getValues);
+	const pullRequests = createPullRequestStub(
+		resolveValues,
+		getValues,
+		branchPullRequests,
+	);
 	const service = createBuildService({
 		azure,
 		ctx,
@@ -3176,7 +3189,7 @@ describe("build queueing", () => {
 		});
 		await assert.rejects(service.queuePr(42), {
 			message:
-				"More than one build policy evaluation was found for PR #42. Choose one manually: evaluation first-evaluation (Widget CI), evaluation second-evaluation (Widget CD).",
+				"More than one build policy evaluation was found for PR #42. Choose one with --definition <id>: evaluation first-evaluation (Widget CI); evaluation second-evaluation (Widget CD).",
 		});
 	});
 
@@ -3291,7 +3304,7 @@ describe("build queueing", () => {
 		await assert.rejects(service.queueBranch("main"), (error) => {
 			assert.match(
 				error.message,
-				/Queue request for build definition 9 on refs\/heads\/main failed after dispatch/,
+				/Queue request for build pipeline 9 on refs\/heads\/main failed after dispatch/,
 			);
 			assert.match(error.message, /do not retry automatically/);
 			assert.match(error.message, /503 Service Unavailable/);
@@ -3338,7 +3351,7 @@ describe("build queueing", () => {
 		]);
 		await assert.rejects(service.queueBranch("main"), {
 			message:
-				"More than one build definition was found for repository checkout-name. Choose one manually: definition 9: policy 1 (Main CI); definition 10: policy 2 (Release policy).",
+				"More than one build pipeline was found for repository checkout-name. Choose one with --definition <id>: build pipeline 9: policy 1 (Main CI); build pipeline 10: policy 2 (Release policy).",
 		});
 	});
 
@@ -3404,7 +3417,7 @@ describe("build queueing", () => {
 		]);
 		await assert.rejects(service.queueBranch("main"), {
 			message:
-				"More than one build definition was found for repository checkout-name. Choose one manually: definition 9: policy 9 (Evil name); definition 10: policy 10 (Evil name).",
+				"More than one build pipeline was found for repository checkout-name. Choose one with --definition <id>: build pipeline 9: policy 9 (Evil name); build pipeline 10: policy 10 (Evil name).",
 		});
 	});
 
@@ -3527,5 +3540,366 @@ describe("build queueing", () => {
 			/No build policy.*checkout-name/,
 		);
 		assert.equal(calls.length, 2);
+	});
+
+	function evaluation(evaluationId, definitionId, name) {
+		return {
+			evaluationId,
+			configuration: {
+				name,
+				type: { id: buildPolicyType },
+				settings: { buildDefinitionId: definitionId },
+			},
+		};
+	}
+
+	const queuePrPullRequest = () =>
+		pullRequest({
+			repository: {
+				id: "Repo-ID",
+				name: "widgets",
+				project: { id: projectId },
+			},
+		});
+
+	test("requeues the evaluation whose pipeline matches --definition", async (t) => {
+		const { service, calls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							evaluation("first-evaluation", 9, "Widget CI"),
+							evaluation("second-evaluation", 12, "Widget CD"),
+						],
+					},
+				},
+				{ json: { status: "queued" } },
+			],
+			{ resolveValues: [queuePrPullRequest()] },
+		);
+
+		const result = await service.queuePr(42, 12);
+
+		assert.deepEqual(result, { evaluationId: "second-evaluation" });
+		assert.match(calls[1].url, /evaluations\/second-evaluation\?/);
+		assert.equal(calls[1].method, "PATCH");
+	});
+
+	test("lists the candidates and sends no mutation when --definition matches no evaluation", async (t) => {
+		const { service, calls } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							evaluation("first-evaluation", 9, "Widget CI"),
+							{
+								evaluationId: "unknown-pipeline",
+								configuration: { type: { id: buildPolicyType } },
+							},
+						],
+					},
+				},
+			],
+			{ resolveValues: [queuePrPullRequest()] },
+		);
+
+		await assert.rejects(service.queuePr(42, 77), {
+			message:
+				"No build policy evaluation for build pipeline (definition) 77 was found for PR #42. Candidates: evaluation first-evaluation (Widget CI), build pipeline 9; evaluation unknown-pipeline.",
+		});
+		assert.equal(calls.filter(({ method }) => method !== "GET").length, 0);
+	});
+
+	test("fails when several evaluations share the --definition pipeline", async (t) => {
+		const { service } = setup(
+			t,
+			[
+				{
+					json: {
+						value: [
+							evaluation("first-evaluation", 9, "Main CI"),
+							evaluation("second-evaluation", 9, "Release CI"),
+						],
+					},
+				},
+			],
+			{ resolveValues: [queuePrPullRequest()] },
+		);
+
+		await assert.rejects(service.queuePr(42, 9), {
+			message:
+				"More than one build policy evaluation was found for PR #42 for build pipeline 9: evaluation first-evaluation (Main CI), build pipeline 9; evaluation second-evaluation (Release CI), build pipeline 9.",
+		});
+	});
+
+	test("queues --definition on a branch without reading build policies", async (t) => {
+		const { service, calls } = setup(t, [{ json: build({ id: 707 }) }]);
+
+		const result = await service.queueBranch("feature/x", 21);
+
+		assert.equal(result.id, 707);
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].method, "POST");
+		assert.equal(
+			calls[0].body,
+			JSON.stringify({
+				definition: { id: 21 },
+				sourceBranch: "refs/heads/feature/x",
+			}),
+		);
+	});
+
+	test("prefers --definition over the repository build policies", async (t) => {
+		const { service, calls } = setup(t, [{ json: build({ id: 708 }) }]);
+
+		await service.queueBranch("main", 33);
+
+		assert.equal(calls.length, 1);
+		assert.match(calls[0].body, /"definition":\{"id":33\}/);
+	});
+
+	test("points to --definition when a branch has no build policy", async (t) => {
+		const { service } = setup(t, [
+			{ json: { id: "repo-id" } },
+			{ json: { value: [] } },
+		]);
+
+		await assert.rejects(service.queueBranch("main"), /Pass --definition <id>/);
+	});
+
+	describe("scope hint on 401 and 403", () => {
+		for (const status of [401, 403]) {
+			test(`names the Build (Read & execute) scope when a branch queue gets ${status}`, async (t) => {
+				const { service, calls } = setup(t, [
+					{ status, statusText: "Denied", body: "no" },
+				]);
+
+				await assert.rejects(service.queueBranch("main", 9), (error) => {
+					assert.match(
+						error.message,
+						new RegExp(`rejected with HTTP ${status}`),
+					);
+					assert.match(error.message, /Build \(Read & execute\)/);
+					assert.match(error.message, /vso\.build_execute/);
+					assert.doesNotMatch(error.message, /unverified/);
+					assert.doesNotMatch(error.message, /may be uncertain/);
+					return true;
+				});
+				assert.equal(calls.length, 1);
+			});
+		}
+
+		test("adds that a policy requeue may need more scope", async (t) => {
+			const { service } = setup(
+				t,
+				[
+					{ json: { value: [evaluation("evaluation-id", 9, "Widget CI")] } },
+					{ status: 403, statusText: "Forbidden", body: "no" },
+				],
+				{ resolveValues: [queuePrPullRequest()] },
+			);
+
+			await assert.rejects(service.queuePr(42), (error) => {
+				assert.match(error.message, /rejected with HTTP 403/);
+				assert.match(error.message, /Build \(Read & execute\)/);
+				assert.match(
+					error.message,
+					/may need more than that; this is unverified/,
+				);
+				return true;
+			});
+		});
+
+		test("names the scope when a build retry gets 403", async (t) => {
+			const failed = build({ status: "completed", result: "failed" });
+			const { service } = setup(
+				t,
+				[
+					{ json: failed },
+					{ json: failed },
+					{ status: 403, statusText: "Forbidden", body: "no" },
+				],
+				{ resolveValues: [pullRequest(), pullRequest()] },
+			);
+
+			await assert.rejects(service.retry(42, 700), (error) => {
+				assert.match(
+					error.message,
+					/Retry request for build 700 was rejected with HTTP 403/,
+				);
+				assert.match(error.message, /Build \(Read & execute\)/);
+				assert.doesNotMatch(error.message, /unverified/);
+				return true;
+			});
+		});
+
+		test("leaves reads without a scope hint", async (t) => {
+			const { service } = setup(t, [
+				{ status: 403, statusText: "Forbidden", body: "no" },
+			]);
+
+			await assert.rejects(service.queueBranch("main"), (error) => {
+				assert.doesNotMatch(error.message, /vso\.build_execute/);
+				return true;
+			});
+		});
+	});
+
+	test("rejects 400 and 404 without uncertain-outcome text or a scope hint", async (t) => {
+		for (const status of [400, 404]) {
+			const { service, calls } = setup(t, [
+				{ status, statusText: "Nope", body: "no such pipeline" },
+			]);
+
+			await assert.rejects(service.queueBranch("main", 99), (error) => {
+				assert.match(
+					error.message,
+					new RegExp(
+						`Queue request for build pipeline 99 on refs/heads/main was rejected with HTTP ${status}; Azure DevOps took no action\\.\\n`,
+					),
+				);
+				assert.doesNotMatch(error.message, /uncertain|retry automatically/);
+				assert.doesNotMatch(error.message, /vso\.build_execute/);
+				return true;
+			});
+			assert.equal(calls.length, 1);
+		}
+	});
+
+	test("keeps 409, 5xx and network failures uncertain", async (t) => {
+		for (const response of [
+			{ status: 409, statusText: "Conflict", body: "busy" },
+			{ status: 500, statusText: "Server Error", body: "oops" },
+			{ error: new TypeError("fetch failed") },
+		]) {
+			const { service } = setup(t, [response]);
+
+			await assert.rejects(service.queueBranch("main", 9), (error) => {
+				assert.match(error.message, /failed after dispatch/);
+				assert.match(error.message, /may be uncertain/);
+				return true;
+			});
+		}
+	});
+
+	test("also says the account may lack permission to queue the build pipeline", async (t) => {
+		const { service } = setup(t, [
+			{ status: 403, statusText: "Forbidden", body: "no" },
+		]);
+
+		await assert.rejects(service.queueBranch("main", 9), (error) => {
+			assert.match(
+				error.message,
+				/the account needs permission to queue builds for that build pipeline/,
+			);
+			return true;
+		});
+	});
+
+	test("does not call a failed build read after a successful requeue a rejection", async (t) => {
+		const { service, calls } = setup(
+			t,
+			[
+				{ json: { value: [evaluation("evaluation-id", 9, "Widget CI")] } },
+				{
+					json: {
+						evaluationId: "evaluation-id",
+						status: "queued",
+						context: { buildId: 701 },
+					},
+				},
+				{ status: 403, statusText: "Forbidden", body: "no read" },
+			],
+			{ resolveValues: [queuePrPullRequest()] },
+		);
+
+		await assert.rejects(service.queuePr(42), (error) => {
+			assert.match(
+				error.message,
+				/^Requeued build policy evaluation evaluation-id on PR #42; reading build 701 failed\./,
+			);
+			assert.match(error.message, /pr\.sh build show --build 701 --pr 42/);
+			assert.doesNotMatch(
+				error.message,
+				/rejected|uncertain|vso\.build_execute/,
+			);
+			return true;
+		});
+		assert.equal(calls.filter(({ method }) => method === "PATCH").length, 1);
+	});
+
+	describe("queue output", () => {
+		test("formatQueue names the build pipeline and adds the wait line for a PR", (t) => {
+			const { service } = setup(t, []);
+
+			assert.equal(
+				service.formatQueue(
+					build({ id: 701, definition: { id: 9, name: "Widget CI" } }),
+					42,
+				),
+				[
+					"Azure DevOps queued build 701/2026.8.18.1.",
+					"Build pipeline: Widget CI (9)",
+					"URL: https://dev.azure.com/build/700",
+					"Wait with: pr.sh build wait --build 701 --pr 42",
+				].join("\n"),
+			);
+		});
+
+		test("formatQueue omits the wait line without a PR and the pipeline line without a name", (t) => {
+			const { service } = setup(t, []);
+
+			assert.equal(
+				service.formatQueue(build({ id: 702, definition: undefined })),
+				[
+					"Azure DevOps queued build 702/2026.8.18.1.",
+					"URL: https://dev.azure.com/build/700",
+				].join("\n"),
+			);
+		});
+
+		test("formatRequeue points to build show and a wait command with the new build ID", (t) => {
+			const { service } = setup(t, []);
+
+			assert.equal(
+				service.formatRequeue("evaluation-id", 42),
+				[
+					"Requeued build policy evaluation evaluation-id for PR #42.",
+					"Azure DevOps did not return the build ID yet. When `pr.sh build show --latest --pr 42` shows a new build ID, run `pr.sh build wait --build <id> --pr 42`.",
+				].join("\n"),
+			);
+		});
+	});
+
+	describe("pull request for a queued branch", () => {
+		test("returns the ID of the one active pull request", async (t) => {
+			const { service, pullRequestCalls } = setup(t, [], {
+				branchPullRequests: [{ pullRequestId: 55 }],
+			});
+
+			assert.equal(await service.branchPullRequestId("feature/x"), 55);
+			assert.deepEqual(pullRequestCalls, [
+				{ method: "findActiveForBranch", branch: "feature/x" },
+			]);
+		});
+
+		test("returns undefined when the branch has no active pull request", async (t) => {
+			const { service } = setup(t, [], { branchPullRequests: [] });
+
+			assert.equal(await service.branchPullRequestId("feature/x"), undefined);
+		});
+
+		test("fails naming the candidates when several pull requests share the source", async (t) => {
+			const { service } = setup(t, [], {
+				branchPullRequests: [{ pullRequestId: 55 }, { pullRequestId: 56 }],
+			});
+
+			await assert.rejects(service.branchPullRequestId("feature/x"), {
+				message:
+					"Multiple active pull requests have feature/x as their source: #55, #56. Run `pr.sh build wait --build <id> --pr <id>` with the one you want.",
+			});
+		});
 	});
 });
