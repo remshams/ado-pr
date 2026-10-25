@@ -12,7 +12,12 @@ import {
 	isPositiveInteger,
 	toCommentLocation,
 } from "../shared/operation-types.ts";
-import type { ThreadService } from "./threads.ts";
+import {
+	findResolvedStatus,
+	RESOLVED_STATUSES,
+	type ResolvedStatus,
+	type ThreadService,
+} from "./threads.ts";
 
 const BATCH_FIELDS = new Set<string>(BATCH_FIELD_NAMES);
 
@@ -72,6 +77,21 @@ function validateBatchFieldValue(
 	}
 }
 
+function parseBatchStatus(
+	value: unknown,
+	field: string,
+	label: string,
+): ResolvedStatus {
+	const status =
+		typeof value === "string" ? findResolvedStatus(value) : undefined;
+	if (!status) {
+		throw new Error(
+			`${label} has an invalid "${field}" (must be one of: ${RESOLVED_STATUSES.join(", ")}).`,
+		);
+	}
+	return status;
+}
+
 function parseBatchField(
 	value: unknown,
 	field: Exclude<BatchFieldName, "command">,
@@ -86,6 +106,9 @@ function parseBatchField(
 		return undefined;
 	}
 
+	if (definition.kind === "status") {
+		return parseBatchStatus(value, field, label);
+	}
 	validateBatchFieldValue(value, field, batchCommand, label);
 	return value;
 }
@@ -190,8 +213,11 @@ async function executeBatchOperation(
 			return `posted new comment thread ${thread.id} on PR #${prId} (${url})`;
 		}
 		case "comment.reply": {
-			await threads.reply(prId, op.thread, op.message);
-			return `posted reply to thread ${op.thread} on PR #${prId}`;
+			const status = op.status as ResolvedStatus | undefined;
+			await threads.reply(prId, op.thread, op.message, status);
+			return status
+				? `posted reply to thread ${op.thread} on PR #${prId} and marked it as ${status}`
+				: `posted reply to thread ${op.thread} on PR #${prId}`;
 		}
 		case "comment.edit": {
 			await threads.edit(prId, op.thread, op.comment, op.message);
@@ -202,8 +228,13 @@ async function executeBatchOperation(
 			return `deleted comment ${op.comment} from thread ${op.thread} on PR #${prId}`;
 		}
 		case "comment.resolve": {
-			await threads.resolve(prId, op.thread);
-			return `marked thread ${op.thread} on PR #${prId} as resolved`;
+			const status = (op.status as ResolvedStatus | undefined) ?? "fixed";
+			await threads.resolve(prId, op.thread, status);
+			return `marked thread ${op.thread} on PR #${prId} as ${status}`;
+		}
+		case "comment.reopen": {
+			await threads.reopen(prId, op.thread);
+			return `reopened thread ${op.thread} on PR #${prId}`;
 		}
 	}
 }

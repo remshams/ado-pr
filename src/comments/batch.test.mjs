@@ -134,25 +134,41 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 			name: "missing command",
 			operation: { message: "hello" },
 			message:
-				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
+				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve, comment.reopen).',
 		},
 		{
 			name: "legacy action discriminator",
 			operation: { action: "comment", message: "hello" },
 			message:
-				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
+				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve, comment.reopen).',
 		},
 		{
 			name: "unknown command",
 			operation: { command: "comment.archive" },
 			message:
-				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
+				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve, comment.reopen).',
 		},
 		{
-			name: "reopen is not a batch command",
-			operation: { command: "comment.reopen", thread: 1 },
+			name: "reopen missing thread",
+			operation: { command: "comment.reopen" },
+			message: 'Batch operation 1 ("comment.reopen") requires a "thread".',
+		},
+		{
+			name: "invalid reply status",
+			operation: {
+				command: "comment.reply",
+				thread: 1,
+				message: "hello",
+				status: "active",
+			},
 			message:
-				'Batch operation 1 has an invalid "command" (must be one of: comment.create, comment.reply, comment.edit, comment.delete, comment.resolve).',
+				'Batch operation 1 has an invalid "status" (must be one of: fixed, wontFix, byDesign, closed).',
+		},
+		{
+			name: "non-string resolve status",
+			operation: { command: "comment.resolve", thread: 1, status: 3 },
+			message:
+				'Batch operation 1 has an invalid "status" (must be one of: fixed, wontFix, byDesign, closed).',
 		},
 		{
 			name: "non-positive PR",
@@ -278,12 +294,13 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 		},
 		"comment.delete": { command: "comment.delete", thread: 1, comment: 2 },
 		"comment.resolve": { command: "comment.resolve", thread: 1 },
+		"comment.reopen": { command: "comment.reopen", thread: 1 },
 	};
 
 	test("rejects unknown fields for every command", async (t) => {
 		const unknownFields = [
 			["unexpected", true],
-			["status", "wontFix"],
+			["severity", "high"],
 			["action", "reply"],
 		];
 		for (const [command, validOperation] of Object.entries(
@@ -308,13 +325,22 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 			file: "src/a.ts",
 			line: 3,
 			endLine: 4,
+			status: "fixed",
 		};
 		const irrelevantFieldsByCommand = {
-			"comment.create": ["thread", "comment"],
+			"comment.create": ["thread", "comment", "status"],
 			"comment.reply": ["comment", "file", "line", "endLine"],
-			"comment.edit": ["file", "line", "endLine"],
-			"comment.delete": ["message", "file", "line", "endLine"],
+			"comment.edit": ["file", "line", "endLine", "status"],
+			"comment.delete": ["message", "file", "line", "endLine", "status"],
 			"comment.resolve": ["comment", "message", "file", "line", "endLine"],
+			"comment.reopen": [
+				"comment",
+				"message",
+				"file",
+				"line",
+				"endLine",
+				"status",
+			],
 		};
 
 		for (const [command, fields] of Object.entries(irrelevantFieldsByCommand)) {
@@ -491,7 +517,7 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 			},
 			{
 				method: "log",
-				args: ["[5/5] comment.resolve: marked thread 23 on PR #42 as resolved"],
+				args: ["[5/5] comment.resolve: marked thread 23 on PR #42 as fixed"],
 			},
 		]);
 		assert.equal(process.exitCode, undefined);
@@ -560,9 +586,90 @@ test.describe("createBatchRunner", { concurrency: false }, () => {
 			},
 			{
 				method: "log",
-				args: ["[2/2] comment.resolve: marked thread 6 on PR #42 as resolved"],
+				args: ["[2/2] comment.resolve: marked thread 6 on PR #42 as fixed"],
 			},
 		]);
+		assert.equal(process.exitCode, 1);
+	});
+
+	test("sets thread statuses from the status field and reopens threads", async (t) => {
+		const input = JSON.stringify([
+			{
+				command: "comment.reply",
+				thread: 3,
+				message: "Done",
+				status: "closed",
+			},
+			{ command: "comment.resolve", thread: 4, status: "WONTFIX" },
+			{ command: "comment.reopen", thread: 5, pr: 77 },
+		]);
+		const { runner, consoleCalls, fetchCalls } = prepareBatchTest(t, input, [
+			{ json: {} },
+			{ json: {} },
+			{ json: {} },
+			{ json: {} },
+		]);
+
+		await runner.run(defaultPrId);
+
+		assert.deepEqual(requestShapes(fetchCalls), [
+			{
+				url: threadUrl(42, "/3/comments"),
+				method: "POST",
+				body: '{"content":"Done"}',
+			},
+			{
+				url: threadUrl(42, "/3"),
+				method: "PATCH",
+				body: '{"status":"closed"}',
+			},
+			{
+				url: threadUrl(42, "/4"),
+				method: "PATCH",
+				body: '{"status":"wontFix"}',
+			},
+			{
+				url: threadUrl(77, "/5"),
+				method: "PATCH",
+				body: '{"status":"active"}',
+			},
+		]);
+		assert.deepEqual(consoleCalls, [
+			{
+				method: "log",
+				args: [
+					"[1/3] comment.reply: posted reply to thread 3 on PR #42 and marked it as closed",
+				],
+			},
+			{
+				method: "log",
+				args: ["[2/3] comment.resolve: marked thread 4 on PR #42 as wontFix"],
+			},
+			{
+				method: "log",
+				args: ["[3/3] comment.reopen: reopened thread 5 on PR #77"],
+			},
+		]);
+		assert.equal(process.exitCode, undefined);
+	});
+
+	test("reports a posted reply when the status update fails", async (t) => {
+		const input = JSON.stringify([
+			{ command: "comment.reply", thread: 3, message: "Done", status: "fixed" },
+		]);
+		const { runner, consoleCalls } = prepareBatchTest(t, input, [
+			{ json: {} },
+			{ status: 503, statusText: "Service Unavailable", body: "outage" },
+		]);
+
+		await runner.run(defaultPrId);
+
+		assert.equal(consoleCalls.length, 1);
+		assert.equal(consoleCalls[0].method, "error");
+		assert.match(
+			consoleCalls[0].args[0],
+			/^\[1\/1\] comment\.reply: FAILED - Reply posted to thread 3, but setting its status to fixed failed: /,
+		);
 		assert.equal(process.exitCode, 1);
 	});
 
