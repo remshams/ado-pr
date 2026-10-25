@@ -97,20 +97,30 @@ async function runBuildQueue(
 	builds: ReturnType<typeof createBuildService>,
 ): Promise<void> {
 	if (options.branch !== undefined) {
-		const result = await builds.queueBranch(options.branch);
-		console.log(builds.formatQueue(result));
+		const build = await builds.queueBranch(options.branch, options.definition);
+		let prId: number | undefined;
+		let lookupFailed = false;
+		try {
+			prId = await builds.branchPullRequestId(options.branch);
+		} catch (error) {
+			lookupFailed = true;
+			console.error((error as Error).message);
+		}
+		console.log(builds.formatQueue(build, prId));
+		if (prId === undefined && !lookupFailed) {
+			console.log(
+				`\`build wait\` needs a pull request for the branch, and none was found for ${options.branch}.`,
+			);
+		}
 		return;
 	}
 	if (options.pr === undefined)
 		throw new Error("Exactly one of --pr or --branch is required.");
-	const result = await builds.queuePr(options.pr);
-	if ("build" in result) {
-		console.log(builds.formatQueue(result.build));
-		return;
-	}
+	const result = await builds.queuePr(options.pr, options.definition);
 	console.log(
-		`Requeued build policy evaluation ${result.evaluationId} for PR #${options.pr}.\n` +
-			`Azure DevOps did not return the build ID yet. Check with \`pr.sh build show --latest --pr ${options.pr}\`.`,
+		"build" in result
+			? builds.formatQueue(result.build, options.pr)
+			: builds.formatRequeue(result.evaluationId, options.pr),
 	);
 }
 
