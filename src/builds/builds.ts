@@ -62,6 +62,7 @@ const WAIT_OUTCOMES = new Map<
 	["canceled", "canceled"],
 ]);
 const DISPLAY_RECORD_TYPES = new Set(["stage", "job", "task"]);
+const SATISFIED_POLICY_STATUSES = new Set(["approved", "notapplicable"]);
 const BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241";
 
 interface AzureObject {
@@ -281,6 +282,7 @@ export interface BuildService {
 		buildId: number,
 	): Promise<AzureBuild>;
 	headBuild(pr: PullRequest): Promise<HeadBuild | null>;
+	policyEvaluations(pr: PullRequest): Promise<PolicyEvaluation[]>;
 	queuePr(prId: number): Promise<QueuedBuild>;
 	queueBranch(branch: string): Promise<AzureBuild>;
 	wait(
@@ -295,6 +297,16 @@ export interface BuildService {
 	formatQueue(build: AzureBuild): string;
 	formatWaitProgress(event: BuildWaitProgress): string;
 	formatWaitResult(result: BuildWaitEnvelope): string;
+}
+
+/** One policy evaluation of a PR, as Azure DevOps reports it for the branch policies. */
+export interface PolicyEvaluation {
+	name: string;
+	blocking: boolean;
+	/** True when the policy is approved or does not apply, so it no longer blocks the PR. */
+	satisfied: boolean;
+	/** Azure's status word, kept for display. */
+	status: string;
 }
 
 export type QueuedBuild = { build: AzureBuild } | { evaluationId: string };
@@ -1235,6 +1247,29 @@ function isBuildPolicyEvaluation(evaluation: AzureObject): boolean {
 	);
 }
 
+function toPolicyEvaluation(evaluation: AzureObject): PolicyEvaluation {
+	const configuration = isObject(evaluation.configuration)
+		? evaluation.configuration
+		: undefined;
+	const type =
+		configuration && isObject(configuration.type)
+			? configuration.type
+			: undefined;
+	const status =
+		typeof evaluation.status === "string" && evaluation.status.length > 0
+			? evaluation.status
+			: "unknown";
+	return {
+		name:
+			typeof type?.displayName === "string" && type.displayName.length > 0
+				? type.displayName
+				: "unknown policy",
+		blocking: configuration?.isBlocking === true,
+		satisfied: SATISFIED_POLICY_STATUSES.has(status.toLowerCase()),
+		status,
+	};
+}
+
 function policyConfigurationLabel(policy: AzureObject): string {
 	const id = typeof policy.id === "number" ? policy.id : "unknown";
 	const settings = isObject(policy.settings) ? policy.settings : undefined;
@@ -1706,32 +1741,46 @@ export function createBuildService({
 		}
 	}
 
-	async function queuePr(prId: number): Promise<QueuedBuild> {
-		assertRequestedPullRequestId(prId);
-		const pr = await resolvePullRequest(prId);
+	async function fetchPolicyEvaluations(
+		pr: ValidatedPullRequest,
+		purpose: string,
+	): Promise<AzureObject[]> {
 		const projectId = pr.projectId;
 		if (typeof projectId !== "string" || projectId.length === 0) {
 			throw new Error(
-				`Cannot queue a build for PR #${pr.id}: Azure DevOps did not return its project ID.`,
+				`Cannot ${purpose} for PR #${pr.id}: Azure DevOps did not return its project ID.`,
 			);
 		}
 		const artifactId = `vstfs:///CodeReview/CodeReviewId/${projectId}/${pr.id}`;
-		const evaluationsUrl = policyEvaluationsUrl(ctx, artifactId);
 		const evaluationResponse = requireObject(
-			await azure.request<unknown>(evaluationsUrl, {
+			await azure.request<unknown>(policyEvaluationsUrl(ctx, artifactId), {
 				timeoutMs: READ_TIMEOUT_MS,
 				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
 			}),
 			"policy evaluations response",
 		);
-		const evaluations = requireArray(
+		return requireArray(
 			evaluationResponse.value,
 			"policy evaluations response.value",
+		).map((value, index) =>
+			requireObject(value, `policy evaluation ${index + 1}`),
 		);
+	}
+
+	async function policyEvaluations(
+		pr: PullRequest,
+	): Promise<PolicyEvaluation[]> {
+		const validated = validatePullRequest(pr, "pull request");
+		return (
+			await fetchPolicyEvaluations(validated, "read policy evaluations")
+		).map(toPolicyEvaluation);
+	}
+
+	async function queuePr(prId: number): Promise<QueuedBuild> {
+		assertRequestedPullRequestId(prId);
+		const pr = await resolvePullRequest(prId);
+		const evaluations = await fetchPolicyEvaluations(pr, "queue a build");
 		const candidates = evaluations
-			.map((value, index) =>
-				requireObject(value, `policy evaluation ${index + 1}`),
-			)
 			.filter((evaluation) => isBuildPolicyEvaluation(evaluation))
 			.map((evaluation, index) => {
 				const id = requireString(
@@ -2230,6 +2279,7 @@ export function createBuildService({
 		show,
 		retry,
 		headBuild,
+		policyEvaluations,
 		queuePr,
 		queueBranch,
 		wait,
