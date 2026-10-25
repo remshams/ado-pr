@@ -2739,6 +2739,7 @@ function diffIterations(count) {
 				id: index + 1,
 				sourceRefCommit: { commitId: `source-${index + 1}` },
 				commonRefCommit: { commitId: `common-${index + 1}` },
+				createdDate: `2026-10-0${index + 1}T12:00:00Z`,
 			})),
 		},
 	};
@@ -2970,4 +2971,281 @@ test("pr diff rejects an iteration the PR does not have", (t) => {
 		result.stderr,
 		"PR #42 has no iteration 5; the latest iteration is 2.\n",
 	);
+});
+
+const connectionDataUrl =
+	"https://dev.azure.com/acme/_apis/connectionData?connectOptions=1&lastChangeId=-1&lastChangeId64=-1&api-version=7.1-preview.1";
+
+test("pr diff --since-last-review compares with the iteration before the user's last vote", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "diff", "--pr", "42", "--since-last-review"], {
+		cwd,
+		responses: [
+			{ json: { authenticatedUser: { id: "me" } } },
+			{
+				json: {
+					value: [
+						{
+							id: 1,
+							comments: [
+								{
+									id: 1,
+									author: { id: "me" },
+									commentType: "text",
+									content: "Please rename",
+									publishedDate: "2026-10-01T15:00:00Z",
+								},
+							],
+						},
+						{
+							id: 2,
+							properties: {
+								CodeReviewThreadType: {
+									$type: "System.String",
+									$value: "VoteUpdate",
+								},
+								CodeReviewVotedByIdentity: {
+									$type: "System.String",
+									$value: "1",
+								},
+							},
+							identities: { 1: { id: "me", displayName: "Ada" } },
+							comments: [
+								{
+									id: 1,
+									author: { id: "azure-service" },
+									commentType: "system",
+									content: "Ada voted 10",
+									publishedDate: "2026-10-02T15:00:00Z",
+								},
+							],
+						},
+					],
+				},
+			},
+			diffIterations(3),
+			{ json: { changeEntries: [diffChange("add", "/later.txt")] } },
+			diffItem("later\n"),
+		],
+	});
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"PR #42: iteration 3 compared with iteration 2, the latest before your last review on 2026-10-02T15:00:00.000Z.\ndiff --git a/later.txt b/later.txt\n--- /dev/null\n+++ b/later.txt\n@@ -0,0 +1,1 @@\n+later\n",
+	);
+	assert.deepEqual(
+		result.calls.map((call) => call.url),
+		[
+			connectionDataUrl,
+			`${apiBase}/pullRequests/42/threads?api-version=7.1`,
+			`${apiBase}/pullRequests/42/iterations?api-version=7.1`,
+			`${apiBase}/pullRequests/42/iterations/3/changes?$top=2000&$compareTo=2&api-version=7.1`,
+			diffItemUrl("/later.txt", "source-3"),
+		],
+	);
+});
+
+test("pr diff --since-last-review fails without activity by the user", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "diff", "--pr", "42", "--since-last-review"], {
+		cwd,
+		responses: [
+			{ json: { authenticatedUser: { id: "me" } } },
+			{ json: { value: [] } },
+			diffIterations(2),
+		],
+	});
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(
+		result.stderr,
+		"Found no comment or vote by you on PR #42. Use --since-iteration <n> instead.\n",
+	);
+});
+
+test("pr diff --since-last-review rejects --since-iteration before any request", (t) => {
+	const result = runPr(
+		t,
+		["pr", "diff", "--since-last-review", "--since-iteration", "1"],
+		{ cwd: createRepo(t), responses: [] },
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.match(
+		result.stderr,
+		/^Error: --since-iteration and --since-last-review are mutually exclusive for "pr diff"\n/,
+	);
+	assert.equal(result.calls.length, 0);
+});
+
+test("pr diff --name-only prints only path lines and reads no content", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "diff", "--pr", "42", "--name-only"], {
+		cwd,
+		responses: [
+			diffIterations(1),
+			{
+				json: {
+					changeEntries: [
+						diffChange("edit", "/src/app.ts"),
+						diffChange("edit, rename", "/src/renamed.ts", {
+							originalPath: "/src/original.ts",
+						}),
+						diffChange("delete", "/old.txt"),
+					],
+				},
+			},
+		],
+	});
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"edit\tsrc/app.ts\nrename\tsrc/original.ts -> src/renamed.ts\ndelete\told.txt\n",
+	);
+	assert.equal(result.calls.length, 2);
+});
+
+test("pr diff --json prints files, change types and line blocks", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "diff", "--pr", "42", "--since-iteration", "1", "--json"],
+		{
+			cwd,
+			responses: [
+				diffIterations(2),
+				{
+					json: {
+						changeEntries: [
+							diffChange("edit", "/src/app.ts"),
+							diffChange("add", "/logo.png"),
+						],
+					},
+				},
+				diffItem("a\nb\nc\n"),
+				diffItem("a\nB\nc\n"),
+				{
+					json: [
+						{
+							path: "/src/app.ts",
+							lineDiffBlocks: [
+								{
+									changeType: "edit",
+									originalLineNumberStart: 2,
+									originalLinesCount: 1,
+									modifiedLineNumberStart: 2,
+									modifiedLinesCount: 1,
+								},
+							],
+						},
+					],
+				},
+				diffItem("PNG", true),
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(JSON.parse(result.stdout), {
+		pullRequestId: 42,
+		iteration: 2,
+		baseIteration: 1,
+		lastReview: null,
+		files: [
+			{
+				path: "src/app.ts",
+				originalPath: "src/app.ts",
+				change: "edit",
+				content: "text",
+				blocks: [
+					{
+						originalStart: 2,
+						originalCount: 1,
+						modifiedStart: 2,
+						modifiedCount: 1,
+						removed: ["b"],
+						added: ["B"],
+					},
+				],
+			},
+			{
+				path: "logo.png",
+				originalPath: "logo.png",
+				change: "add",
+				content: "binary",
+				blocks: [],
+			},
+		],
+		truncated: false,
+	});
+});
+
+test("pr diff --json keeps the printed output within 100,000 bytes", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "diff", "--pr", "42", "--json"], {
+		cwd,
+		responses: [
+			diffIterations(1),
+			{
+				json: {
+					changeEntries: [
+						diffChange("add", "/huge.txt"),
+						diffChange("add", "/half.txt"),
+						diffChange("add", "/small.txt"),
+					],
+				},
+			},
+			// One-character lines take about 15 bytes each in the printed JSON.
+			diffItem("x\n".repeat(8000)),
+			diffItem("y\n".repeat(4000)),
+			diffItem("small\n"),
+		],
+	});
+
+	assertSucceeded(result);
+	const output = JSON.parse(result.stdout);
+	assert.deepEqual(
+		output.files.map((file) => [file.path, file.content]),
+		[
+			["huge.txt", "omitted"],
+			["half.txt", "text"],
+			["small.txt", "text"],
+		],
+	);
+	assert.equal(output.truncated, true);
+	assert.ok(Buffer.byteLength(result.stdout) <= 100_000);
+	assert.ok(Buffer.byteLength(result.stdout) > 60_000);
+});
+
+test("pr diff --json --name-only prints only paths and change types", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "diff", "--pr", "42", "--name-only", "--json"],
+		{
+			cwd,
+			responses: [
+				diffIterations(1),
+				{ json: { changeEntries: [diffChange("add", "/new\u202e.txt")] } },
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.match(result.stdout, /"path": "new\\u202e\.txt"/);
+	assert.deepEqual(JSON.parse(result.stdout), {
+		pullRequestId: 42,
+		iteration: 1,
+		baseIteration: null,
+		lastReview: null,
+		files: [
+			{ path: "new\u202e.txt", originalPath: "new\u202e.txt", change: "add" },
+		],
+		truncated: false,
+	});
+	assert.equal(result.calls.length, 2);
 });
