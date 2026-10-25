@@ -18,6 +18,7 @@ import {
 	pullRequestApiUrl,
 	reposBaseUrl,
 } from "../shared/azure.ts";
+import { safeJson } from "../shared/json.ts";
 import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
 import type { PullRequestService } from "./pull-requests.ts";
 import {
@@ -27,6 +28,8 @@ import {
 	type FileDiff,
 	formatFileDiff,
 	type LineBlock,
+	type LineChange,
+	lineChanges,
 	wholeFileBlocks,
 } from "./unified-diff.ts";
 
@@ -41,6 +44,7 @@ interface AzureCommitRef {
 
 interface AzureIteration {
 	id: number;
+	createdDate?: string;
 	sourceRefCommit?: AzureCommitRef;
 	commonRefCommit?: AzureCommitRef;
 }
@@ -85,6 +89,38 @@ interface ChangedFile {
 
 export interface PullRequestDiffOptions {
 	sinceIteration?: number;
+	/**
+	 * For --since-last-review: the user's last comment or vote, or null when they have none.
+	 * The diff compares with the latest iteration created before it.
+	 */
+	lastReview?: Date | null;
+	/** List changed paths without reading file content. */
+	nameOnly?: boolean;
+}
+
+/** How a JSON file entry carries its content: `none` is a pure rename, `omitted` didn't fit the output limit. */
+export type DiffFileContent = "text" | "binary" | "none" | "omitted";
+
+/** One changed file. `content` and `blocks` are left out for --name-only. */
+export interface PullRequestDiffFile {
+	path: string;
+	originalPath: string;
+	change: FileChangeKind;
+	content?: DiffFileContent;
+	blocks?: LineChange[];
+}
+
+/** The documented `pr diff --json` shape. */
+export interface PullRequestDiffJson {
+	pullRequestId: number;
+	iteration: number;
+	/** Null when the latest iteration is compared with the merge base. */
+	baseIteration: number | null;
+	/** The cutoff --since-last-review used as an ISO date, otherwise null. */
+	lastReview: string | null;
+	files: PullRequestDiffFile[];
+	/** True when some files have content `omitted`. */
+	truncated: boolean;
 }
 
 export interface PullRequestDiffService {
@@ -92,6 +128,21 @@ export interface PullRequestDiffService {
 		requestedPrId: number | undefined,
 		options?: PullRequestDiffOptions,
 	): Promise<string>;
+	diffJson(
+		requestedPrId: number | undefined,
+		options?: PullRequestDiffOptions,
+	): Promise<PullRequestDiffJson>;
+}
+
+/** The two sides of a pull request diff and the files that changed between them. */
+interface Comparison {
+	prId: number;
+	latest: AzureIteration;
+	compared?: AzureIteration;
+	lastReview?: Date;
+	baseCommit: string;
+	targetCommit: string;
+	files: ChangedFile[];
 }
 
 function malformed(detail: string): Error {
@@ -131,22 +182,50 @@ function toChangedFile(entry: AzureIterationChange): ChangedFile | undefined {
 	};
 }
 
-/** Picks the latest iteration and, for --since-iteration, the one to compare with. */
-function selectIterations(
-	prId: number,
-	iterations: AzureIteration[],
-	since: number | undefined,
-): { latest: AzureIteration; compared?: AzureIteration } {
-	const latest = iterations.reduce((newest, iteration) =>
+function latestIteration(iterations: AzureIteration[]): AzureIteration {
+	return iterations.reduce((newest, iteration) =>
 		iteration.id > newest.id ? iteration : newest,
 	);
-	if (since === undefined) return { latest };
-	const compared = iterations.find((iteration) => iteration.id === since);
-	if (!compared)
+}
+
+function iterationById(
+	prId: number,
+	iterations: AzureIteration[],
+	id: number,
+): AzureIteration {
+	const iteration = iterations.find((candidate) => candidate.id === id);
+	if (!iteration)
 		throw new Error(
-			`PR #${prId} has no iteration ${since}; the latest iteration is ${latest.id}.`,
+			`PR #${prId} has no iteration ${id}; the latest iteration is ${latestIteration(iterations).id}.`,
 		);
-	return { latest, compared };
+	return iteration;
+}
+
+function createdTime(iteration: AzureIteration): number {
+	const time = Date.parse(String(iteration.createdDate));
+	if (Number.isNaN(time))
+		throw malformed(`iteration ${iteration.id} has no creation date`);
+	return time;
+}
+
+/** The latest iteration created before the user's last review, for --since-last-review. */
+function iterationBefore(
+	prId: number,
+	iterations: AzureIteration[],
+	lastReview: Date | null,
+): AzureIteration {
+	if (lastReview === null)
+		throw new Error(
+			`Found no comment or vote by you on PR #${prId}. Use --since-iteration <n> instead.`,
+		);
+	const earlier = iterations.filter(
+		(iteration) => createdTime(iteration) < lastReview.getTime(),
+	);
+	if (earlier.length === 0)
+		throw new Error(
+			`PR #${prId} has no iteration created before your last review on ${lastReview.toISOString()}. Use --since-iteration <n> instead.`,
+		);
+	return latestIteration(earlier);
 }
 
 function toLineBlocks(diff: AzureFileDiff | undefined): LineBlock[] {
@@ -164,6 +243,60 @@ function toLineBlocks(diff: AzureFileDiff | undefined): LineBlock[] {
 
 function displayPath(path: string): string {
 	return path.replace(/^\//, "");
+}
+
+function heading(comparison: Comparison): string {
+	const { prId, latest, compared, lastReview } = comparison;
+	const base = compared ? `iteration ${compared.id}` : "the merge base";
+	const review =
+		lastReview === undefined
+			? ""
+			: `, the latest before your last review on ${lastReview.toISOString()}`;
+	return `PR #${prId}: iteration ${latest.id} compared with ${base}${review}.\n`;
+}
+
+function fileNames(file: ChangedFile): PullRequestDiffFile {
+	return {
+		path: displayPath(file.path),
+		originalPath: displayPath(file.originalPath),
+		change: file.change,
+	};
+}
+
+const EMPTY_BLOCK: LineChange = {
+	originalStart: 0,
+	originalCount: 0,
+	modifiedStart: 0,
+	modifiedCount: 0,
+	removed: [],
+	added: [],
+};
+
+function omittedFile(file: ChangedFile): PullRequestDiffFile {
+	return { ...fileNames(file), content: "omitted", blocks: [] };
+}
+
+/** Bytes a file entry takes in the printed JSON: indented two levels and followed by ",\n". */
+function printedFileBytes(entry: PullRequestDiffFile): number {
+	const text = safeJson(entry);
+	return Buffer.byteLength(text) + 4 * text.split("\n").length + 2;
+}
+
+/**
+ * Bytes the printed JSON takes besides its file entries. "[]" becomes "[\n" + entries + "\n  ]",
+ * the last entry has no ",", and printing adds a newline: 3 bytes more in all.
+ */
+function printedEnvelopeBytes(envelope: PullRequestDiffJson): number {
+	return (
+		Buffer.byteLength(safeJson({ ...envelope, files: [], truncated: false })) +
+		3
+	);
+}
+
+function formatNameOnly(file: ChangedFile): string {
+	const { path, originalPath } = fileNames(file);
+	const paths = path === originalPath ? path : `${originalPath} -> ${path}`;
+	return `${file.change}\t${paths}\n`;
 }
 
 export function createPullRequestDiffService({
@@ -273,16 +406,25 @@ export function createPullRequestDiffService({
 		};
 	}
 
-	async function diff(
+	function comparedIteration(
+		prId: number,
+		iterations: AzureIteration[],
+		options: PullRequestDiffOptions,
+	): AzureIteration | undefined {
+		if (options.lastReview !== undefined)
+			return iterationBefore(prId, iterations, options.lastReview);
+		if (options.sinceIteration === undefined) return undefined;
+		return iterationById(prId, iterations, options.sinceIteration);
+	}
+
+	async function compare(
 		requestedPrId: number | undefined,
-		options: PullRequestDiffOptions = {},
-	): Promise<string> {
+		options: PullRequestDiffOptions,
+	): Promise<Comparison> {
 		const prId = await pullRequests.resolveId(requestedPrId);
-		const { latest, compared } = selectIterations(
-			prId,
-			await listIterations(prId),
-			options.sinceIteration,
-		);
+		const iterations = await listIterations(prId);
+		const latest = latestIteration(iterations);
+		const compared = comparedIteration(prId, iterations, options);
 
 		const targetCommit = commitId(
 			latest.sourceRefCommit,
@@ -292,11 +434,25 @@ export function createPullRequestDiffService({
 			? commitId(compared.sourceRefCommit, `iteration ${compared.id} source`)
 			: commitId(latest.commonRefCommit, `iteration ${latest.id} common`);
 		const files = await listChanges(prId, latest.id, compared?.id);
+		return {
+			prId,
+			latest,
+			compared,
+			lastReview: options.lastReview ?? undefined,
+			baseCommit,
+			targetCommit,
+			files,
+		};
+	}
 
-		const heading = `PR #${prId}: iteration ${latest.id} compared with ${
-			compared ? `iteration ${compared.id}` : "the merge base"
-		}.\n`;
-		if (files.length === 0) return `${heading}No file changes.\n`;
+	async function diff(
+		requestedPrId: number | undefined,
+		options: PullRequestDiffOptions = {},
+	): Promise<string> {
+		const comparison = await compare(requestedPrId, options);
+		const { files, baseCommit, targetCommit } = comparison;
+		if (options.nameOnly) return files.map(formatNameOnly).join("");
+		if (files.length === 0) return `${heading(comparison)}No file changes.\n`;
 
 		const output = createDiffOutput(maxOutputBytes);
 		for (const file of files) {
@@ -311,8 +467,103 @@ export function createPullRequestDiffService({
 			};
 			output.add(fileDiff.path, formatFileDiff(fileDiff));
 		}
-		return `${heading}${output.finish(files.length)}`;
+		return `${heading(comparison)}${output.finish(files.length)}`;
 	}
 
-	return { diff };
+	async function textOrBinaryContent(
+		file: ChangedFile,
+		comparison: Comparison,
+	): Promise<Pick<PullRequestDiffFile, "content" | "blocks">> {
+		const content = await getContent(
+			file,
+			comparison.baseCommit,
+			comparison.targetCommit,
+		);
+		if (content.binary) return { content: "binary", blocks: [] };
+		return {
+			content: "text",
+			blocks: lineChanges(
+				displayPath(file.path),
+				content.original,
+				content.modified,
+				content.blocks,
+			),
+		};
+	}
+
+	/**
+	 * Reads a file's content if it fits the remaining bytes, otherwise marks it `omitted`. Content
+	 * isn't read when not even one empty block would fit.
+	 */
+	async function fileWithContent(
+		file: ChangedFile,
+		comparison: Comparison,
+		remainingBytes: number,
+	): Promise<PullRequestDiffFile> {
+		const omitted = omittedFile(file);
+		if (!file.contentChanged) return { ...omitted, content: "none" };
+		const cost = (entry: PullRequestDiffFile) =>
+			printedFileBytes(entry) - printedFileBytes(omitted);
+		if (
+			cost({ ...omitted, content: "text", blocks: [EMPTY_BLOCK] }) >
+			remainingBytes
+		)
+			return omitted;
+		const entry = {
+			...fileNames(file),
+			...(await textOrBinaryContent(file, comparison)),
+		};
+		return cost(entry) > remainingBytes ? omitted : entry;
+	}
+
+	/**
+	 * Lists every file and adds content while the printed JSON stays within the output limit. The
+	 * budget first reserves each file's `omitted` entry; a file that doesn't fit stays `omitted`
+	 * and later files still get content if they fit.
+	 */
+	async function filesWithContent(
+		comparison: Comparison,
+		budget: number,
+	): Promise<PullRequestDiffFile[]> {
+		let remainingBytes = comparison.files.reduce(
+			(bytes, file) => bytes - printedFileBytes(omittedFile(file)),
+			budget,
+		);
+		const files: PullRequestDiffFile[] = [];
+		for (const file of comparison.files) {
+			const entry = await fileWithContent(file, comparison, remainingBytes);
+			remainingBytes -=
+				printedFileBytes(entry) - printedFileBytes(omittedFile(file));
+			files.push(entry);
+		}
+		return files;
+	}
+
+	async function diffJson(
+		requestedPrId: number | undefined,
+		options: PullRequestDiffOptions = {},
+	): Promise<PullRequestDiffJson> {
+		const comparison = await compare(requestedPrId, options);
+		const envelope: PullRequestDiffJson = {
+			pullRequestId: comparison.prId,
+			iteration: comparison.latest.id,
+			baseIteration: comparison.compared?.id ?? null,
+			lastReview: comparison.lastReview?.toISOString() ?? null,
+			files: [],
+			truncated: false,
+		};
+		if (options.nameOnly)
+			return { ...envelope, files: comparison.files.map(fileNames) };
+		const files = await filesWithContent(
+			comparison,
+			maxOutputBytes - printedEnvelopeBytes(envelope),
+		);
+		return {
+			...envelope,
+			files,
+			truncated: files.some((file) => file.content === "omitted"),
+		};
+	}
+
+	return { diff, diffJson };
 }
