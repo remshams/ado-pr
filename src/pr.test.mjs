@@ -2299,3 +2299,244 @@ test("pr status reports Azure errors and exits 1", (t) => {
 	assert.equal(result.stdout, "");
 	assert.match(result.stderr, /404 Not Found/);
 });
+
+function diffIterations(count) {
+	return {
+		json: {
+			count,
+			value: Array.from({ length: count }, (_, index) => ({
+				id: index + 1,
+				sourceRefCommit: { commitId: `source-${index + 1}` },
+				commonRefCommit: { commitId: `common-${index + 1}` },
+			})),
+		},
+	};
+}
+
+function diffChange(changeType, path, extra = {}) {
+	return {
+		changeId: 1,
+		changeTrackingId: 1,
+		changeType,
+		item: { path },
+		...extra,
+	};
+}
+
+function diffItem(content, isBinary = false) {
+	return {
+		json: { gitObjectType: "blob", content, contentMetadata: { isBinary } },
+	};
+}
+
+function diffItemUrl(path, commit) {
+	return `${apiBase}/items?path=${encodeURIComponent(path)}&versionDescriptor.version=${commit}&versionDescriptor.versionType=commit&includeContent=true&includeContentMetadata=true&$format=json&api-version=7.1`;
+}
+
+test("pr diff prints modified, added, deleted, renamed and binary files", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(t, ["pr", "diff", "--pr", "42"], {
+		cwd,
+		responses: [
+			diffIterations(2),
+			{
+				json: {
+					changeEntries: [
+						diffChange("edit", "/src/app.ts"),
+						diffChange("add", "/docs/new.md"),
+						diffChange("delete", "/old.txt"),
+						diffChange("edit, rename", "/src/renamed.ts", {
+							originalPath: "/src/original.ts",
+						}),
+						diffChange("edit", "/logo.png"),
+					],
+				},
+			},
+			diffItem("a\nb\nc\n"),
+			diffItem("a\nB\nc\n"),
+			{
+				json: [
+					{
+						path: "/src/app.ts",
+						lineDiffBlocks: [
+							{
+								changeType: "edit",
+								originalLineNumberStart: 2,
+								originalLinesCount: 1,
+								modifiedLineNumberStart: 2,
+								modifiedLinesCount: 1,
+							},
+						],
+					},
+				],
+			},
+			diffItem("# New\n"),
+			diffItem("gone\n"),
+			diffItem("x\n"),
+			diffItem("x\ny\n"),
+			{
+				json: [
+					{
+						path: "/src/renamed.ts",
+						originalPath: "/src/original.ts",
+						lineDiffBlocks: [
+							{
+								changeType: "add",
+								originalLineNumberStart: 2,
+								originalLinesCount: 0,
+								modifiedLineNumberStart: 2,
+								modifiedLinesCount: 1,
+							},
+						],
+					},
+				],
+			},
+			diffItem("PNG", true),
+			diffItem("PNG", true),
+		],
+	});
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		[
+			"PR #42: iteration 2 compared with the merge base.",
+			"diff --git a/src/app.ts b/src/app.ts",
+			"--- a/src/app.ts",
+			"+++ b/src/app.ts",
+			"@@ -1,3 +1,3 @@",
+			" a",
+			"-b",
+			"+B",
+			" c",
+			"diff --git a/docs/new.md b/docs/new.md",
+			"--- /dev/null",
+			"+++ b/docs/new.md",
+			"@@ -0,0 +1,1 @@",
+			"+# New",
+			"diff --git a/old.txt b/old.txt",
+			"--- a/old.txt",
+			"+++ /dev/null",
+			"@@ -1,1 +0,0 @@",
+			"-gone",
+			"diff --git a/src/original.ts b/src/renamed.ts",
+			"rename from src/original.ts",
+			"rename to src/renamed.ts",
+			"--- a/src/original.ts",
+			"+++ b/src/renamed.ts",
+			"@@ -1,1 +1,2 @@",
+			" x",
+			"+y",
+			"diff --git a/logo.png b/logo.png",
+			"Binary files a/logo.png and b/logo.png differ",
+			"",
+		].join("\n"),
+	);
+	assert.deepEqual(
+		result.calls.map((call) => `${call.method} ${call.url}`),
+		[
+			`GET ${apiBase}/pullRequests/42/iterations?api-version=7.1`,
+			`GET ${apiBase}/pullRequests/42/iterations/2/changes?$top=2000&api-version=7.1`,
+			`GET ${diffItemUrl("/src/app.ts", "common-2")}`,
+			`GET ${diffItemUrl("/src/app.ts", "source-2")}`,
+			`POST ${apiBase}/filediffs?api-version=7.1-preview.1`,
+			`GET ${diffItemUrl("/docs/new.md", "source-2")}`,
+			`GET ${diffItemUrl("/old.txt", "common-2")}`,
+			`GET ${diffItemUrl("/src/original.ts", "common-2")}`,
+			`GET ${diffItemUrl("/src/renamed.ts", "source-2")}`,
+			`POST ${apiBase}/filediffs?api-version=7.1-preview.1`,
+			`GET ${diffItemUrl("/logo.png", "common-2")}`,
+			`GET ${diffItemUrl("/logo.png", "source-2")}`,
+		],
+	);
+	assert.deepEqual(semanticRequest(result.calls[9]).body, {
+		baseVersionCommit: "common-2",
+		targetVersionCommit: "source-2",
+		fileDiffParams: [
+			{ path: "/src/renamed.ts", originalPath: "/src/original.ts" },
+		],
+	});
+});
+
+test("pr diff --since-iteration compares the current branch's PR with an earlier iteration", (t) => {
+	const cwd = createRepo(t, "feature/diff");
+	const result = runPr(t, ["pr", "diff", "--since-iteration", "2"], {
+		cwd,
+		responses: [
+			{ json: { value: [validationPr({ pullRequestId: 73 })] } },
+			diffIterations(3),
+			{ json: { changeEntries: [diffChange("add", "/later.txt")] } },
+			diffItem("later\n"),
+		],
+	});
+
+	assertSucceeded(result);
+	assert.equal(
+		result.stdout,
+		"PR #73: iteration 3 compared with iteration 2.\ndiff --git a/later.txt b/later.txt\n--- /dev/null\n+++ b/later.txt\n@@ -0,0 +1,1 @@\n+later\n",
+	);
+	assert.deepEqual(
+		result.calls.slice(1).map((call) => call.url),
+		[
+			`${apiBase}/pullRequests/73/iterations?api-version=7.1`,
+			`${apiBase}/pullRequests/73/iterations/3/changes?$top=2000&$compareTo=2&api-version=7.1`,
+			diffItemUrl("/later.txt", "source-3"),
+		],
+	);
+});
+
+test("pr diff stops at the output limit with a truncation notice", (t) => {
+	const cwd = createRepo(t);
+	const fileText = `${"x".repeat(99)}\n`.repeat(550);
+	const result = runPr(t, ["pr", "diff", "--pr", "42"], {
+		cwd,
+		responses: [
+			diffIterations(1),
+			{
+				json: {
+					changeEntries: [
+						diffChange("add", "/one.txt"),
+						diffChange("add", "/two.txt"),
+						diffChange("add", "/three.txt"),
+					],
+				},
+			},
+			diffItem(fileText),
+			diffItem(fileText),
+		],
+	});
+
+	assertSucceeded(result);
+	assert.match(
+		result.stdout,
+		/\n\+x+\nDiff truncated at the 100,000-byte limit in file 2 of 3 \(two\.txt\)\.\n$/,
+	);
+	const heading = "PR #42: iteration 1 compared with the merge base.\n";
+	const notice = result.stdout.slice(
+		result.stdout.lastIndexOf("Diff truncated"),
+	);
+	assert.ok(
+		Buffer.byteLength(result.stdout) - heading.length - notice.length <=
+			100_000,
+	);
+	assert.equal(result.calls.length, 4);
+});
+
+test("pr diff rejects an iteration the PR does not have", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "diff", "--pr", "42", "--since-iteration", "5"],
+		{
+			cwd,
+			responses: [diffIterations(2)],
+		},
+	);
+
+	assert.equal(result.status, 1);
+	assert.equal(result.stdout, "");
+	assert.equal(
+		result.stderr,
+		"PR #42 has no iteration 5; the latest iteration is 2.\n",
+	);
+});
