@@ -86,7 +86,14 @@ Build selection:
   source branch against lastMergeSourceCommit. Output labels them pr-merge or branch-head.
   Manual runs on the PR merge ref are unsupported. If no build validates the head, show prints
   the newest associated build marked stale with its commit and exits 1; wait fails naming the head.
-  --build accepts current or historical associated builds. build list includes only PR merge runs.
+  --build accepts current or historical associated builds.
+
+Build list:
+  \`build list\` merges PR merge runs and source-branch runs, newest first, each labelled pr-merge or
+  branch-head. Builds validating the current PR head are marked current (same rule as --latest). The
+  default view shows only those and fails for inactive PRs; --history shows every associated build
+  and marks none current for an inactive PR. An empty default view reports how many stale builds it
+  hides. --json adds association and current to each build and hiddenBuilds to the result.
 
 Build wait:
   \`build wait\` monitors validation metadata for the selected build. --pr only selects or resolves
