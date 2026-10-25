@@ -186,7 +186,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "boolean",
 		usage: "--json",
 		description:
-			"Print normalized build output, or raw JSON for PR/comment list and PR show.",
+			"Print normalized build output, the PR status document, or raw JSON for PR/comment list and PR show.",
 	},
 	help: {
 		kind: "boolean",
@@ -317,10 +317,10 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 	"pr.status": {
 		resource: "pr",
 		command: "status",
-		usage: "pr status [--pr <id>]",
+		usage: "pr status [--pr <id>] [--json]",
 		summary:
-			"Show head commit, validating build, Copilot review, unresolved threads, merge state and votes.",
-		flags: ["pr"],
+			"Show head and merge commit, iteration, draft state, validating build, Copilot review, unresolved threads, merge state, blocking policies and votes.",
+		flags: ["pr", "json"],
 	},
 	"pr.diff": {
 		resource: "pr",
