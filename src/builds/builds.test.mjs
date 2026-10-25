@@ -271,6 +271,24 @@ describe("build discovery", () => {
 		]);
 	});
 
+	test("lists a build without a queue time after the timed builds", async (t) => {
+		const untimed = build({ queueTime: undefined });
+		const older = branchBuild({ id: 704, queueTime: "2026-08-18T09:00:00Z" });
+		const newer = branchBuild({ id: 705, queueTime: "2026-08-18T11:00:00Z" });
+		const { service } = setup(
+			t,
+			[{ json: { value: [untimed] } }, { json: { value: [older, newer] } }],
+			{ resolveValues: [headPr()] },
+		);
+
+		const result = await service.list(undefined);
+
+		assert.deepEqual(
+			result.builds.map((listed) => listed.id),
+			[705, 704, untimed.id],
+		);
+	});
+
 	test("history follows and encodes every continuation page and merges both build kinds newest first without marking inactive PRs current", async (t) => {
 		const first = build({
 			id: 702,
