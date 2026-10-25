@@ -6,6 +6,8 @@ there is no build step.
 
 Install the launcher with `mkdir -p ~/.local/bin && ln -s <checkout>/pr.sh ~/.local/bin/pr.sh`.
 Add `~/.local/bin` to PATH if your shell doesn't include it.
+As an alternative, run `pnpm add --global link:<checkout>` (pnpm 10 and older:
+`pnpm link --global` in the checkout). The pnpm global bin directory must be on PATH.
 Run `pr.sh --help` from an Azure Repos checkout. Export `AZURE_DEVOPS_PAT` or copy
 `.env.tpl` to `.env` beside `pr.sh`. The launcher accepts a literal PAT or resolves
 an `op://` reference with the 1Password CLI. For help without authentication, run
