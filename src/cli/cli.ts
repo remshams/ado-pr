@@ -607,6 +607,8 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		file: values.file,
 		line: values.line,
 		endLine: values["end-line"],
+		attachment: values.attachment,
+		attachmentName: values["attachment-name"],
 	}),
 	"comment.reply": (values) => ({
 		resource: "comment",
@@ -615,6 +617,8 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 		thread: values.thread,
 		message: values.message,
 		status: values.status as ResolvedStatus | undefined,
+		attachment: values.attachment,
+		attachmentName: values["attachment-name"],
 	}),
 	"comment.edit": (values) => ({
 		resource: "comment",
