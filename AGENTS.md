@@ -79,7 +79,12 @@ issue. Apply the `unslop` skill to the title and body before publishing.
 
 Follow the [pull request description guide](docs/pull-request-descriptions.md)
 when creating or updating a PR description. Apply the `unslop` skill before
-publishing it.
+publishing it. When you open a PR, decide whether it needs the `human review required`
+label, as the guide describes, and set it.
+
+Merge a PR with the label only after the maintainer approves it, through a GitHub review
+or a message. Merge a PR without the label once CI passes and its CodeRabbit review is
+handled. Leave the label on after approval.
 
 ## CodeRabbit reviews
 
