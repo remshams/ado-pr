@@ -177,6 +177,18 @@ export const FLAG_DEFINITIONS = {
 		description:
 			"End an anchored range. Requires --line and must be >= --line.",
 	},
+	attachment: {
+		kind: "string",
+		usage: "--attachment <path>",
+		description:
+			"Upload a file and append its Markdown link to the comment; `comment create` and `comment reply`.",
+	},
+	"attachment-name": {
+		kind: "string",
+		usage: "--attachment-name <file name>",
+		description:
+			"Filename for --attachment (defaults to the path basename). Requires --attachment.",
+	},
 	"exclude-own": {
 		kind: "boolean",
 		usage: "--exclude-own",
@@ -283,6 +295,7 @@ export type CommandValidationRule =
 	| "pullRequestEdit"
 	| "pullRequestDiff"
 	| "commentLocation"
+	| "commentAttachment"
 	| "buildWaitBounds"
 	| "buildSelection"
 	| "buildQueueTarget";
@@ -450,21 +463,37 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		resource: "comment",
 		command: "create",
 		usage:
-			'comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]]',
+			'comment create --message "..." [--pr <id>] [--file <path> [--line <n> [--end-line <n>]]] [--attachment <path> [--attachment-name <file name>]]',
 		summary: "Create a general or file-anchored comment thread.",
-		flags: ["pr", "message", "file", "line", "end-line"],
+		flags: [
+			"pr",
+			"message",
+			"file",
+			"line",
+			"end-line",
+			"attachment",
+			"attachment-name",
+		],
 		requiredFlags: ["message"],
-		validationRules: ["commentLocation"],
+		validationRules: ["commentLocation", "commentAttachment"],
 		batchFields: ["command", "message", "pr", "file", "line", "endLine"],
 	},
 	"comment.reply": {
 		resource: "comment",
 		command: "reply",
 		usage:
-			'comment reply --thread <id> --message "..." [--pr <id>] [--status fixed|wontFix|byDesign|closed]',
+			'comment reply --thread <id> --message "..." [--pr <id>] [--status fixed|wontFix|byDesign|closed] [--attachment <path> [--attachment-name <file name>]]',
 		summary: "Reply to an existing thread, optionally setting its status.",
-		flags: ["pr", "thread", "message", "status"],
+		flags: [
+			"pr",
+			"thread",
+			"message",
+			"status",
+			"attachment",
+			"attachment-name",
+		],
 		requiredFlags: ["thread", "message"],
+		validationRules: ["commentAttachment"],
 		batchFields: ["command", "thread", "message", "pr", "status"],
 	},
 	"comment.edit": {

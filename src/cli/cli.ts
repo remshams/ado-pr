@@ -295,6 +295,20 @@ function validateCommentLocation(values: FlagValues): void {
 	}
 }
 
+function validateCommentAttachment(values: FlagValues): void {
+	const attachment = values.attachment as string | undefined;
+	const name = values["attachment-name"] as string | undefined;
+	if (attachment === "") {
+		printUsageAndExit(`--attachment must not be empty`);
+	}
+	if (name === "") {
+		printUsageAndExit(`--attachment-name must not be empty`);
+	}
+	if (name !== undefined && attachment === undefined) {
+		printUsageAndExit(`--attachment-name requires --attachment`);
+	}
+}
+
 function validateRequiredFlag(
 	flag: FlagName,
 	value: FlagValues[FlagName],
@@ -407,6 +421,7 @@ const VALIDATION_RULES: Record<
 		validateBuildQueueTarget(values, enforceRequired, route),
 	buildWaitBounds: ({ values }) => validateBuildWaitBounds(values),
 	commentLocation: ({ values }) => validateCommentLocation(values),
+	commentAttachment: ({ values }) => validateCommentAttachment(values),
 };
 
 function parseCommandFlags<Id extends CommandId>(
