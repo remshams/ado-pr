@@ -79,6 +79,9 @@ interface AzureFileDiff {
 	lineDiffBlocks?: AzureLineDiffBlock[];
 }
 
+/** Azure most likely wraps file diffs in `{ count, value }` like other collections. The live shape is unverified, so a bare array is accepted too. */
+type AzureFileDiffs = AzureFileDiff[] | { value?: AzureFileDiff[] };
+
 /** A changed file in the pull request, with Azure's leading slash still on its paths. */
 interface ChangedFile {
 	path: string;
@@ -382,7 +385,7 @@ export function createPullRequestDiffService({
 		targetCommit: string,
 	): Promise<LineBlock[]> {
 		const url = `${reposBaseUrl(ctx)}/filediffs?api-version=${FILE_DIFFS_API_VERSION}`;
-		const data = await azure.request<AzureFileDiff[]>(url, {
+		const data = await azure.request<AzureFileDiffs>(url, {
 			method: "POST",
 			body: {
 				baseVersionCommit: baseCommit,
@@ -390,8 +393,12 @@ export function createPullRequestDiffService({
 				fileDiffParams: [{ path: file.path, originalPath: file.originalPath }],
 			},
 		});
-		if (!Array.isArray(data)) throw malformed("file diffs must be an array");
-		return toLineBlocks(data[0]);
+		const diffs = Array.isArray(data) ? data : data?.value;
+		if (!Array.isArray(diffs))
+			throw malformed(
+				"file diffs response must be an array or have a value array",
+			);
+		return toLineBlocks(diffs[0]);
 	}
 
 	async function getContent(

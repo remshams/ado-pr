@@ -72,8 +72,12 @@ function item(content, isBinary = false) {
 }
 
 // Shapes follow https://learn.microsoft.com/en-us/javascript/api/azure-devops-extension-api/filediff
+function fileDiff(path, lineDiffBlocks) {
+	return { path, originalPath: path, lineDiffBlocks };
+}
+
 function fileDiffs(path, lineDiffBlocks) {
-	return { json: [{ path, originalPath: path, lineDiffBlocks }] };
+	return { json: { count: 1, value: [fileDiff(path, lineDiffBlocks)] } };
 }
 
 function lineBlock(changeType, original, modified) {
@@ -135,6 +139,18 @@ describe("pull request diff", () => {
 			targetVersionCommit: "source-2",
 			fileDiffParams: [{ path: "/src/a.ts", originalPath: "/src/a.ts" }],
 		});
+	});
+
+	test("accepts file diffs as a bare array", async (t) => {
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.txt")]),
+			item("a\n"),
+			item("b\n"),
+			{ json: [fileDiff("/a.txt", [lineBlock("edit", [1, 1], [1, 1])])] },
+		]);
+
+		assert.match(await service.diff(42), /-a\n\+b\n$/);
 	});
 
 	test("compares with an earlier iteration for --since-iteration", async (t) => {
@@ -328,7 +344,7 @@ describe("pull request diff", () => {
 					changes([change("edit", "/a.txt")]),
 					item("a\n"),
 					item("b\n"),
-					{ json: [{ path: "/a.txt" }] },
+					{ json: { count: 1, value: [{ path: "/a.txt" }] } },
 				],
 				/file diff has no lineDiffBlocks/,
 			],
@@ -338,9 +354,19 @@ describe("pull request diff", () => {
 					changes([change("edit", "/a.txt")]),
 					item("a\n"),
 					item("b\n"),
-					{ json: { value: [] } },
+					{ json: { count: 0, value: [] } },
 				],
-				/file diffs must be an array/,
+				/file diff has no lineDiffBlocks/,
+			],
+			[
+				[
+					iterations(1),
+					changes([change("edit", "/a.txt")]),
+					item("a\n"),
+					item("b\n"),
+					{ json: {} },
+				],
+				/file diffs response must be an array or have a value array/,
 			],
 		];
 		for (const [responses, message] of cases) {
