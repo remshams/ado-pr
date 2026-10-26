@@ -357,6 +357,10 @@ describe("pull request diff", () => {
 				/an iteration change has no item path/,
 			],
 			[
+				[iterations(1), changes([{ changeType: "edit" }])],
+				/an iteration change has no item path/,
+			],
+			[
 				[
 					iterations(1),
 					changes([change("edit", "/a.txt")]),
