@@ -47,6 +47,17 @@ function changes(changeEntries, page = {}) {
 	return { json: { changeEntries, ...page } };
 }
 
+/** Azure sends a deleted file with `item.path: null` and the path in `originalPath`. */
+function deletion(path) {
+	return {
+		changeTrackingId: 1,
+		changeId: 1,
+		item: { originalObjectId: "object", path: null },
+		changeType: "delete",
+		originalPath: path,
+	};
+}
+
 function change(changeType, path, extra = {}) {
 	return {
 		changeTrackingId: 1,
@@ -186,7 +197,7 @@ describe("pull request diff", () => {
 	test("reads added files at the target and deleted files at the base only", async (t) => {
 		const { service, calls } = createService(t, [
 			iterations(1),
-			changes([change("add", "/new.txt"), change("delete", "/old.txt")]),
+			changes([change("add", "/new.txt"), deletion("/old.txt")]),
 			item("hello\n"),
 			item("bye\n"),
 		]);
@@ -341,6 +352,13 @@ describe("pull request diff", () => {
 			[
 				[
 					iterations(1),
+					changes([{ changeType: "delete", item: { path: null } }]),
+				],
+				/an iteration change has no item path/,
+			],
+			[
+				[
+					iterations(1),
 					changes([change("edit", "/a.txt")]),
 					item("a\n"),
 					item("b\n"),
@@ -454,7 +472,7 @@ describe("pull request diff", () => {
 			changes([
 				change("edit", "/src/a.ts"),
 				change("add", "/new.txt"),
-				change("delete", "/old.txt"),
+				deletion("/old.txt"),
 				change("edit, rename", "/b.txt", { originalPath: "/a.txt" }),
 			]),
 		]);
@@ -507,7 +525,7 @@ describe("pull request diff", () => {
 				change("edit", "/src/a.ts"),
 				change("rename", "/moved.txt", { originalPath: "/plain.txt" }),
 				change("add", "/logo.png"),
-				change("delete", "/old.txt"),
+				deletion("/old.txt"),
 			]),
 			item("one\ntwo\nthree\n"),
 			item("one\n2\nthree\nfour\n"),
