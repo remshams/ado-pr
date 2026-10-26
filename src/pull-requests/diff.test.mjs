@@ -368,6 +368,16 @@ describe("pull request diff", () => {
 				],
 				/file diffs response must be an array or have a value array/,
 			],
+			[
+				[
+					iterations(1),
+					changes([change("edit", "/a.txt")]),
+					item("a\n"),
+					item("b\n"),
+					{ json: null },
+				],
+				/file diffs response must be an array or have a value array/,
+			],
 		];
 		for (const [responses, message] of cases) {
 			const { service } = createService(t, responses);
