@@ -231,6 +231,18 @@ describe("pull request diff", () => {
 		assert.equal(file.blocks[0].added.at(-1), ".rule-13 {}");
 	});
 
+	test("keeps an empty side that starts past the end of a file", async (t) => {
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.txt")]),
+			item("a\nb\n"),
+			item("a\n"),
+			fileDiffs("/a.txt", [lineBlock("delete", [2, 1], [3, 0])]),
+		]);
+
+		assert.match(await service.diff(42), /\n@@ -1,2 \+1,1 @@\n a\n-b\n$/);
+	});
+
 	test("rejects blocks that overrun the end of a file in other ways", async (t) => {
 		const cases = [
 			[item(""), item("a\nb\n"), lineBlock("add", [1, 0], [1, 4])],
