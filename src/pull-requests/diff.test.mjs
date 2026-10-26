@@ -82,6 +82,7 @@ function item(content, isBinary = false) {
 }
 
 // Shapes follow https://learn.microsoft.com/en-us/javascript/api/azure-devops-extension-api/filediff
+// A live response confirmed the `{ count, value }` wrapper (#51).
 function fileDiff(path, lineDiffBlocks) {
 	return { path, originalPath: path, lineDiffBlocks };
 }
@@ -210,6 +211,41 @@ describe("pull request diff", () => {
 		const output = await service.diff(42);
 		assert.match(output, /\n@@ -0,0 \+1,14 @@\n/);
 		assert.match(output, /\+\.rule-13 \{\}\n$/);
+	});
+
+	test("trims the same block in JSON output", async (t) => {
+		const target = Array.from({ length: 14 }, (_, i) => `.rule-${i} {}\n`).join(
+			"",
+		);
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.scss")]),
+			item(""),
+			item(target),
+			fileDiffs("/a.scss", [lineBlock("add", [1, 0], [1, 15])]),
+		]);
+
+		const [file] = (await service.diffJson(42)).files;
+		assert.equal(file.blocks.length, 1);
+		assert.equal(file.blocks[0].modifiedCount, 14);
+		assert.equal(file.blocks[0].added.at(-1), ".rule-13 {}");
+	});
+
+	test("rejects blocks that overrun the end of a file in other ways", async (t) => {
+		const cases = [
+			[item(""), item("a\nb\n"), lineBlock("add", [1, 0], [1, 4])],
+			[item("a"), item("b"), lineBlock("edit", [1, 2], [1, 1])],
+		];
+		for (const [original, modified, block] of cases) {
+			const { service } = createService(t, [
+				iterations(1),
+				changes([change("edit", "/a.txt")]),
+				original,
+				modified,
+				fileDiffs("/a.txt", [block]),
+			]);
+			await assert.rejects(service.diff(42), /do not match the file content/);
+		}
 	});
 
 	test("trims a block that empties a file", async (t) => {

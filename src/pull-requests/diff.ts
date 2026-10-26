@@ -246,32 +246,43 @@ function toLineBlocks(diff: AzureFileDiff | undefined): LineBlock[] {
 		}));
 }
 
+/** One side of a file: its text and the number of lines the formatter sees in it. */
+function fileSide(text: string) {
+	return { endsWithNewline: text.endsWith("\n"), lastLine: lineCount(text) };
+}
+
 /**
- * Azure counts the empty text after a final newline as a line, so a block that reaches the end of
- * a file can run one line past it when only one side ends with a newline. Trims each side to the
- * file's lines and drops blocks left with no lines.
+ * Azure counts the empty text after a final newline as a line. When only one side of a file ends
+ * with a newline, a block that reaches its end runs exactly one line past it. Trims that line and
+ * drops blocks left with no lines; any other overrun reaches the formatter's strict check.
  */
 function fitBlocksToLines(
 	blocks: LineBlock[],
 	original: string,
 	modified: string,
 ): LineBlock[] {
-	const originalLines = lineCount(original);
-	const modifiedLines = lineCount(modified);
-	const fit = (start: number, count: number, lines: number) =>
-		Math.max(0, Math.min(count, lines - start + 1));
+	const originalSide = fileSide(original);
+	const modifiedSide = fileSide(modified);
+	const fit = (
+		start: number,
+		count: number,
+		side: ReturnType<typeof fileSide>,
+	) =>
+		count > 0 && side.endsWithNewline && start + count - 1 === side.lastLine + 1
+			? count - 1
+			: count;
 	return blocks
 		.map((block) => ({
 			...block,
 			originalCount: fit(
 				block.originalStart,
 				block.originalCount,
-				originalLines,
+				originalSide,
 			),
 			modifiedCount: fit(
 				block.modifiedStart,
 				block.modifiedCount,
-				modifiedLines,
+				modifiedSide,
 			),
 		}))
 		.filter((block) => block.originalCount > 0 || block.modifiedCount > 0);
@@ -416,6 +427,8 @@ export function createPullRequestDiffService({
 		file: ChangedFile,
 		baseCommit: string,
 		targetCommit: string,
+		original: string,
+		modified: string,
 	): Promise<LineBlock[]> {
 		const url = `${reposBaseUrl(ctx)}/filediffs?api-version=${FILE_DIFFS_API_VERSION}`;
 		const data = await azure.request<AzureFileDiffs>(url, {
@@ -431,7 +444,7 @@ export function createPullRequestDiffService({
 			throw malformed(
 				"file diffs response must be an array or have a value array",
 			);
-		return toLineBlocks(diffs[0]);
+		return fitBlocksToLines(toLineBlocks(diffs[0]), original, modified);
 	}
 
 	async function getContent(
@@ -460,8 +473,10 @@ export function createPullRequestDiffService({
 		const blocks =
 			file.change === "add" || file.change === "delete"
 				? wholeFileBlocks(originalText, modifiedText)
-				: fitBlocksToLines(
-						await getLineBlocks(file, baseCommit, targetCommit),
+				: await getLineBlocks(
+						file,
+						baseCommit,
+						targetCommit,
 						originalText,
 						modifiedText,
 					);
