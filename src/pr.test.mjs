@@ -3704,7 +3704,7 @@ test("pr diff prints modified, added, deleted, renamed and binary files", (t) =>
 					changeEntries: [
 						diffChange("edit", "/src/app.ts"),
 						diffChange("add", "/docs/new.md"),
-						diffChange("delete", "/old.txt"),
+						diffChange("delete", null, { originalPath: "/old.txt" }),
 						diffChange("edit, rename", "/src/renamed.ts", {
 							originalPath: "/src/original.ts",
 						}),
@@ -4028,7 +4028,7 @@ test("pr diff --name-only prints only path lines and reads no content", (t) => {
 						diffChange("edit, rename", "/src/renamed.ts", {
 							originalPath: "/src/original.ts",
 						}),
-						diffChange("delete", "/old.txt"),
+						diffChange("delete", null, { originalPath: "/old.txt" }),
 					],
 				},
 			},
