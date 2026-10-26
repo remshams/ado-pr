@@ -314,6 +314,26 @@ describe("pull request completion", () => {
 		);
 	});
 
+	test("says the request may have been applied after a server error", async (t) => {
+		const { service } = createService(t, [
+			{ status: 503, statusText: "Service Unavailable", body: "" },
+		]);
+
+		await assert.rejects(
+			service.complete(42, { ...squash, auto: false }),
+			(error) => {
+				assert.match(error.message, /503 Service Unavailable/);
+				assert.doesNotMatch(error.message, /rejected/);
+				assert.ok(
+					error.message.endsWith(
+						"\nThe completion may have been applied. Run `pr.sh pr status --pr 42` before retrying.",
+					),
+				);
+				return true;
+			},
+		);
+	});
+
 	test("passes failures that are not Azure request errors through unchanged", async () => {
 		const failure = new Error("requester bug");
 		const service = createPullRequestCompletionService({
