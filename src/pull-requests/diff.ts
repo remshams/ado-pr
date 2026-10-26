@@ -178,7 +178,7 @@ function toChangedFile(entry: AzureIterationChange): ChangedFile | undefined {
 	const path = entry.item?.path ?? entry.originalPath;
 	if (entry.item?.isFolder === true) return undefined;
 	if (typeof path !== "string" || path === "")
-		throw malformed("an iteration change has no item path");
+		throw malformed("an iteration change has no path");
 	return {
 		path,
 		originalPath: entry.originalPath ?? path,

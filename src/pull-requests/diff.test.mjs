@@ -47,7 +47,6 @@ function changes(changeEntries, page = {}) {
 	return { json: { changeEntries, ...page } };
 }
 
-/** Azure sends a deleted file with `item.path: null` and the path in `originalPath`. */
 function deletion(path) {
 	return {
 		changeTrackingId: 1,
@@ -347,18 +346,18 @@ describe("pull request diff", () => {
 			],
 			[
 				[iterations(1), changes([{ changeType: "edit", item: {} }])],
-				/an iteration change has no item path/,
+				/an iteration change has no path/,
 			],
 			[
 				[
 					iterations(1),
 					changes([{ changeType: "delete", item: { path: null } }]),
 				],
-				/an iteration change has no item path/,
+				/an iteration change has no path/,
 			],
 			[
 				[iterations(1), changes([{ changeType: "edit" }])],
-				/an iteration change has no item path/,
+				/an iteration change has no path/,
 			],
 			[
 				[
