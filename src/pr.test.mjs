@@ -3715,41 +3715,47 @@ test("pr diff prints modified, added, deleted, renamed and binary files", (t) =>
 			diffItem("a\nb\nc\n"),
 			diffItem("a\nB\nc\n"),
 			{
-				json: [
-					{
-						path: "/src/app.ts",
-						lineDiffBlocks: [
-							{
-								changeType: "edit",
-								originalLineNumberStart: 2,
-								originalLinesCount: 1,
-								modifiedLineNumberStart: 2,
-								modifiedLinesCount: 1,
-							},
-						],
-					},
-				],
+				json: {
+					count: 1,
+					value: [
+						{
+							path: "/src/app.ts",
+							lineDiffBlocks: [
+								{
+									changeType: "edit",
+									originalLineNumberStart: 2,
+									originalLinesCount: 1,
+									modifiedLineNumberStart: 2,
+									modifiedLinesCount: 1,
+								},
+							],
+						},
+					],
+				},
 			},
 			diffItem("# New\n"),
 			diffItem("gone\n"),
 			diffItem("x\n"),
 			diffItem("x\ny\n"),
 			{
-				json: [
-					{
-						path: "/src/renamed.ts",
-						originalPath: "/src/original.ts",
-						lineDiffBlocks: [
-							{
-								changeType: "add",
-								originalLineNumberStart: 2,
-								originalLinesCount: 0,
-								modifiedLineNumberStart: 2,
-								modifiedLinesCount: 1,
-							},
-						],
-					},
-				],
+				json: {
+					count: 1,
+					value: [
+						{
+							path: "/src/renamed.ts",
+							originalPath: "/src/original.ts",
+							lineDiffBlocks: [
+								{
+									changeType: "add",
+									originalLineNumberStart: 2,
+									originalLinesCount: 0,
+									modifiedLineNumberStart: 2,
+									modifiedLinesCount: 1,
+								},
+							],
+						},
+					],
+				},
 			},
 			diffItem("PNG", true),
 			diffItem("PNG", true),
@@ -4057,20 +4063,23 @@ test("pr diff --json prints files, change types and line blocks", (t) => {
 				diffItem("a\nb\nc\n"),
 				diffItem("a\nB\nc\n"),
 				{
-					json: [
-						{
-							path: "/src/app.ts",
-							lineDiffBlocks: [
-								{
-									changeType: "edit",
-									originalLineNumberStart: 2,
-									originalLinesCount: 1,
-									modifiedLineNumberStart: 2,
-									modifiedLinesCount: 1,
-								},
-							],
-						},
-					],
+					json: {
+						count: 1,
+						value: [
+							{
+								path: "/src/app.ts",
+								lineDiffBlocks: [
+									{
+										changeType: "edit",
+										originalLineNumberStart: 2,
+										originalLinesCount: 1,
+										modifiedLineNumberStart: 2,
+										modifiedLinesCount: 1,
+									},
+								],
+							},
+						],
+					},
 				},
 				diffItem("PNG", true),
 			],
