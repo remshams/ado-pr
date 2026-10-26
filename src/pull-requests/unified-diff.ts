@@ -46,13 +46,18 @@ function splitLines(text: string): FileLines {
 	};
 }
 
+/** Counts lines the way the formatter does: a final newline ends the last line, not a new one. */
+export function lineCount(text: string): number {
+	return splitLines(text).lines.length;
+}
+
 /** The single block of an added or deleted file: every line changes. */
 export function wholeFileBlocks(
 	original: string,
 	modified: string,
 ): LineBlock[] {
-	const originalCount = splitLines(original).lines.length;
-	const modifiedCount = splitLines(modified).lines.length;
+	const originalCount = lineCount(original);
+	const modifiedCount = lineCount(modified);
 	if (originalCount === 0 && modifiedCount === 0) return [];
 	return [{ originalStart: 1, originalCount, modifiedStart: 1, modifiedCount }];
 }

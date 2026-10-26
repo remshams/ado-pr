@@ -30,6 +30,7 @@ import {
 	type LineBlock,
 	type LineChange,
 	lineChanges,
+	lineCount,
 	wholeFileBlocks,
 } from "./unified-diff.ts";
 
@@ -245,6 +246,37 @@ function toLineBlocks(diff: AzureFileDiff | undefined): LineBlock[] {
 		}));
 }
 
+/**
+ * Azure counts the empty text after a final newline as a line, so a block that reaches the end of
+ * a file can run one line past it when only one side ends with a newline. Trims each side to the
+ * file's lines and drops blocks left with no lines.
+ */
+function fitBlocksToLines(
+	blocks: LineBlock[],
+	original: string,
+	modified: string,
+): LineBlock[] {
+	const originalLines = lineCount(original);
+	const modifiedLines = lineCount(modified);
+	const fit = (start: number, count: number, lines: number) =>
+		Math.max(0, Math.min(count, lines - start + 1));
+	return blocks
+		.map((block) => ({
+			...block,
+			originalCount: fit(
+				block.originalStart,
+				block.originalCount,
+				originalLines,
+			),
+			modifiedCount: fit(
+				block.modifiedStart,
+				block.modifiedCount,
+				modifiedLines,
+			),
+		}))
+		.filter((block) => block.originalCount > 0 || block.modifiedCount > 0);
+}
+
 function displayPath(path: string): string {
 	return path.replace(/^\//, "");
 }
@@ -428,7 +460,11 @@ export function createPullRequestDiffService({
 		const blocks =
 			file.change === "add" || file.change === "delete"
 				? wholeFileBlocks(originalText, modifiedText)
-				: await getLineBlocks(file, baseCommit, targetCommit);
+				: fitBlocksToLines(
+						await getLineBlocks(file, baseCommit, targetCommit),
+						originalText,
+						modifiedText,
+					);
 		return {
 			binary: false,
 			original: originalText,

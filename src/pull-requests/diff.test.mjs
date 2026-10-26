@@ -193,6 +193,49 @@ describe("pull request diff", () => {
 		assert.equal(calls.length, 1);
 	});
 
+	// Azure counts the empty text after a final newline as a line. Numbers from a real response
+	// for a file that was empty at the base and had 14 lines at the target.
+	test("trims a block that runs past the end of a file", async (t) => {
+		const target = Array.from({ length: 14 }, (_, i) => `.rule-${i} {}\n`).join(
+			"",
+		);
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.scss")]),
+			item(""),
+			item(target),
+			fileDiffs("/a.scss", [lineBlock("add", [1, 0], [1, 15])]),
+		]);
+
+		const output = await service.diff(42);
+		assert.match(output, /\n@@ -0,0 \+1,14 @@\n/);
+		assert.match(output, /\+\.rule-13 \{\}\n$/);
+	});
+
+	test("trims a block that empties a file", async (t) => {
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.txt")]),
+			item("a\nb\n"),
+			item(""),
+			fileDiffs("/a.txt", [lineBlock("delete", [1, 3], [1, 0])]),
+		]);
+
+		assert.match(await service.diff(42), /\n@@ -1,2 \+0,0 @@\n-a\n-b\n$/);
+	});
+
+	test("drops a block that only covers the final newline", async (t) => {
+		const { service } = createService(t, [
+			iterations(1),
+			changes([change("edit", "/a.txt")]),
+			item("a\n"),
+			item("a"),
+			fileDiffs("/a.txt", [lineBlock("delete", [2, 1], [2, 0])]),
+		]);
+
+		assert.match(await service.diff(42), /\ndiff --git a\/a\.txt b\/a\.txt\n$/);
+	});
+
 	test("reads added files at the target and deleted files at the base only", async (t) => {
 		const { service, calls } = createService(t, [
 			iterations(1),
