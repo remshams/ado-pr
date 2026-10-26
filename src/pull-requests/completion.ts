@@ -85,7 +85,8 @@ function completionRequestError(
 	headCommit: string | null,
 ): unknown {
 	if (!isAzureRequestError(error)) return error;
-	if (error.kind !== "http") {
+	// A gateway can answer 5xx after Azure has applied the PATCH.
+	if (error.kind !== "http" || (error.status ?? 0) >= 500) {
 		const request = headCommit ? "completion" : "auto-complete";
 		return new Error(
 			`${error.message}\nThe ${request} may have been applied. Run ${statusCommand(prId)} before retrying.`,
