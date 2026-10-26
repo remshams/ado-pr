@@ -52,7 +52,8 @@ interface AzureIteration {
 interface AzureIterationChange {
 	changeType?: string;
 	originalPath?: string;
-	item?: { path?: string; isFolder?: boolean };
+	/** Azure sends `path: null` for a deleted file, so its path is only in `originalPath`. */
+	item?: { path?: string | null; isFolder?: boolean };
 }
 
 interface AzureIterationChanges {
@@ -174,7 +175,7 @@ function changeKind(changeType: string | undefined): {
 }
 
 function toChangedFile(entry: AzureIterationChange): ChangedFile | undefined {
-	const path = entry.item?.path;
+	const path = entry.item?.path ?? entry.originalPath;
 	if (entry.item?.isFolder === true) return undefined;
 	if (typeof path !== "string" || path === "")
 		throw malformed("an iteration change has no item path");
