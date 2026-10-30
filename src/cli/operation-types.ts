@@ -76,6 +76,7 @@ type CliOptionsShape =
 			resource: "pr";
 			command: "edit";
 			description?: string;
+			target?: string;
 			draft?: boolean;
 			images?: string[];
 			removeImages?: string[];

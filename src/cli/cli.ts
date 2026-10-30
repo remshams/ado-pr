@@ -282,6 +282,9 @@ function validatePullRequestEdit(
 	if (setDraft && clearDraft) {
 		printUsageAndExit(`--draft and --no-draft cannot be used together`);
 	}
+	if (values.target === "") {
+		printUsageAndExit(`--target requires a non-empty branch for "${route}"`);
+	}
 	const editFlags = flags.filter((flag) => flag !== "pr");
 	if (enforceRequired && !editFlags.some((flag) => occurrences.has(flag))) {
 		const choices = editFlags
@@ -604,6 +607,7 @@ const COMMAND_OPTION_BUILDERS: CommandOptionBuilders = {
 			command: "edit",
 			pr: values.pr,
 			description: values.description,
+			target: values.target,
 			draft,
 			images: values.image,
 			removeImages: values["remove-image"],
