@@ -69,6 +69,12 @@ export interface EditPullRequestOptions extends UpdatePullRequestOptions {
 	removeReviewers?: string[];
 }
 
+interface DescriptionEdit {
+	description: string;
+	originalDescription: string;
+	removals: PullRequestAttachment[];
+}
+
 export interface PullRequestReadOptions {
 	signal?: AbortSignal;
 	timeoutMs?: number;
@@ -846,13 +852,14 @@ export function createPullRequestService({
 		return { reviewers, removedReviewers };
 	}
 
-	async function editDescription(
+	/** Reads and checks everything the description edit needs, without changing the PR. */
+	async function prepareDescriptionEdit(
 		prId: number,
 		options: EditPullRequestOptions,
 		current: PullRequest | undefined,
 		images: PreparedImage[],
 		removeImageNames: string[],
-	): Promise<PullRequestAttachment[]> {
+	): Promise<DescriptionEdit> {
 		let description = editStartingDescription(
 			options,
 			current,
@@ -878,6 +885,16 @@ export function createPullRequestService({
 		if (removeImageNames.length > 0) {
 			assertDescriptionLength(description);
 		}
+		return { description, originalDescription, removals };
+	}
+
+	async function editDescription(
+		prId: number,
+		options: EditPullRequestOptions,
+		images: PreparedImage[],
+		prepared: DescriptionEdit,
+	): Promise<void> {
+		let { description } = prepared;
 		if (images.length > 0) {
 			description = await uploadImagesWithCleanup(
 				prId,
@@ -892,9 +909,8 @@ export function createPullRequestService({
 			options,
 			images,
 			description,
-			originalDescription,
+			prepared.originalDescription,
 		);
-		return removals;
 	}
 
 	async function applyDescriptionEdit(
@@ -946,12 +962,7 @@ export function createPullRequestService({
 			requestedReviewerRemovals,
 		);
 
-		// Retarget first: it is a single request, so a rejected target leaves the PR untouched.
-		if (options.target !== undefined) {
-			await update(prId, { target: options.target });
-		}
-
-		const removals = await editDescription(
+		const prepared = await prepareDescriptionEdit(
 			prId,
 			options,
 			current,
@@ -959,7 +970,15 @@ export function createPullRequestService({
 			removeImageNames,
 		);
 
-		for (const attachment of removals) {
+		// Retarget once every check has passed and before the other changes, so a
+		// failed check or a rejected target leaves the PR untouched.
+		if (options.target !== undefined) {
+			await update(prId, { target: options.target });
+		}
+
+		await editDescription(prId, options, images, prepared);
+
+		for (const attachment of prepared.removals) {
 			await deleteAttachment(prId, attachment.displayName);
 		}
 		for (const reviewer of reviewers) {
