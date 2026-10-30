@@ -58,6 +58,8 @@ export interface CreatePullRequestOptions {
 export interface UpdatePullRequestOptions {
 	description?: string;
 	draft?: boolean;
+	/** New target branch; a plain branch name is normalized to `refs/heads/<branch>`. */
+	target?: string;
 }
 
 export interface EditPullRequestOptions extends UpdatePullRequestOptions {
@@ -944,6 +946,11 @@ export function createPullRequestService({
 			requestedReviewerRemovals,
 		);
 
+		// Retarget first: it is a single request, so a rejected target leaves the PR untouched.
+		if (options.target !== undefined) {
+			await update(prId, { target: options.target });
+		}
+
 		const removals = await editDescription(
 			prId,
 			options,
@@ -978,6 +985,9 @@ export function createPullRequestService({
 				? { description: options.description }
 				: {}),
 			...(options.draft !== undefined ? { isDraft: options.draft } : {}),
+			...(options.target !== undefined
+				? { targetRefName: toFullRef(options.target) }
+				: {}),
 		};
 		if (Object.keys(body).length === 0) {
 			throw new Error(
