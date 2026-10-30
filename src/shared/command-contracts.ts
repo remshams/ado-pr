@@ -128,7 +128,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "string",
 		usage: "--target <branch>",
 		description:
-			"Target branch for `pr create`, or filter `pr list` by target branch.",
+			"Target branch for `pr create` or `pr edit`, or filter `pr list` by target branch.",
 	},
 	"merge-strategy": {
 		kind: "string",
@@ -409,11 +409,12 @@ export const COMMAND_REGISTRY = defineCommandRegistry({
 		resource: "pr",
 		command: "edit",
 		usage:
-			'pr edit [--description "..."] [--draft | --no-draft] [--image <path>]... [--remove-image <filename>]... [--reviewer <email-or-display-name>]... [--remove-reviewer <email-or-display-name>]... [--pr <id>]',
-		summary: "Change PR fields, images, and/or reviewers.",
+			'pr edit [--description "..."] [--target <branch>] [--draft | --no-draft] [--image <path>]... [--remove-image <filename>]... [--reviewer <email-or-display-name>]... [--remove-reviewer <email-or-display-name>]... [--pr <id>]',
+		summary: "Change PR fields, target branch, images, and/or reviewers.",
 		flags: [
 			"pr",
 			"description",
+			"target",
 			"draft",
 			"no-draft",
 			"image",
