@@ -755,7 +755,11 @@ test("required command options are validated in dependency order", () => {
 test("pr edit requires an explicit change and supports setting or clearing draft", () => {
 	assertUsageError(
 		runCli("pr", "edit"),
-		'Error: --description, --draft, --no-draft, --image, --remove-image, --reviewer, or --remove-reviewer is required for "pr edit"',
+		'Error: --description, --target, --draft, --no-draft, --image, --remove-image, --reviewer, or --remove-reviewer is required for "pr edit"',
+	);
+	assertUsageError(
+		runCli("pr", "edit", "--target", ""),
+		'Error: --target requires a non-empty branch for "pr edit"',
 	);
 	assertUsageError(
 		runCli("pr", "edit", "--description"),
@@ -776,6 +780,7 @@ test("pr edit requires an explicit change and supports setting or clearing draft
 		["pr", "edit", "--description", "-"],
 		["pr", "edit", "--draft"],
 		["pr", "edit", "--no-draft"],
+		["pr", "edit", "--target", "main"],
 		["pr", "edit", "--image", "flow.png", "--image", "arch.png"],
 		["pr", "edit", "--remove-image", "old.png", "--remove-image", "older.png"],
 		[
@@ -1086,6 +1091,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				command: "edit",
 				pr: 7,
 				description: "",
+				target: undefined,
 				draft: undefined,
 				images: ["new.png"],
 				removeImages: ["old.png"],
@@ -1100,6 +1106,7 @@ test("parsing returns command options with typed values and defaults", () => {
 				command: "edit",
 				pr: undefined,
 				description: undefined,
+				target: undefined,
 				draft: true,
 				images: undefined,
 				removeImages: undefined,
@@ -1114,7 +1121,23 @@ test("parsing returns command options with typed values and defaults", () => {
 				command: "edit",
 				pr: undefined,
 				description: undefined,
+				target: undefined,
 				draft: false,
+				images: undefined,
+				removeImages: undefined,
+				reviewers: undefined,
+				removeReviewers: undefined,
+			},
+		],
+		[
+			["pr", "edit", "--target", "main"],
+			{
+				resource: "pr",
+				command: "edit",
+				pr: undefined,
+				description: undefined,
+				target: "main",
+				draft: undefined,
 				images: undefined,
 				removeImages: undefined,
 				reviewers: undefined,
