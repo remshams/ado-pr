@@ -722,6 +722,65 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		assert.deepEqual(calls, []);
 	});
 
+	test("retargets a pull request while normalizing only plain branch names", async (t) => {
+		const { service, calls } = createService(t, [
+			{ json: pullRequest({ targetRefName: "refs/heads/release/2026" }) },
+			{ json: pullRequest({ targetRefName: "refs/heads/main" }) },
+		]);
+
+		await service.update(42, { target: "release/2026" });
+		await service.update(42, { target: "refs/heads/main" });
+
+		assert.deepEqual(
+			calls.map(({ method, body }) => ({ method, body: JSON.parse(body) })),
+			[
+				{
+					method: "PATCH",
+					body: { targetRefName: "refs/heads/release/2026" },
+				},
+				{ method: "PATCH", body: { targetRefName: "refs/heads/main" } },
+			],
+		);
+	});
+
+	test("retargets before applying the other edits", async (t) => {
+		const { service, calls } = createService(t, [
+			{ json: pullRequest({ targetRefName: "refs/heads/main" }) },
+			{ json: pullRequest({ description: "Rebased onto main" }) },
+		]);
+
+		assert.equal(
+			await service.edit(42, {
+				target: "main",
+				description: "Rebased onto main",
+			}),
+			42,
+		);
+		assert.deepEqual(
+			calls.map(({ method, body }) => ({ method, body: JSON.parse(body) })),
+			[
+				{ method: "PATCH", body: { targetRefName: "refs/heads/main" } },
+				{ method: "PATCH", body: { description: "Rebased onto main" } },
+			],
+		);
+	});
+
+	test("stops the edit when Azure rejects the new target", async (t) => {
+		const { service, calls } = createService(t, [
+			{
+				status: 400,
+				statusText: "Bad Request",
+				body: '{"message":"The target branch does not exist."}',
+			},
+		]);
+
+		await assert.rejects(
+			service.edit(42, { target: "missing", draft: true }),
+			/400 Bad Request[\s\S]*The target branch does not exist\./,
+		);
+		assert.equal(calls.length, 1);
+	});
+
 	test("creates from explicit source and target branches while normalizing only plain refs", async (t) => {
 		const created = pullRequest({ pullRequestId: 88 });
 		const { service, calls } = createService(t, [{ json: created }]);
