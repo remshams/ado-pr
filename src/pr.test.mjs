@@ -1950,6 +1950,51 @@ test("pr edit combines description and draft changes in one request", (t) => {
 	assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
 });
 
+test("pr edit retargets a pull request before changing its draft state", (t) => {
+	const cwd = createRepo(t);
+	const result = runPr(
+		t,
+		["pr", "edit", "--pr", "42", "--target", "main", "--no-draft"],
+		{
+			cwd,
+			responses: [
+				{
+					json: {
+						pullRequestId: 42,
+						title: "Retargeted PR",
+						sourceRefName: "refs/heads/feature/dispatch",
+						targetRefName: "refs/heads/main",
+					},
+				},
+				{
+					json: {
+						pullRequestId: 42,
+						title: "Retargeted PR",
+						isDraft: false,
+						sourceRefName: "refs/heads/feature/dispatch",
+						targetRefName: "refs/heads/main",
+					},
+				},
+			],
+		},
+	);
+
+	assertSucceeded(result);
+	assert.deepEqual(result.calls.map(semanticRequest), [
+		{
+			url: `${apiBase}/pullRequests/42?api-version=7.1`,
+			method: "PATCH",
+			body: { targetRefName: "refs/heads/main" },
+		},
+		{
+			url: `${apiBase}/pullRequests/42?api-version=7.1`,
+			method: "PATCH",
+			body: { isDraft: false },
+		},
+	]);
+	assert.equal(result.stdout, `Updated PR #42.\n${webBase}/42\n`);
+});
+
 test("pr edit preflights and applies image and reviewer additions and removals in safe order", (t) => {
 	const cwd = createRepo(t);
 	writeFileSync(join(cwd, "new.png"), Buffer.from("new-image-bytes"));
