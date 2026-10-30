@@ -765,6 +765,32 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		);
 	});
 
+	test("reports the retarget when generated Markdown exceeds the limit", async (t) => {
+		const path = createTempImage(t, "flow.png");
+		const placeholder = "{{image:flow.png}}";
+		const description = `${"x".repeat(4_000 - placeholder.length)}${placeholder}`;
+		const { service, calls } = createService(t, [
+			{ json: { value: [] } },
+			{ json: pullRequest({ targetRefName: "refs/heads/main" }) },
+			{
+				json: {
+					displayName: "flow.png",
+					url: "https://attachments.test/flow.png",
+				},
+			},
+			{ status: 204 },
+		]);
+
+		await assert.rejects(
+			service.edit(42, { target: "main", description, images: [path] }),
+			/\nPR #42 was retargeted, but its other changes were not applied; successfully uploaded attachments were cleaned up where safe\.$/,
+		);
+		assert.deepEqual(
+			calls.map(({ method }) => method),
+			["GET", "PATCH", "POST", "DELETE"],
+		);
+	});
+
 	test("does not retarget when an image removal fails its check", async (t) => {
 		const { service, calls } = createService(t, [
 			{ json: pullRequest({ description: "No images" }) },

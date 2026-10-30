@@ -896,11 +896,15 @@ export function createPullRequestService({
 	): Promise<void> {
 		let { description } = prepared;
 		if (images.length > 0) {
+			const outcome =
+				options.target !== undefined
+					? `PR #${prId} was retargeted, but its other changes were not applied`
+					: `PR #${prId} was not updated`;
 			description = await uploadImagesWithCleanup(
 				prId,
 				description,
 				images,
-				`PR #${prId} was not updated; successfully uploaded attachments were cleaned up where safe.`,
+				`${outcome}; successfully uploaded attachments were cleaned up where safe.`,
 			);
 		}
 
