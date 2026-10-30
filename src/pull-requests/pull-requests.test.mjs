@@ -765,6 +765,18 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		);
 	});
 
+	test("retargets when the target is the only edit", async (t) => {
+		const { service, calls } = createService(t, [
+			{ json: pullRequest({ targetRefName: "refs/heads/main" }) },
+		]);
+
+		assert.equal(await service.edit(42, { target: "main" }), 42);
+		assert.deepEqual(
+			calls.map(({ method, body }) => ({ method, body: JSON.parse(body) })),
+			[{ method: "PATCH", body: { targetRefName: "refs/heads/main" } }],
+		);
+	});
+
 	test("reports the retarget when generated Markdown exceeds the limit", async (t) => {
 		const path = createTempImage(t, "flow.png");
 		const placeholder = "{{image:flow.png}}";
