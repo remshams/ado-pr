@@ -765,6 +765,35 @@ describe("pull request listing, resolution, creation, and updates", () => {
 		);
 	});
 
+	test("does not retarget when an image removal fails its check", async (t) => {
+		const { service, calls } = createService(t, [
+			{ json: pullRequest({ description: "No images" }) },
+			{ json: { value: [] } },
+		]);
+
+		await assert.rejects(
+			service.edit(42, { target: "main", removeImages: ["missing.png"] }),
+			{ message: 'Attachment "missing.png" was not found on PR #42.' },
+		);
+		assert.deepEqual(
+			calls.map(({ method }) => method),
+			["GET", "GET"],
+		);
+	});
+
+	test("does not retarget when the new description is too long", async (t) => {
+		const { service, calls } = createService(t);
+
+		await assert.rejects(
+			service.edit(42, { target: "main", description: "x".repeat(4_001) }),
+			{
+				message:
+					"Pull request description exceeds Azure DevOps' 4,000-character limit (received 4001 characters).",
+			},
+		);
+		assert.deepEqual(calls, []);
+	});
+
 	test("stops the edit when Azure rejects the new target", async (t) => {
 		const { service, calls } = createService(t, [
 			{
