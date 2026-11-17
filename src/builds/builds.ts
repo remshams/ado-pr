@@ -2079,11 +2079,12 @@ export function createBuildService({
 			"Build wait timeout",
 		);
 		throwIfWaitAborted(signal);
-		const pr = await resolvePullRequest(requestedPrId, {
+		const prReadOptions = {
 			signal,
 			timeoutMs: READ_TIMEOUT_MS,
 			maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-		});
+		};
+		const pr = await resolvePullRequest(requestedPrId, prReadOptions);
 		throwIfWaitAborted(signal);
 
 		const buildId =
@@ -2172,11 +2173,7 @@ export function createBuildService({
 		): Promise<boolean | null> {
 			try {
 				const refreshed = validatePullRequest(
-					await pullRequests.get(pr.id, {
-						signal,
-						timeoutMs: READ_TIMEOUT_MS,
-						maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-					}),
+					await pullRequests.get(pr.id, prReadOptions),
 					"refreshed pull request",
 				);
 				return validatesHead(observedBuild, refreshed);
@@ -2197,7 +2194,9 @@ export function createBuildService({
 			latestBuild = observedBuild;
 			consecutiveTransientFailures = 0;
 			const stateKey = waitStateKey(observedBuild);
-			const terminalEnvelope: BuildWaitEnvelope | undefined =
+			const terminalEnvelope:
+				| Omit<BuildWaitEnvelope, "validatesHead">
+				| undefined =
 				observedStatus === "completed"
 					? {
 							association: buildAssociation(observedBuild),
@@ -2209,7 +2208,6 @@ export function createBuildService({
 							elapsedSeconds: elapsedSeconds(completedAt),
 							timedOut: false,
 							outcome: waitResultOutcome(observedBuild),
-							validatesHead: null,
 						}
 					: undefined;
 			if (stateKey !== previousStateKey) {
@@ -2225,11 +2223,11 @@ export function createBuildService({
 				});
 				previousStateKey = stateKey;
 			}
-			if (terminalEnvelope !== undefined) {
-				terminalEnvelope.validatesHead =
-					await validatesRefreshedHead(observedBuild);
-			}
-			return terminalEnvelope;
+			if (terminalEnvelope === undefined) return undefined;
+			return {
+				...terminalEnvelope,
+				validatesHead: await validatesRefreshedHead(observedBuild),
+			};
 		}
 
 		async function emitHeartbeat(current: number): Promise<void> {
