@@ -173,7 +173,7 @@ function deferred() {
 
 function createWaitHarness(
 	responses,
-	{ resolvedPr = pullRequest(), start = 0 } = {},
+	{ resolvedPr = pullRequest(), refreshedPr = resolvedPr, start = 0 } = {},
 ) {
 	const clock = { value: start };
 	const calls = [];
@@ -200,8 +200,11 @@ function createWaitHarness(
 			pullRequestCalls.push({ method: "resolve", requestedPrId });
 			return resolvedPr;
 		},
-		async get() {
-			throw new Error("wait must resolve the PR only once");
+		async get(prId, options) {
+			pullRequestCalls.push({ method: "get", prId });
+			if (refreshedPr instanceof Error) throw refreshedPr;
+			if (typeof refreshedPr === "function") return refreshedPr(options);
+			return refreshedPr;
 		},
 	};
 	const sleep = async (milliseconds, signal) => {
@@ -1299,8 +1302,10 @@ describe("deterministic build wait", () => {
 			assert.equal(result.transientFailureCount, 0);
 			assert.equal(result.elapsedSeconds, 0);
 			assert.deepEqual(sleeps, []);
+			assert.equal(result.validatesHead, true);
 			assert.deepEqual(pullRequestCalls, [
 				{ method: "resolve", requestedPrId: undefined },
+				{ method: "get", prId: 42 },
 			]);
 			assert.equal(calls[0].options.timeoutMs, 30_000);
 			assert.equal(calls[0].options.maxResponseBytes, 16 * 1024 * 1024);
@@ -1321,9 +1326,65 @@ describe("deterministic build wait", () => {
 		const result = await service.wait(42, 700);
 		assert.equal(result.outcome, "succeeded");
 		assert.equal(result.build, historical);
+		assert.equal(result.validatesHead, false);
 		assert.deepEqual(pullRequestCalls, [
 			{ method: "resolve", requestedPrId: 42 },
+			{ method: "get", prId: 42 },
 		]);
+	});
+
+	test("reports a build as stale when the PR head moved during the wait", async () => {
+		const { service } = createWaitHarness(
+			[build({ status: "inProgress" }), build({ result: "succeeded" })],
+			{
+				refreshedPr: pullRequest({
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
+		const result = await service.wait(42, 700);
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.validatesHead, false);
+		assert.match(
+			service.formatWaitResult(result),
+			/Validates head: no\nThe pull request changed after this build was queued; wait for the build of its current head with `pr\.sh build wait --latest --pr 42`\./,
+		);
+	});
+
+	test("still validates the head when auto-complete merged the PR as the build finished", async () => {
+		const { service } = createWaitHarness([build({ result: "succeeded" })], {
+			refreshedPr: pullRequest({ status: "completed" }),
+		});
+		const result = await service.wait(42, 700);
+		assert.equal(result.validatesHead, true);
+		assert.match(service.formatWaitResult(result), /Validates head: yes$/);
+	});
+
+	test("reports an unknown head when the final PR read fails", async () => {
+		const failedRead = new AzureRequestError("Bad Gateway", "http");
+		for (const refreshedPr of [failedRead, { pullRequestId: "not a number" }]) {
+			const { service } = createWaitHarness([build({ result: "failed" })], {
+				refreshedPr,
+			});
+			const result = await service.wait(42, 700);
+			assert.equal(result.outcome, "failed");
+			assert.equal(result.validatesHead, null);
+			assert.match(service.formatWaitResult(result), /Validates head: unknown/);
+		}
+	});
+
+	test("cancels instead of reporting when aborted during the final PR read", async () => {
+		const controller = new AbortController();
+		const { service } = createWaitHarness([build({ result: "succeeded" })], {
+			refreshedPr: () => {
+				controller.abort();
+				throw new AzureRequestError("request aborted", "abort");
+			},
+		});
+		await assert.rejects(
+			service.wait(42, 700, { signal: controller.signal }),
+			(error) => error.kind === "abort",
+		);
 	});
 
 	for (const status of [
@@ -1450,6 +1511,7 @@ describe("deterministic build wait", () => {
 			elapsedSeconds: 10,
 			timedOut: true,
 			outcome: "timeout",
+			validatesHead: null,
 		});
 		assert.equal(calls.length, 1);
 		assert.deepEqual(sleeps, [{ at: 0, milliseconds: 10_000 }]);
@@ -2371,10 +2433,11 @@ describe("build output contracts", () => {
 			transientFailureCount: 1,
 			timedOut: false,
 			outcome: "failed",
+			validatesHead: true,
 		};
 		assert.equal(
 			service.formatWaitResult(result),
-			"build 700 for PR #42 finished with outcome failed.\nStatus/result: completed/failed; 12.3s elapsed; 3 poll(s); 1 transient failure(s).\nAssociation: unknown\nInspect failure details with `pr.sh build show --pr 42 --build 700`.",
+			"build 700 for PR #42 finished with outcome failed.\nStatus/result: completed/failed; 12.3s elapsed; 3 poll(s); 1 transient failure(s).\nAssociation: unknown\nValidates head: yes\nInspect failure details with `pr.sh build show --pr 42 --build 700`.",
 		);
 		assert.equal(
 			service.formatWaitResult({
@@ -2382,7 +2445,7 @@ describe("build output contracts", () => {
 				outcome: "succeeded",
 				build: { status: "completed", result: "succeeded" },
 			}),
-			"build 700 for PR #42 finished with outcome succeeded.\nStatus/result: completed/succeeded; 12.3s elapsed; 3 poll(s); 1 transient failure(s).\nAssociation: unknown",
+			"build 700 for PR #42 finished with outcome succeeded.\nStatus/result: completed/succeeded; 12.3s elapsed; 3 poll(s); 1 transient failure(s).\nAssociation: unknown\nValidates head: yes",
 		);
 		assert.equal(
 			service.formatWaitResult({ ...result, timedOut: true, build: null }),
