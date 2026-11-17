@@ -191,8 +191,11 @@ function createWaitHarness(
 			if (response instanceof Error) throw response;
 			return response;
 		},
-		async requestWithMetadata() {
-			throw new Error("wait must not use requestWithMetadata");
+		async requestWithMetadata(url, options) {
+			return {
+				data: await azure.request(url, options),
+				metadata: { headers: new Headers() },
+			};
 		},
 	};
 	const pullRequests = {
@@ -259,6 +262,7 @@ describe("build discovery", () => {
 				status: "active",
 				draft: true,
 				currentMergeCommit: "ABCDEF123",
+				currentHeadCommit: "HEAD-1",
 			},
 			history: false,
 			builds: [
@@ -354,6 +358,7 @@ describe("build discovery", () => {
 			status: "completed",
 			draft: true,
 			currentMergeCommit: null,
+			currentHeadCommit: null,
 		});
 		assert.deepEqual(
 			calls.map(({ url }) => url),
@@ -1471,6 +1476,7 @@ describe("deterministic build wait", () => {
 				status: "active",
 				draft: false,
 				currentMergeCommit: "ABCDEF123",
+				currentHeadCommit: null,
 			});
 			assert.match(service.formatWaitResult(result), /Validates head: unknown/);
 		}
@@ -1605,6 +1611,7 @@ describe("deterministic build wait", () => {
 				status: "active",
 				draft: false,
 				currentMergeCommit: "ABCDEF123",
+				currentHeadCommit: null,
 			},
 			buildId: 700,
 			build: observed,
@@ -2799,22 +2806,6 @@ describe("head-aware build selection", () => {
 		);
 	});
 
-	test("wait latest fails naming the head if only stale builds exist", async (t) => {
-		const { service, calls } = setup(
-			t,
-			[
-				{ json: { value: [build({ sourceVersion: "old-merge" })] } },
-				{ json: { value: [branchBuild({ sourceVersion: "old-head" })] } },
-			],
-			{ resolveValues: [headPr()] },
-		);
-		await assert.rejects(
-			service.wait(42, "latest"),
-			/No build validates PR #42 head commit HEAD-1/,
-		);
-		assert.equal(calls.length, 2);
-	});
-
 	test("show latest fails clearly if neither query has associated builds", async (t) => {
 		const { service } = setup(
 			t,
@@ -2916,17 +2907,7 @@ describe("head metadata and latest selection contracts", () => {
 		assert.equal(result.pullRequest.currentMergeCommit, null);
 	});
 
-	test("latest without head metadata reports that the commit is unavailable", async (t) => {
-		const { service } = setup(t, [
-			{ json: { value: [] } },
-			{ json: { value: [] } },
-		]);
-		await assert.rejects(service.wait(42, "latest"), {
-			message: "No build validates PR #42 head commit (unavailable).",
-		});
-	});
-
-	test("cancellation after latest selection stops before starting the polling clock", async () => {
+	test("cancellation during latest selection stops before polling a build", async () => {
 		const controller = new AbortController();
 		let queries = 0;
 		const service = createBuildService({
@@ -2948,9 +2929,7 @@ describe("head metadata and latest selection contracts", () => {
 					assert.fail("must not poll after cancellation");
 				},
 			},
-			now: () => {
-				assert.fail("must not start the polling clock after cancellation");
-			},
+			now: () => 0,
 		});
 		await assert.rejects(
 			service.wait(42, "latest", { signal: controller.signal }),
@@ -4161,5 +4140,180 @@ describe("build queueing", () => {
 					"Multiple active pull requests have feature/x as their source: #55, #56. Run `pr.sh build wait --build <id> --pr <id>` with the one you want.",
 			});
 		});
+	});
+});
+
+describe("build wait --latest follows the PR head", () => {
+	const newHead = () =>
+		pullRequest({
+			...headPr(),
+			lastMergeSourceCommit: { commitId: "HEAD-2" },
+			lastMergeCommit: { commitId: "new-merge" },
+		});
+	const noBuilds = () => [{ value: [] }, { value: [] }];
+	const listed = (candidate) => [{ value: [candidate] }, { value: [] }];
+
+	function followHarness(responses, refreshed = [], options = {}) {
+		let reads = 0;
+		const harness = createWaitHarness(responses, {
+			resolvedPr: headPr(),
+			refreshedPr: () => refreshed[Math.min(reads++, refreshed.length - 1)],
+			...options,
+		});
+		const events = [];
+		const wait = (waitOptions = {}) =>
+			harness.service.wait(42, "latest", {
+				onProgress: (event) => events.push(event),
+				...waitOptions,
+			});
+		return { ...harness, events, wait };
+	}
+
+	test("waits for a build to appear, then follows it to the end", async () => {
+		const { service, events, pullRequestCalls, wait } = followHarness(
+			[
+				...noBuilds(),
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				build({ result: "succeeded" }),
+			],
+			[headPr()],
+		);
+		const result = await wait();
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.buildId, 700);
+		assert.equal(result.validatesHead, true);
+		assert.equal(result.pollCount, 3);
+		assert.deepEqual(
+			events.map(({ type }) => type),
+			["waiting-for-build", "build-selected", "state", "state"],
+		);
+		assert.equal(
+			service.formatWaitProgress(events[0]),
+			"PR #42: no build validates head HEAD-1 yet; waiting up to 10 minutes for one.",
+		);
+		assert.equal(
+			service.formatWaitProgress(events[1]),
+			"PR #42, build 700: selected for head HEAD-1.",
+		);
+		assert.deepEqual(pullRequestCalls, [
+			{ method: "resolve", requestedPrId: 42 },
+			{ method: "get", prId: 42 },
+			{ method: "get", prId: 42 },
+		]);
+	});
+
+	test("ends with no-build when no build validates the head within 10 minutes", async () => {
+		const { service, wait } = followHarness(
+			[...noBuilds(), ...noBuilds(), ...noBuilds()],
+			[headPr()],
+		);
+		const result = await wait({ intervalSeconds: 300 });
+		assert.equal(result.outcome, "no-build");
+		assert.equal(result.buildId, null);
+		assert.equal(result.build, null);
+		assert.equal(result.timedOut, false);
+		assert.equal(result.elapsedSeconds, 600);
+		assert.equal(
+			service.formatWaitResult(result),
+			"No build validated the head of PR #42 (commit HEAD-1) within 10 minutes; 600.0s elapsed; 3 poll(s); 0 transient failure(s).\n" +
+				"Draft: yes. Check that the build policy runs for this pull request, or queue a build with `pr.sh build queue --pr 42`.",
+		);
+	});
+
+	test("times out instead when the timeout is shorter than the wait for a build", async () => {
+		const { service, wait } = followHarness(
+			[...noBuilds(), ...noBuilds()],
+			[headPr()],
+		);
+		const result = await wait({ intervalSeconds: 30, timeoutSeconds: 60 });
+		assert.equal(result.outcome, "timeout");
+		assert.equal(result.buildId, null);
+		assert.match(
+			service.formatWaitResult(result),
+			/^build wait for PR #42 timed out\./,
+		);
+	});
+
+	test("switches to the build for the new head when the head moves", async () => {
+		const next = build({ id: 701, sourceVersion: "new-merge" });
+		const { service, events, wait } = followHarness(
+			[
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				...listed({ ...next, status: "inProgress" }),
+				{ ...next, result: "succeeded" },
+			],
+			[newHead()],
+		);
+		const result = await wait();
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.buildId, 701);
+		assert.equal(result.validatesHead, true);
+		assert.equal(result.pullRequest.currentHeadCommit, "HEAD-2");
+		const switched = events.filter(({ type }) => type === "build-selected");
+		assert.deepEqual(
+			switched.map(({ buildId, previousBuildId }) => [
+				buildId,
+				previousBuildId,
+			]),
+			[
+				[700, null],
+				[701, 700],
+			],
+		);
+		assert.equal(
+			service.formatWaitProgress(switched[1]),
+			"PR #42, build 701: selected for head HEAD-2. The head moved, so build 700 no longer counts.",
+		);
+	});
+
+	test("ends with no-build when the head moves and no build follows", async () => {
+		const { events, wait } = followHarness(
+			[
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				...noBuilds(),
+				...noBuilds(),
+				...noBuilds(),
+			],
+			[newHead()],
+		);
+		const result = await wait({ intervalSeconds: 300 });
+		assert.equal(result.outcome, "no-build");
+		assert.equal(result.elapsedSeconds, 900);
+		const waiting = events.filter(({ type }) => type === "waiting-for-build");
+		assert.equal(waiting.length, 1);
+		assert.equal(waiting[0].previousBuildId, 700);
+	});
+
+	test("keeps the selected build when only the merge commit changes", async () => {
+		const { wait } = followHarness(
+			[
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				build({ result: "succeeded" }),
+			],
+			[
+				pullRequest({
+					...headPr(),
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			],
+		);
+		const result = await wait();
+		assert.equal(result.buildId, 700);
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.validatesHead, false);
+	});
+
+	test("keeps --build pinned when the head moves", async () => {
+		const { service } = createWaitHarness(
+			[build({ status: "inProgress" }), build({ result: "succeeded" })],
+			{ resolvedPr: headPr(), refreshedPr: newHead() },
+		);
+		const result = await service.wait(42, 700, { intervalSeconds: 10 });
+		assert.equal(result.buildId, 700);
+		assert.equal(result.validatesHead, false);
 	});
 });
