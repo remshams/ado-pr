@@ -48,9 +48,6 @@ flowchart TD
     adopr -->|HTTP JSON requests| azure
 ```
 
-`src/shared/` reads the organisation, project and repository from the checkout's
-origin remote.
-
 ## Modules and dependencies
 
 - `src/shared/`: Azure HTTP access, URL helpers, Git repository context, safe JSON
@@ -156,8 +153,8 @@ sequenceDiagram
 
 `src/pr.ts` parses arguments before reading credentials or Git context, so direct
 Node invocation can show help without authentication. All services share one
-requester. PR resolution uses an explicit ID or the
-current branch where the command allows it.
+requester. PR resolution uses an explicit ID or the current branch where the
+command allows it.
 
 ```mermaid
 ---
