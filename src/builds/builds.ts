@@ -604,9 +604,18 @@ function buildAssociation(build: AzureBuild): BuildAssociation {
 }
 
 /** Whether the build ran on the PR's current head, whatever the PR status. */
+/** The PR commit a build must have run on to validate the head. */
+function headCommitFor(
+	build: AzureBuild,
+	pr: ValidatedPullRequest,
+): string | undefined {
+	return buildAssociation(build) === "branch-head"
+		? pr.headCommit
+		: pr.mergeCommit;
+}
+
 function validatesHead(build: AzureBuild, pr: ValidatedPullRequest): boolean {
-	const commit =
-		buildAssociation(build) === "branch-head" ? pr.headCommit : pr.mergeCommit;
+	const commit = headCommitFor(build, pr);
 	return (
 		commit !== undefined &&
 		equalsIdentifier(build.sourceVersion as string, commit)
@@ -2183,10 +2192,7 @@ export function createBuildService({
 					}),
 					"refreshed pull request",
 				);
-				const headKnown =
-					buildAssociation(observedBuild) === "branch-head"
-						? refreshed.headCommit !== undefined
-						: refreshed.mergeCommit !== undefined;
+				const headKnown = headCommitFor(observedBuild, refreshed) !== undefined;
 				return {
 					pullRequest: refreshed.summary,
 					validatesHead: headKnown
@@ -2432,7 +2438,10 @@ export function createBuildService({
 			`Association: ${display(result.association)}`,
 			`Validates head: ${result.validatesHead === null ? "unknown" : result.validatesHead ? "yes" : "no"}`,
 		];
-		if (result.validatesHead === false) {
+		if (
+			result.validatesHead === false &&
+			result.pullRequest.status?.toLowerCase() === "active"
+		) {
 			lines.push(
 				`This build doesn't validate the current head of the pull request; wait for the build that does with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
 			);
