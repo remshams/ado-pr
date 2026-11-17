@@ -149,15 +149,15 @@ Build queue:
   Both print the queued build ID, build pipeline and URL. A PR requeue may not return the build ID
   yet. It then prints the requeued evaluation ID, says the build ID isn't known yet and exits 0. If
   the response has an invalid build ID, the error says Azure accepted the requeue and points to
-  \`build list --pr <id> --history\`. Queued builds print a
-  ready-to-run \`build wait\` line; a branch build gets one only when the branch has an active pull
-  request, because \`build wait\` needs one. --definition <id> picks the build pipeline. With --pr
-  it selects the build policy evaluation for that build pipeline and fails, listing the candidates,
-  when none matches; it never queues a plain build. With --branch it queues that build pipeline
-  directly, even when the repository has no build policy. Without it, several matching policies or
-  evaluations are reported for manual resolution. A 401, 403, 400 or 404 means nothing was queued;
-  401 and 403 name the Build (Read & execute) scope. Any other failed queue request may still have
-  queued a build; inspect before trying again.
+  \`build list --pr <id> --history\`. Queued builds print a ready-to-run \`build wait\` line; a
+  branch build gets one only when the branch has an active pull request, because \`build wait\`
+  needs one. --definition <id> picks the build pipeline. With --pr it selects the build policy
+  evaluation for that build pipeline and fails, listing the candidates, when none matches; it never
+  queues a plain build. With --branch it queues that build pipeline directly, even when the
+  repository has no build policy. Without it, several matching policies or evaluations are reported
+  for manual resolution. A 401, 403, 400 or 404 means nothing was queued; 401 and 403 name the Build
+  (Read & execute) scope. Any other failed queue request may still have queued a build; inspect
+  before trying again.
 
 Pull request status:
   \`pr status\` reports the head and merge commits, the latest iteration, the draft state, the build
