@@ -3380,7 +3380,7 @@ test("build wait --latest keeps waiting while no build validates the head", (t) 
 	assert.equal(result.status, 124, result.stderr);
 	assert.match(
 		result.stderr,
-		/PR #42: no build validates head head-1 yet; waiting up to 10 minutes for one\./,
+		/PR #42: no build validates head head-1 yet; waiting for one\./,
 	);
 	const output = JSON.parse(result.stdout);
 	assert.equal(output.outcome, "timeout");
