@@ -1,35 +1,67 @@
-import {
-	API_VERSION,
-	AzureRequestError,
-	isAzureRequestError,
-	orgProjectUrl,
-} from "../shared/azure.ts";
-import type { AzureRequester } from "../shared/azure.ts";
-import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
-import { stripTerminalControls } from "../shared/terminal.ts";
 import type {
 	PullRequest,
-	PullRequestReadOptions,
 	PullRequestService,
 } from "../pull-requests/pull-requests.ts";
 import {
+	API_VERSION,
+	AzureRequestError,
+	type AzureRequester,
 	buildApiUrl,
+	isAzureRequestError,
+	orgProjectUrl,
 	policyConfigurationsUrl,
 	policyEvaluationsUrl,
 	reposBaseUrl,
 } from "../shared/azure.ts";
+import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import { stripTerminalControls } from "../shared/terminal.ts";
+import {
+	type AzureBuild,
+	type AzureObject,
+	assertFetchedBuild,
+	assertListEnvelope,
+	assertRequestedBuildId,
+	assertRequestedPullRequestId,
+	type BuildDependencies,
+	type BuildLogMetadata,
+	type BuildRepository,
+	type BuildTimeline,
+	buildBaseUrl,
+	buildMutationError,
+	display,
+	equalsIdentifier,
+	isObject,
+	listUrl,
+	logsUrl,
+	logTextUrl,
+	MAX_BUILD_PAGES,
+	MAX_JSON_RESPONSE_BYTES,
+	nextBuildContinuationToken,
+	normalized,
+	READ_TIMEOUT_MS,
+	RETRY_TIMEOUT_MS,
+	requireArray,
+	requireObject,
+	requirePositiveInteger,
+	requireString,
+	resolvePullRequest,
+	sanitizeError,
+	type TimelineIssue,
+	type TimelineRecord,
+	timelineUrl,
+	type ValidatedPullRequest,
+	validateBuild,
+	validateLogMetadata,
+	validatePullRequest,
+	validateTimeline,
+} from "./azure-builds.ts";
 
-const BUILD_PAGE_SIZE = 100;
 const DEFAULT_LOG_LINE_COUNT = 200;
-const MAX_BUILD_PAGES = 1_000;
+
 const MAX_BUILD_RESPONSES = 100_000;
-const MAX_CONTINUATION_TOKEN_LENGTH = 8_192;
-const MAX_TIMELINE_RECORDS = 50_000;
-const MAX_LOG_METADATA_RECORDS = 50_000;
-const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
+
 const MAX_DEFAULT_LOG_BYTES = 2 * 1024 * 1024;
-const READ_TIMEOUT_MS = 30_000;
-const RETRY_TIMEOUT_MS = 60_000;
+
 const DEFAULT_WAIT_INTERVAL_SECONDS = 60;
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 3_600;
 const MIN_WAIT_INTERVAL_SECONDS = 10;
@@ -41,14 +73,18 @@ const WAIT_FOR_BUILD_MINUTES = 10;
 const WAIT_FOR_BUILD_MS = WAIT_FOR_BUILD_MINUTES * 60_000;
 const MAX_CONSECUTIVE_TRANSIENT_FAILURES = 3;
 const MAX_WAIT_ERROR_LENGTH = 4_096;
+
 const MAX_DISPLAY_DEPTH = 20;
+
 const PROBLEM_RESULTS = new Set([
 	"failed",
 	"succeededwithissues",
 	"canceled",
 	"abandoned",
 ]);
+
 const RETRYABLE_RESULTS = new Set(["failed", "partiallysucceeded", "canceled"]);
+
 const WAITING_BUILD_STATUSES = new Set([
 	"notstarted",
 	"inprogress",
@@ -64,78 +100,11 @@ const WAIT_OUTCOMES = new Map<
 	["failed", "failed"],
 	["canceled", "canceled"],
 ]);
+
 const DISPLAY_RECORD_TYPES = new Set(["stage", "job", "task"]);
+
 const SATISFIED_POLICY_STATUSES = new Set(["approved", "notapplicable"]);
 const BUILD_POLICY_TYPE_ID = "0609b952-1397-4640-95ec-e00a01b2c241";
-
-interface AzureObject {
-	[key: string]: unknown;
-}
-
-export interface BuildRepository extends AzureObject {
-	id?: string;
-	name?: string;
-	type?: string;
-}
-
-export interface BuildDefinition extends AzureObject {
-	id?: number;
-	name?: string;
-}
-
-export interface BuildLink extends AzureObject {
-	href?: string;
-}
-
-export interface AzureBuild extends AzureObject {
-	id?: number;
-	buildNumber?: string;
-	status?: string;
-	result?: string;
-	reason?: string;
-	sourceBranch?: string;
-	sourceVersion?: string;
-	queueTime?: string;
-	startTime?: string;
-	finishTime?: string;
-	repository?: BuildRepository;
-	definition?: BuildDefinition;
-	_links?: Record<string, BuildLink>;
-}
-
-export interface TimelineIssue extends AzureObject {
-	type?: string;
-	category?: string;
-	message?: string;
-}
-
-export interface TimelineLogReference extends AzureObject {
-	id?: number;
-}
-
-export interface TimelineRecord extends AzureObject {
-	id?: string;
-	parentId?: string | null;
-	type?: string;
-	name?: string;
-	state?: string;
-	result?: string;
-	attempt?: number;
-	order?: number;
-	issues?: TimelineIssue[];
-	log?: TimelineLogReference | null;
-}
-
-export interface BuildTimeline extends AzureObject {
-	records?: TimelineRecord[];
-}
-
-export interface BuildLogMetadata extends AzureObject {
-	id?: number;
-	type?: string;
-	url?: string;
-	lineCount?: number;
-}
 
 export interface PullRequestBuildSummary {
 	id: number;
@@ -341,181 +310,12 @@ export interface PolicyEvaluation {
 
 export type QueuedBuild = { build: AzureBuild } | { evaluationId: string };
 
-interface ValidatedPullRequest {
-	id: number;
-	repositoryId: string;
-	projectId: string | undefined;
-	status: string | undefined;
-	mergeCommit: string | undefined;
-	headCommit: string | undefined;
-	sourceBranch: string;
-	summary: PullRequestBuildSummary;
-}
-
 interface OrderedTimelineRecord {
 	record: TimelineRecord;
 	index: number;
 	depth: number;
 	orphanParent: string | undefined;
 	cycle: boolean;
-}
-
-function isObject(value: unknown): value is AzureObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function describeField(context: string, field: string): string {
-	return `${context}.${field}`;
-}
-
-function requireObject(value: unknown, context: string): AzureObject {
-	if (!isObject(value)) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context} must be an object.`,
-		);
-	}
-	return value;
-}
-
-function requireArray(value: unknown, context: string): unknown[] {
-	if (!Array.isArray(value)) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context} must be an array.`,
-		);
-	}
-	return value;
-}
-
-function requireString(value: unknown, context: string): string {
-	if (typeof value !== "string" || value.length === 0) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context} must be a non-empty string.`,
-		);
-	}
-	return value;
-}
-
-function optionalString(value: unknown, context: string): string | undefined {
-	if (value === undefined || value === null) return undefined;
-	return requireString(value, context);
-}
-
-function requirePositiveInteger(value: unknown, context: string): number {
-	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context} must be a positive safe integer.`,
-		);
-	}
-	return value;
-}
-
-function optionalNonNegativeInteger(
-	value: unknown,
-	context: string,
-): number | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context} must be a non-negative safe integer.`,
-		);
-	}
-	return value;
-}
-
-function assertRequestedBuildId(buildId: number): void {
-	if (!Number.isSafeInteger(buildId) || buildId < 1) {
-		throw new Error("Build ID must be a positive safe integer.");
-	}
-}
-
-function assertRequestedPullRequestId(requestedPrId: number | undefined): void {
-	if (
-		requestedPrId !== undefined &&
-		(!Number.isSafeInteger(requestedPrId) || requestedPrId < 1)
-	) {
-		throw new Error("Pull request ID must be a positive safe integer.");
-	}
-}
-
-function equalsIdentifier(left: string, right: string): boolean {
-	return left.toLowerCase() === right.toLowerCase();
-}
-
-function normalized(value: string): string {
-	return value.toLowerCase();
-}
-
-function optionalCommit(value: unknown, context: string): string | undefined {
-	if (value === undefined || value === null) return undefined;
-	return requireString(
-		requireObject(value, context).commitId,
-		describeField(context, "commitId"),
-	);
-}
-
-function validatePullRequest(
-	pr: PullRequest,
-	context: string,
-): ValidatedPullRequest {
-	const value = requireObject(pr, context) as unknown as PullRequest;
-	const id = requirePositiveInteger(
-		value.pullRequestId,
-		describeField(context, "pullRequestId"),
-	);
-	const title = requireString(value.title, describeField(context, "title"));
-	const sourceBranch = requireString(
-		value.sourceRefName,
-		describeField(context, "sourceRefName"),
-	);
-	const repository = requireObject(
-		value.repository,
-		describeField(context, "repository"),
-	);
-	const repositoryId = requireString(
-		repository.id,
-		describeField(context, "repository.id"),
-	);
-	requireString(repository.name, describeField(context, "repository.name"));
-	const repositoryProject = isObject(repository.project)
-		? repository.project
-		: undefined;
-	const projectId =
-		typeof repositoryProject?.id === "string"
-			? repositoryProject.id
-			: undefined;
-	const status = optionalString(value.status, describeField(context, "status"));
-	if (value.isDraft !== undefined && typeof value.isDraft !== "boolean") {
-		throw new Error(
-			`Malformed Azure DevOps response: ${describeField(context, "isDraft")} must be a boolean.`,
-		);
-	}
-
-	const mergeCommit = optionalCommit(
-		value.lastMergeCommit,
-		describeField(context, "lastMergeCommit"),
-	);
-	const headCommit = optionalCommit(
-		value.lastMergeSourceCommit,
-		describeField(context, "lastMergeSourceCommit"),
-	);
-
-	return {
-		id,
-		repositoryId,
-		projectId,
-		headCommit,
-		sourceBranch,
-		status,
-		mergeCommit,
-		summary: {
-			id,
-			title,
-			status: status ?? null,
-			draft: value.isDraft ?? null,
-			currentMergeCommit: mergeCommit ?? null,
-			currentHeadCommit: headCommit ?? null,
-		},
-	};
 }
 
 function assertActivePullRequest(
@@ -544,50 +344,6 @@ function requireCurrentMergeCommit(
 		);
 	}
 	return pr.mergeCommit;
-}
-
-function validateBuild(value: unknown, context: string): AzureBuild {
-	const build = requireObject(value, context) as AzureBuild;
-	requirePositiveInteger(build.id, describeField(context, "id"));
-	optionalString(build.buildNumber, describeField(context, "buildNumber"));
-	optionalString(build.status, describeField(context, "status"));
-	optionalString(build.result, describeField(context, "result"));
-	requireString(build.reason, describeField(context, "reason"));
-	requireString(build.sourceBranch, describeField(context, "sourceBranch"));
-	requireString(build.sourceVersion, describeField(context, "sourceVersion"));
-	optionalString(build.queueTime, describeField(context, "queueTime"));
-	optionalString(build.startTime, describeField(context, "startTime"));
-	optionalString(build.finishTime, describeField(context, "finishTime"));
-
-	const repository = requireObject(
-		build.repository,
-		describeField(context, "repository"),
-	);
-	requireString(repository.id, describeField(context, "repository.id"));
-	requireString(repository.type, describeField(context, "repository.type"));
-	optionalString(repository.name, describeField(context, "repository.name"));
-
-	if (build.definition !== undefined && build.definition !== null) {
-		const definition = requireObject(
-			build.definition,
-			describeField(context, "definition"),
-		);
-		if (definition.id !== undefined) {
-			requirePositiveInteger(
-				definition.id,
-				describeField(context, "definition.id"),
-			);
-		}
-		optionalString(definition.name, describeField(context, "definition.name"));
-	}
-	if (build._links !== undefined && build._links !== null) {
-		const links = requireObject(build._links, describeField(context, "_links"));
-		for (const [name, rawLink] of Object.entries(links)) {
-			const link = requireObject(rawLink, `${context}._links.${name}`);
-			optionalString(link.href, `${context}._links.${name}.href`);
-		}
-	}
-	return build;
 }
 
 function buildAssociationMismatch(
@@ -654,90 +410,6 @@ function isCurrentBuild(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 		normalized(pr.status) === "active" &&
 		validatesHead(build, pr)
 	);
-}
-
-function validateTimeline(value: unknown): BuildTimeline {
-	const timeline = requireObject(value, "timeline") as BuildTimeline;
-	const rawRecords = requireArray(timeline.records, "timeline.records");
-	if (rawRecords.length > MAX_TIMELINE_RECORDS) {
-		throw new Error(
-			`Azure DevOps timeline returned ${rawRecords.length} records; the safety limit is ${MAX_TIMELINE_RECORDS}.`,
-		);
-	}
-	const ids = new Set<string>();
-	timeline.records = rawRecords.map((rawRecord, index) => {
-		const context = `timeline.records[${index}]`;
-		const record = requireObject(rawRecord, context) as TimelineRecord;
-		if (record.id !== undefined && record.id !== null) {
-			const id = requireString(record.id, describeField(context, "id"));
-			const normalizedId = normalized(id);
-			if (ids.has(normalizedId)) {
-				throw new Error(
-					`Malformed Azure DevOps response: duplicate case-insensitive timeline record ID "${stripTerminalControls(id)}".`,
-				);
-			}
-			ids.add(normalizedId);
-		}
-		optionalString(record.parentId, describeField(context, "parentId"));
-		optionalString(record.type, describeField(context, "type"));
-		optionalString(record.name, describeField(context, "name"));
-		optionalString(record.state, describeField(context, "state"));
-		optionalString(record.result, describeField(context, "result"));
-		optionalNonNegativeInteger(
-			record.attempt,
-			describeField(context, "attempt"),
-		);
-		optionalNonNegativeInteger(record.order, describeField(context, "order"));
-
-		if (record.issues !== undefined && record.issues !== null) {
-			record.issues = requireArray(
-				record.issues,
-				describeField(context, "issues"),
-			).map((rawIssue, issueIndex) => {
-				const issueContext = `${context}.issues[${issueIndex}]`;
-				const issue = requireObject(rawIssue, issueContext) as TimelineIssue;
-				optionalString(issue.type, describeField(issueContext, "type"));
-				optionalString(issue.category, describeField(issueContext, "category"));
-				optionalString(issue.message, describeField(issueContext, "message"));
-				return issue;
-			});
-		}
-		if (record.log !== undefined && record.log !== null) {
-			const log = requireObject(record.log, describeField(context, "log"));
-			requirePositiveInteger(log.id, describeField(context, "log.id"));
-		}
-		return record;
-	});
-	return timeline;
-}
-
-function validateLogMetadata(value: unknown): BuildLogMetadata[] {
-	const envelope = requireObject(value, "build logs response");
-	const logs = requireArray(envelope.value, "build logs response.value");
-	if (logs.length > MAX_LOG_METADATA_RECORDS) {
-		throw new Error(
-			`Azure DevOps returned ${logs.length} build-log records; the safety limit is ${MAX_LOG_METADATA_RECORDS}.`,
-		);
-	}
-	const ids = new Set<number>();
-	return logs.map((rawLog, index) => {
-		const context = `build logs response.value[${index}]`;
-		const log = requireObject(rawLog, context) as BuildLogMetadata;
-		const id = requirePositiveInteger(log.id, describeField(context, "id"));
-		if (ids.has(id)) {
-			throw new Error(
-				`Malformed Azure DevOps response: duplicate build log ID ${id}.`,
-			);
-		}
-		ids.add(id);
-		optionalString(log.type, describeField(context, "type"));
-		optionalString(log.url, describeField(context, "url"));
-		optionalNonNegativeInteger(
-			log.lineCount,
-			describeField(context, "lineCount"),
-		);
-		return log;
-	});
 }
 
 function recordSortKey(
@@ -808,30 +480,6 @@ function appendAssociatedBuilds(
 	}
 }
 
-function nextBuildContinuationToken(
-	headers: Headers,
-	seenContinuationTokens: Set<string>,
-	resource = "build",
-): string | undefined {
-	const nextToken = headers.get("x-ms-continuationtoken") ?? undefined;
-	if (nextToken === undefined || nextToken.length === 0) {
-		return undefined;
-	} else {
-		if (nextToken.length > MAX_CONTINUATION_TOKEN_LENGTH) {
-			throw new Error(
-				`Azure DevOps ${resource} pagination returned an oversized continuation token.`,
-			);
-		}
-		if (seenContinuationTokens.has(nextToken)) {
-			throw new Error(
-				`Azure DevOps ${resource} pagination repeated a continuation token; refusing to loop.`,
-			);
-		}
-		seenContinuationTokens.add(nextToken);
-		return nextToken;
-	}
-}
-
 interface RequestedBuildLog {
 	metadata: BuildLogMetadata;
 	mode: "tail" | "full";
@@ -879,6 +527,11 @@ function selectProblemLogs(
 		}
 	}
 	return requestedLogs;
+}
+
+interface WaitDependencies extends BuildDependencies {
+	now: () => number;
+	sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
 
 function validateWaitBuild(
@@ -1030,28 +683,12 @@ function buildDefinitionName(build: AzureBuild): string {
 	return build.definition?.name ?? "unknown";
 }
 
-function display(value: unknown): string {
-	if (typeof value === "string" && value.length > 0) {
-		return stripTerminalControls(value)
-			.replace(/[\r\n]+/g, " ")
-			.replace(/\t/g, " ");
-	}
-	if (typeof value === "number" || typeof value === "boolean")
-		return String(value);
-	return "unknown";
-}
-
 function finalLines(value: string, maximum: number): string {
 	const trailingNewline = value.endsWith("\n");
 	const lines = value.split("\n");
 	if (trailingNewline) lines.pop();
 	if (lines.length <= maximum) return value;
 	return `${lines.slice(-maximum).join("\n")}${trailingNewline ? "\n" : ""}`;
-}
-
-function sanitizeError(error: unknown): string {
-	const message = error instanceof Error ? error.message : String(error);
-	return stripTerminalControls(message);
 }
 
 function sanitizeWaitError(error: unknown): string {
@@ -1191,76 +828,6 @@ function waitStateKey(build: AzureBuild): string {
 	}`;
 }
 
-function buildBaseUrl(ctx: AzureDevOpsRepoContext): string {
-	return `${orgProjectUrl(ctx)}/_apis/build/builds`;
-}
-
-function timelineUrl(ctx: AzureDevOpsRepoContext, buildId: number): string {
-	return `${buildBaseUrl(ctx)}/${buildId}/timeline?api-version=${API_VERSION}`;
-}
-
-function logsUrl(ctx: AzureDevOpsRepoContext, buildId: number): string {
-	return `${buildBaseUrl(ctx)}/${buildId}/logs?api-version=${API_VERSION}`;
-}
-
-function logTextUrl(
-	ctx: AzureDevOpsRepoContext,
-	buildId: number,
-	logId: number,
-	range: BuildLogRange | null,
-): string {
-	const bounds =
-		range === null
-			? ""
-			: `startLine=${range.startLine}&endLine=${range.endLine}&`;
-	return `${buildBaseUrl(ctx)}/${buildId}/logs/${logId}?${bounds}api-version=${API_VERSION}`;
-}
-
-function listUrl(
-	ctx: AzureDevOpsRepoContext,
-	pr: ValidatedPullRequest,
-	continuationToken: string | undefined,
-	branchHead: boolean,
-): string {
-	const parameters = [
-		...(branchHead ? [] : [["reasonFilter", "pullRequest"]]),
-		["branchName", branchHead ? pr.sourceBranch : `refs/pull/${pr.id}/merge`],
-		["repositoryId", pr.repositoryId],
-		["repositoryType", "TfsGit"],
-		["queryOrder", "queueTimeDescending"],
-		["$top", String(BUILD_PAGE_SIZE)],
-		...(continuationToken === undefined
-			? []
-			: [["continuationToken", continuationToken]]),
-		["api-version", API_VERSION],
-	];
-	return `${buildBaseUrl(ctx)}?${parameters
-		.map(([name, value]) => `${name}=${encodeURIComponent(value)}`)
-		.join("&")}`;
-}
-
-function assertListEnvelope(value: unknown): AzureBuild[] {
-	const envelope = requireObject(value, "build list response");
-	return requireArray(envelope.value, "build list response.value").map(
-		(build, index) =>
-			validateBuild(build, `build list response.value[${index}]`),
-	);
-}
-
-function assertFetchedBuild(
-	value: unknown,
-	requestedBuildId: number,
-	context: string,
-): AzureBuild {
-	const build = validateBuild(value, context);
-	if (build.id !== requestedBuildId) {
-		throw new Error(
-			`Malformed Azure DevOps response: ${context}.id was ${build.id as number}, expected ${requestedBuildId}.`,
-		);
-	}
-	return build;
-}
-
 function policyEvaluationLabel(evaluation: AzureObject): string {
 	const configuration = isObject(evaluation.configuration)
 		? evaluation.configuration
@@ -1348,37 +915,8 @@ function isBuildPolicyForRepository(
 	);
 }
 
-const BUILD_SCOPE_HINT =
-	"The PAT needs the Build (Read & execute) scope, also named vso.build_execute, and the account needs permission to queue builds for that build pipeline.";
 const REQUEUE_SCOPE_HINT =
 	" Requeueing a policy evaluation may need more than that; this is unverified.";
-const REJECTED_STATUSES = new Set([400, 401, 403, 404]);
-const SCOPE_STATUSES = new Set([401, 403]);
-
-/**
- * Builds the error for a failed build mutation. Azure refused 400, 401, 403 and 404 without acting,
- * and 401 and 403 get a scope hint. Any other failure may have queued a build, so it gets the
- * uncertain-outcome guidance.
- */
-function buildMutationError(
-	error: unknown,
-	subject: string,
-	advice: string,
-	extraScopeHint = "",
-): Error {
-	const status = isAzureRequestError(error) ? error.status : undefined;
-	if (status !== undefined && REJECTED_STATUSES.has(status)) {
-		const hint = SCOPE_STATUSES.has(status)
-			? ` ${BUILD_SCOPE_HINT}${extraScopeHint}`
-			: "";
-		return new Error(
-			`${subject} was rejected with HTTP ${status}; Azure DevOps took no action.${hint}\n${sanitizeError(error)}`,
-		);
-	}
-	return new Error(
-		`${subject} failed after dispatch. The Azure DevOps server outcome may be uncertain; do not retry automatically. ${advice}\n${sanitizeError(error)}`,
-	);
-}
 
 function formatBuildRow(build: ListedBuild): string {
 	return [
@@ -1461,23 +999,6 @@ export function createBuildService({
 	now?: () => number;
 	sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): BuildService {
-	async function resolvePullRequest(
-		requestedPrId: number | undefined,
-		options?: PullRequestReadOptions,
-	): Promise<ValidatedPullRequest> {
-		assertRequestedPullRequestId(requestedPrId);
-		const pr = validatePullRequest(
-			await pullRequests.resolve(requestedPrId, options),
-			"pull request",
-		);
-		if (requestedPrId !== undefined && pr.id !== requestedPrId) {
-			throw new Error(
-				`Malformed Azure DevOps response: hydrated pull request ID ${pr.id} did not match selected PR #${requestedPrId}.`,
-			);
-		}
-		return pr;
-	}
-
 	async function fetchBuild(
 		buildId: number,
 		context = "build",
@@ -1588,7 +1109,7 @@ export function createBuildService({
 		options: ListBuildOptions = {},
 	): Promise<BuildListEnvelope> {
 		const history = options.history === true;
-		const pr = await resolvePullRequest(requestedPrId);
+		const pr = await resolvePullRequest(pullRequests, requestedPrId);
 		if (!history) assertActivePullRequest(pr, "list current builds");
 
 		const associated = (await listNewestBuilds(pr)).map((build) => ({
@@ -1664,7 +1185,7 @@ export function createBuildService({
 		options: ShowBuildOptions = {},
 	): Promise<BuildShowEnvelope> {
 		if (buildId !== "latest") assertRequestedBuildId(buildId);
-		const pr = await resolvePullRequest(requestedPrId);
+		const pr = await resolvePullRequest(pullRequests, requestedPrId);
 		const build =
 			buildId === "latest"
 				? await selectLatestBuild(pr)
@@ -1773,7 +1294,7 @@ export function createBuildService({
 		buildId: number,
 	): Promise<AzureBuild> {
 		assertRequestedBuildId(buildId);
-		const initialPr = await resolvePullRequest(requestedPrId);
+		const initialPr = await resolvePullRequest(pullRequests, requestedPrId);
 		const initialBuild = await fetchBuild(buildId);
 		assertRetryEligible(initialPr, initialBuild, "retry build");
 
@@ -1860,7 +1381,7 @@ export function createBuildService({
 		definitionId?: number,
 	): Promise<QueuedBuild> {
 		assertRequestedPullRequestId(prId);
-		const pr = await resolvePullRequest(prId);
+		const pr = await resolvePullRequest(pullRequests, prId);
 		const evaluations = await fetchPolicyEvaluations(pr, "queue a build");
 		const candidates = evaluations
 			.filter((evaluation) => isBuildPolicyEvaluation(evaluation))
@@ -2108,7 +1629,11 @@ export function createBuildService({
 			timeoutMs: READ_TIMEOUT_MS,
 			maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
 		};
-		let pr = await resolvePullRequest(requestedPrId, prReadOptions);
+		let pr = await resolvePullRequest(
+			pullRequests,
+			requestedPrId,
+			prReadOptions,
+		);
 		throwIfWaitAborted(signal);
 
 		const followsHead = requestedBuild === "latest";
