@@ -119,7 +119,7 @@ Build selection:
   pullRequest runs on the PR merge ref against lastMergeCommit and runs of any reason on the PR
   source branch against lastMergeSourceCommit. Output labels them pr-merge or branch-head.
   Manual runs on the PR merge ref are unsupported. If no build validates the head, show prints
-  the newest associated build marked stale with its commit and exits 1; wait fails naming the head.
+  the newest associated build marked stale with its commit and exits 1; wait waits for one.
   --build accepts current or historical associated builds.
 
 Build list:
@@ -133,18 +133,24 @@ Build wait:
   \`build wait\` monitors validation metadata for the selected build. --pr only selects or resolves
   the associated pull request. After bounded PR resolution, polling runs every 60 seconds for up to
   1 hour by default; --interval accepts 10–3600 seconds and --timeout accepts 10–86400 seconds.
+  With --latest the wait follows the PR head. Each poll reads the PR again; when its source commit
+  changes, the wait switches to the build that validates the new head. While no build validates
+  the head it keeps polling, and after 10 minutes without one, counted from the last head change,
+  it ends with outcome no-build. A change of the merge commit alone keeps the selected build.
+  --build <id> always waits for that build.
   Five-minute heartbeats and progress go to stderr. Completed and timed-out waits emit one final
   human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes
-  the selected PR summary, requested build ID, raw Azure build metadata (or null before
-  observation), counters, elapsed polling time, timeout state, and outcome; inspect raw metadata
-  before persisting it. When the build finishes, the wait reads the PR again and reports whether
-  the build still validates the head: human output adds a "Validates head" line, JSON adds
-  validatesHead (null on timeout, if that read fails, or if the PR has no commit to compare). A
-  successful read also supplies the PR summary. The exit code still follows the outcome.
-  Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes/errors, 130 for SIGINT, and
-  143 for SIGTERM. Transient poll requests retry, but a third consecutive transient failure aborts.
-  Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;
-  use \`build show\` afterward for diagnostics.
+  the selected PR summary, the ID of the build that finished (null if none validated the head),
+  raw Azure build metadata (or null before observation), counters, elapsed polling time, timeout
+  state, and outcome; inspect raw metadata before persisting it. When the build finishes, the wait reads
+  the PR again and reports whether the build still validates the head: human output adds a
+  "Validates head" line, JSON adds validatesHead (null on timeout, if that read fails, or if the PR
+  has no commit to compare). A successful read also supplies the PR summary. The exit code still
+  follows the outcome.
+  Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes (including no-build) and
+  errors, 130 for SIGINT, and 143 for SIGTERM. Transient poll requests retry, but a third
+  consecutive transient failure aborts. Waiting never retries/requeues the build, fetches logs,
+  retries individual work, or mutates builds; use \`build show\` afterward for diagnostics.
 
 Build queue:
   \`build queue\` requires exactly one of --pr <id> or --branch <name>. PR builds requeue the PR's

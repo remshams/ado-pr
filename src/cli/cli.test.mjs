@@ -363,6 +363,7 @@ test("build wait maps completed and timeout outcomes to stable exit codes", () =
 		"failed",
 		"canceled",
 		"unknown",
+		"no-build",
 	]) {
 		assert.equal(buildWaitExitCode({ timedOut: false, outcome }), 1);
 	}
