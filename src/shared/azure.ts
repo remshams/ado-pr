@@ -1,4 +1,5 @@
 import type { AzureDevOpsRepoContext } from "./lib.ts";
+import { stripTerminalControls } from "./terminal.ts";
 
 export const API_VERSION = "7.1";
 const CONNECTION_DATA_API_VERSION = "7.1-preview.1";
@@ -154,18 +155,6 @@ function assertPositiveSafeInteger(
 				: `${name} must be a positive safe integer no greater than ${maximum}.`,
 		);
 	}
-}
-
-function stripTerminalControls(value: string): string {
-	return value
-		.replace(
-			/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)?|.)?/g,
-			"",
-		)
-		.replace(
-			/[\x00-\x08\x0B-\x1F\x7F-\x9F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g,
-			"",
-		);
 }
 
 function isSensitiveKey(value: string): boolean {
