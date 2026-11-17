@@ -141,7 +141,7 @@ Build wait:
   --build <id> always waits for that build.
   Five-minute heartbeats and progress go to stderr. Completed and timed-out waits emit one final
   human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes
-  the selected PR summary, the ID of the build that finished (null if none validated the head),
+  the selected PR summary, the ID of the selected build (null if none validated the head),
   raw Azure build metadata (or null before observation), counters, elapsed polling time, timeout
   state, and outcome; inspect raw metadata before persisting it. When the build finishes, the wait checks
   the PR head again and reports whether the build still validates the head: human output adds a
