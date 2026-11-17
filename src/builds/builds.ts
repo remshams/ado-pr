@@ -231,6 +231,8 @@ export interface BuildWaitEnvelope {
 	elapsedSeconds: number;
 	timedOut: boolean;
 	outcome: BuildWaitOutcome;
+	/** Whether the build validates the PR head read when it finished; null on timeout or if that read failed. */
+	validatesHead: boolean | null;
 }
 
 interface BuildWaitProgressBase {
@@ -2113,6 +2115,7 @@ export function createBuildService({
 			elapsedSeconds: elapsedSeconds(at),
 			timedOut: true,
 			outcome: "timeout",
+			validatesHead: null,
 		});
 		const progressBase = (at = now()): BuildWaitProgressBase => ({
 			pullRequest: pr.summary,
@@ -2164,6 +2167,26 @@ export function createBuildService({
 			return undefined;
 		}
 
+		async function validatesRefreshedHead(
+			observedBuild: AzureBuild,
+		): Promise<boolean | null> {
+			try {
+				const refreshed = validatePullRequest(
+					await pullRequests.get(pr.id, {
+						signal,
+						timeoutMs: READ_TIMEOUT_MS,
+						maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+					}),
+					"refreshed pull request",
+				);
+				return validatesHead(observedBuild, refreshed);
+			} catch (error) {
+				throwIfWaitAborted(signal);
+				if (isAzureRequestError(error) && error.kind === "abort") throw error;
+				return null;
+			}
+		}
+
 		async function observeBuild(
 			rawBuild: unknown,
 			completedAt: number,
@@ -2186,6 +2209,7 @@ export function createBuildService({
 							elapsedSeconds: elapsedSeconds(completedAt),
 							timedOut: false,
 							outcome: waitResultOutcome(observedBuild),
+							validatesHead: null,
 						}
 					: undefined;
 			if (stateKey !== previousStateKey) {
@@ -2200,6 +2224,10 @@ export function createBuildService({
 							: null,
 				});
 				previousStateKey = stateKey;
+			}
+			if (terminalEnvelope !== undefined) {
+				terminalEnvelope.validatesHead =
+					await validatesRefreshedHead(observedBuild);
 			}
 			return terminalEnvelope;
 		}
@@ -2395,7 +2423,13 @@ export function createBuildService({
 			`${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
 			`Status/result: ${statusResult}; ${counters}.`,
 			`Association: ${display(result.association)}`,
+			`Validates head: ${result.validatesHead === null ? "unknown" : result.validatesHead ? "yes" : "no"}`,
 		];
+		if (result.validatesHead === false) {
+			lines.push(
+				`The pull request changed after this build was queued; wait for the build of its current head with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
+			);
+		}
 		if (result.outcome !== "succeeded" && buildId !== undefined) {
 			lines.push(
 				`Inspect failure details with \`pr.sh build show --pr ${result.pullRequest.id} --build ${buildId}\`.`,
