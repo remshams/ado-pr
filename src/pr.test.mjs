@@ -914,6 +914,72 @@ test("build queue --pr reports when the requeued evaluation has no build ID", (t
 	assert.equal(result.status, 0);
 });
 
+test("build queue --pr reports a null build ID in the requeued evaluation context as not known yet", (t) => {
+	const cwd = createRepo(t);
+	const pr = validationPr({
+		repository: {
+			id: "repo-id",
+			name: "widgets",
+			project: { id: "project-id" },
+		},
+		lastMergeSourceCommit: { commitId: "head-1" },
+	});
+	const result = runPr(t, ["build", "queue", "--pr", "42"], {
+		cwd,
+		responses: [
+			{ json: pr },
+			{
+				json: {
+					value: [
+						{
+							evaluationId: "evaluation-id",
+							configuration: {
+								name: "Widget CI",
+								type: { id: "0609b952-1397-4640-95ec-e00a01b2c241" },
+							},
+						},
+					],
+				},
+			},
+			{
+				json: {
+					evaluationId: "evaluation-id",
+					status: "queued",
+					context: { buildId: null },
+				},
+			},
+		],
+	});
+
+	assertSucceeded(result);
+	assert.deepEqual(
+		result.calls.map(({ url, method, body }) => ({ url, method, body })),
+		[
+			{
+				url: `${apiBase}/pullRequests/42?api-version=7.1`,
+				method: "GET",
+				body: null,
+			},
+			{
+				url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations?artifactId=vstfs%3A%2F%2F%2FCodeReview%2FCodeReviewId%2Fproject-id%2F42&api-version=7.1-preview.1",
+				method: "GET",
+				body: null,
+			},
+			{
+				url: "https://dev.azure.com/acme/Test%20Project/_apis/policy/evaluations/evaluation-id?api-version=7.1-preview.1",
+				method: "PATCH",
+				body: JSON.stringify({ status: "queued" }),
+			},
+		],
+	);
+	assert.equal(
+		result.stdout,
+		"Requeued build policy evaluation evaluation-id for PR #42.\n" +
+			"Azure DevOps did not return the build ID yet. When `pr.sh build show --latest --pr 42` shows a new build ID, run `pr.sh build wait --build <id> --pr 42`.\n",
+	);
+	assert.equal(result.status, 0);
+});
+
 test("build queue --pr fetches and prints the build ID from evaluation context", (t) => {
 	const cwd = createRepo(t);
 	const pr = validationPr({
