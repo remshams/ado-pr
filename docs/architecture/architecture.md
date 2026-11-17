@@ -141,7 +141,7 @@ sequenceDiagram
         Launcher->>Entry: exec node src/pr.ts
     end
     Entry->>Cli: parse arguments, read the PAT
-    alt help, usage error or no PAT
+    alt help, usage error, no PAT or unresolved op:// PAT
         Cli-->>Agent: help or error on stderr, exit 0 or 1
     else valid
         Cli-->>Entry: options and PAT
@@ -258,9 +258,9 @@ current for an inactive PR. An empty default view reports how many stale builds 
 JSON adds `association` and `current` to each build and `hiddenBuilds` to the result.
 
 `pr status` prints one human report, or with `--json` the same fields as one JSON
-document. It reads the PR, the validating build, all threads, the latest iteration
-and the policy evaluations and, only when `mergeStatus` is `conflicts`, the conflict
-list, one request after another. The result is a domain value, not the raw Azure
+document. It reads the PR, the validating build, all threads, the latest iteration,
+the conflict list only when `mergeStatus` is `conflicts`, and the policy
+evaluations, one request after another. The result is a domain value, not the raw Azure
 objects: id, title, state, draft, URL, head and merge commit, iteration, build,
 Copilot activity, unresolved thread count, merge status, conflicts, blocking
 policies and reviewers with vote and required flag. The builds module exposes the
