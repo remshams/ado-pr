@@ -603,7 +603,6 @@ function buildAssociation(build: AzureBuild): BuildAssociation {
 		: "pr-merge";
 }
 
-/** Whether the build ran on the PR's current head, whatever the PR status. */
 /** The PR commit a build must have run on to validate the head. */
 function headCommitFor(
 	build: AzureBuild,
@@ -614,6 +613,7 @@ function headCommitFor(
 		: pr.mergeCommit;
 }
 
+/** Whether the build ran on the PR's current head, whatever the PR status. */
 function validatesHead(build: AzureBuild, pr: ValidatedPullRequest): boolean {
 	const commit = headCommitFor(build, pr);
 	return (
