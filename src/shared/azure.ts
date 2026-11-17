@@ -173,16 +173,20 @@ function boundSanitizationInput(
 		: value.slice(0, maximumCodeUnits);
 }
 
-function redactSensitiveText(value: string, pat: string): string {
+function redactPat(value: string, pat: string): string {
+	if (pat.length === 0) return value;
 	const encodedPat = Buffer.from(`:${pat}`).toString("base64");
-	let redacted = stripTerminalControls(value);
-	if (pat.length > 0) {
-		redacted = redacted
-			.replaceAll(pat, "<redacted>")
-			.replaceAll(encodedPat, "<redacted>")
-			.replaceAll(encodeURIComponent(pat), "<redacted>")
-			.replaceAll(encodeURIComponent(encodedPat), "<redacted>");
-	}
+	return value
+		.replaceAll(pat, "<redacted>")
+		.replaceAll(encodedPat, "<redacted>")
+		.replaceAll(encodeURIComponent(pat), "<redacted>")
+		.replaceAll(encodeURIComponent(encodedPat), "<redacted>");
+}
+
+function redactSensitiveText(value: string, pat: string): string {
+	// Search before stripping, because an escape sequence can swallow the PAT's first
+	// character, and after, because one inside the PAT splits it.
+	let redacted = redactPat(stripTerminalControls(redactPat(value, pat)), pat);
 
 	redacted = redacted.replace(
 		/("(?:\\.|[^"\\])*")(\s*:\s*)("(?:\\.|[^"\\])*")/g,
