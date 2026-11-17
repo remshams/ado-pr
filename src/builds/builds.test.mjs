@@ -1326,7 +1326,7 @@ describe("deterministic build wait", () => {
 		const result = await service.wait(42, 700);
 		assert.equal(result.outcome, "succeeded");
 		assert.equal(result.build, historical);
-		assert.equal(result.validatesHead, false);
+		assert.equal(result.validatesHead, null);
 		assert.deepEqual(pullRequestCalls, [
 			{ method: "resolve", requestedPrId: 42 },
 			{ method: "get", prId: 42 },
@@ -1365,6 +1365,45 @@ describe("deterministic build wait", () => {
 		const result = await service.wait(42, 700);
 		assert.equal(result.association, "branch-head");
 		assert.equal(result.validatesHead, false);
+	});
+
+	test("reports the PR summary from the final read", async () => {
+		const { service } = createWaitHarness([build({ result: "succeeded" })], {
+			refreshedPr: pullRequest({
+				status: "completed",
+				lastMergeCommit: { commitId: "new-merge" },
+			}),
+		});
+		const result = await service.wait(42, 700);
+		assert.equal(result.validatesHead, false);
+		assert.equal(result.pullRequest.status, "completed");
+		assert.equal(result.pullRequest.currentMergeCommit, "new-merge");
+	});
+
+	test("reports an unknown head when the final read has no commit to compare", async () => {
+		const { service } = createWaitHarness([build({ result: "succeeded" })], {
+			refreshedPr: pullRequest({ lastMergeCommit: undefined }),
+		});
+		const result = await service.wait(42, 700);
+		assert.equal(result.validatesHead, null);
+		assert.doesNotMatch(service.formatWaitResult(result), /--latest/);
+	});
+
+	test("skips the final PR read when the deadline passed while reporting progress", async () => {
+		const { service, clock, pullRequestCalls } = createWaitHarness([
+			build({ result: "succeeded" }),
+		]);
+		const result = await service.wait(42, 700, {
+			timeoutSeconds: 10,
+			onProgress: () => {
+				clock.value = 10_000;
+			},
+		});
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.validatesHead, null);
+		assert.deepEqual(pullRequestCalls, [
+			{ method: "resolve", requestedPrId: 42 },
+		]);
 	});
 
 	test("bounds the final PR read by the wait deadline", async () => {

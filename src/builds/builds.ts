@@ -2168,25 +2168,35 @@ export function createBuildService({
 			return undefined;
 		}
 
-		async function validatesRefreshedHead(
+		/** Rereads the PR once the build finished; validatesHead is null if that isn't possible. */
+		async function refreshedHead(
 			observedBuild: AzureBuild,
-		): Promise<boolean | null> {
+		): Promise<Pick<BuildWaitEnvelope, "pullRequest" | "validatesHead">> {
+			const remainingMs = Math.ceil(deadline - now());
+			if (remainingMs <= 0)
+				return { pullRequest: pr.summary, validatesHead: null };
 			try {
 				const refreshed = validatePullRequest(
 					await pullRequests.get(pr.id, {
 						...prReadOptions,
-						timeoutMs: Math.min(
-							READ_TIMEOUT_MS,
-							Math.max(1, Math.ceil(deadline - now())),
-						),
+						timeoutMs: Math.min(READ_TIMEOUT_MS, remainingMs),
 					}),
 					"refreshed pull request",
 				);
-				return validatesHead(observedBuild, refreshed);
+				const headKnown =
+					buildAssociation(observedBuild) === "branch-head"
+						? refreshed.headCommit !== undefined
+						: refreshed.mergeCommit !== undefined;
+				return {
+					pullRequest: refreshed.summary,
+					validatesHead: headKnown
+						? validatesHead(observedBuild, refreshed)
+						: null,
+				};
 			} catch (error) {
 				throwIfWaitAborted(signal);
 				if (isAzureRequestError(error) && error.kind === "abort") throw error;
-				return null;
+				return { pullRequest: pr.summary, validatesHead: null };
 			}
 		}
 
@@ -2216,7 +2226,6 @@ export function createBuildService({
 			if (observedStatus !== "completed") return undefined;
 			return {
 				association: buildAssociation(observedBuild),
-				pullRequest: pr.summary,
 				buildId,
 				build: observedBuild,
 				pollCount,
@@ -2224,7 +2233,7 @@ export function createBuildService({
 				elapsedSeconds: elapsedSeconds(completedAt),
 				timedOut: false,
 				outcome: waitResultOutcome(observedBuild),
-				validatesHead: await validatesRefreshedHead(observedBuild),
+				...(await refreshedHead(observedBuild)),
 			};
 		}
 
