@@ -2529,7 +2529,7 @@ export function createBuildService({
 			return `${prefix}: selected for head ${head}.${replaced}`;
 		}
 		if (event.type === "waiting-for-build") {
-			return `${prefix}: no build validates head ${head} yet; waiting up to ${WAIT_FOR_BUILD_MINUTES} minutes for one.`;
+			return `${prefix}: no build validates head ${head} yet; waiting for one.`;
 		}
 		if (event.type === "state") {
 			return `${prefix}: ${event.change} state ${state}; ${counters}.`;

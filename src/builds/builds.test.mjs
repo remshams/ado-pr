@@ -4194,7 +4194,7 @@ describe("build wait --latest follows the PR head", () => {
 		);
 		assert.equal(
 			service.formatWaitProgress(events[0]),
-			"PR #42: no build validates head HEAD-1 yet; waiting up to 10 minutes for one.",
+			"PR #42: no build validates head HEAD-1 yet; waiting for one.",
 		);
 		assert.equal(
 			service.formatWaitProgress(events[1]),
