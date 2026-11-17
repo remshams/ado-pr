@@ -36,7 +36,8 @@ const MAX_WAIT_INTERVAL_SECONDS = 3_600;
 const MIN_WAIT_TIMEOUT_SECONDS = 10;
 const MAX_WAIT_TIMEOUT_SECONDS = 86_400;
 const WAIT_HEARTBEAT_MS = 5 * 60_000;
-const WAIT_FOR_BUILD_MS = 10 * 60_000;
+const WAIT_FOR_BUILD_MINUTES = 10;
+const WAIT_FOR_BUILD_MS = WAIT_FOR_BUILD_MINUTES * 60_000;
 const MAX_CONSECUTIVE_TRANSIENT_FAILURES = 3;
 const MAX_WAIT_ERROR_LENGTH = 4_096;
 const MAX_DISPLAY_DEPTH = 20;
@@ -2152,7 +2153,6 @@ export function createBuildService({
 			outcome,
 			validatesHead: null,
 		});
-		const timeoutEnvelope = (at = now()) => unfinishedEnvelope("timeout", at);
 		const progressBase = (at = now()): BuildWaitProgressBase => ({
 			pullRequest: pr.summary,
 			buildId,
@@ -2180,7 +2180,8 @@ export function createBuildService({
 				transientFailureCount += 1;
 				consecutiveTransientFailures += 1;
 			}
-			if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+			if (completedAt >= deadline)
+				return unfinishedEnvelope("timeout", completedAt);
 			if (!transient) throw error;
 
 			const retryAfterMs =
@@ -2365,7 +2366,8 @@ export function createBuildService({
 			}
 
 			throwIfWaitAborted(signal);
-			if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+			if (completedAt >= deadline)
+				return unfinishedEnvelope("timeout", completedAt);
 			if (buildId === null) return awaitHeadBuild(completedAt);
 			const result = await observeBuild(rawBuild, buildId, completedAt);
 			if (!result) nextPollAt = Math.min(deadline, completedAt + intervalMs);
@@ -2375,7 +2377,7 @@ export function createBuildService({
 		while (true) {
 			throwIfWaitAborted(signal);
 			const current = now();
-			if (current >= deadline) return timeoutEnvelope(current);
+			if (current >= deadline) return unfinishedEnvelope("timeout", current);
 			if (current >= nextHeartbeatAt) {
 				await emitHeartbeat(current);
 				continue;
@@ -2511,7 +2513,7 @@ export function createBuildService({
 			return `${prefix}: selected for head ${head}.${replaced}`;
 		}
 		if (event.type === "waiting-for-build") {
-			return `${prefix}: no build validates head ${head} yet; waiting up to ${WAIT_FOR_BUILD_MS / 60_000} minutes for one.`;
+			return `${prefix}: no build validates head ${head} yet; waiting up to ${WAIT_FOR_BUILD_MINUTES} minutes for one.`;
 		}
 		if (event.type === "state") {
 			return `${prefix}: ${event.change} state ${state}; ${counters}.`;
@@ -2529,7 +2531,7 @@ export function createBuildService({
 	function formatNoBuild(result: BuildWaitEnvelope, counters: string): string {
 		const pr = result.pullRequest;
 		return (
-			`No build validated the head of PR #${pr.id} (commit ${display(pr.currentHeadCommit)}) within ${WAIT_FOR_BUILD_MS / 60_000} minutes; ${counters}.\n` +
+			`No build validated the head of PR #${pr.id} (commit ${display(pr.currentHeadCommit)}) within ${WAIT_FOR_BUILD_MINUTES} minutes; ${counters}.\n` +
 			`Draft: ${yesNoUnknown(pr.draft)}. Check that the build policy runs for this pull request, or queue a build with \`pr.sh build queue --pr ${pr.id}\`.`
 		);
 	}
