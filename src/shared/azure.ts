@@ -218,6 +218,12 @@ function sanitizeBounded(value: string, pat: string, maxBytes: number): string {
 	return boundUtf8(redactSensitiveText(boundedInput, pat), maxBytes);
 }
 
+// Any change counts, including removed escape sequences: one can wrap the PAT and hide it
+// from the search in redactSensitiveText.
+function exposesSensitiveText(decoded: string, pat: string): boolean {
+	return redactSensitiveText(decoded, pat) !== decoded;
+}
+
 function safeRequestUrl(value: string, pat: string): string {
 	const boundedValue = boundSanitizationInput(value, pat, MAX_SAFE_URL_BYTES);
 	let safeValue: string;
@@ -230,33 +236,21 @@ function safeRequestUrl(value: string, pat: string): string {
 			.map((segment) => {
 				try {
 					const decoded = decodeURIComponent(segment);
-					return redactSensitiveText(decoded, pat) ===
-						stripTerminalControls(decoded)
-						? segment
-						: "<redacted>";
+					return exposesSensitiveText(decoded, pat) ? "<redacted>" : segment;
 				} catch {
 					return "<redacted>";
 				}
 			})
 			.join("/");
 		for (const [name, parameterValue] of [...url.searchParams]) {
-			if (
-				isSensitiveKey(name) ||
-				redactSensitiveText(parameterValue, pat) !==
-					stripTerminalControls(parameterValue)
-			) {
+			if (isSensitiveKey(name) || exposesSensitiveText(parameterValue, pat)) {
 				url.searchParams.set(name, "<redacted>");
 			}
 		}
 		if (url.hash.length > 0) {
 			try {
 				const decodedHash = decodeURIComponent(url.hash.slice(1));
-				if (
-					redactSensitiveText(decodedHash, pat) !==
-					stripTerminalControls(decodedHash)
-				) {
-					url.hash = "<redacted>";
-				}
+				if (exposesSensitiveText(decodedHash, pat)) url.hash = "<redacted>";
 			} catch {
 				url.hash = "<redacted>";
 			}
