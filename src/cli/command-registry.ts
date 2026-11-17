@@ -137,10 +137,10 @@ Build wait:
   human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes
   the selected PR summary, requested build ID, raw Azure build metadata (or null before
   observation), counters, elapsed polling time, timeout state, and outcome; inspect raw metadata
-  before persisting it. When the build finishes, the wait reads the PR again, reports that read's
-  PR summary and whether the build still validates the head: human output adds a "Validates head"
-  line, JSON adds validatesHead (null on timeout, if that read fails, or if the PR has no commit to
-  compare). The exit code still follows the outcome.
+  before persisting it. When the build finishes, the wait reads the PR again and reports whether
+  the build still validates the head: human output adds a "Validates head" line, JSON adds
+  validatesHead (null on timeout, if that read fails, or if the PR has no commit to compare). A
+  successful read also supplies the PR summary. The exit code still follows the outcome.
   Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes/errors, 130 for SIGINT, and
   143 for SIGTERM. Transient poll requests retry, but a third consecutive transient failure aborts.
   Waiting never retries/requeues the build, fetches logs, retries individual work, or mutates builds;
