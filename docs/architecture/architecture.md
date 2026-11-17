@@ -1,41 +1,57 @@
-# Architecture
+# ado-pr architecture
 
 ado-pr is a small TypeScript CLI for developers' coding agents working in Azure
-Repos checkouts. It manages pull requests, review comments and PR validation builds, and reports a PR's state in one call.
-It runs from source on Node >= 22.6 with native type stripping and no build step,
-as recorded in [ADR 0005](adr/0005-run-typescript-directly.md).
+Repos checkouts. It manages pull requests, review comments and PR validation builds,
+and reports a pull request's state in one call. It runs from source on Node >= 22.6
+with native type stripping and no build step
+([ADR 0005](adr/0005-run-typescript-directly.md)). Code is organised by feature with
+enforced dependency rules ([ADR 0002](adr/0002-organise-code-by-feature.md)) and
+kept small ([ADR 0003](adr/0003-keep-the-tool-small.md)).
 
-## Runtime flow
+## Domain language
 
-Link the launcher into a directory on PATH, as `AGENTS.md` describes, then run
-`pr.sh` from the target checkout. The launcher resolves its real path with
-`readlink -f` to find its source and dependencies without changing the caller's
-working directory. It prefers an exported `AZURE_DEVOPS_PAT`, then loads `.env`
-beside the real script. Literal values use Node's dotenv loader; `op://` references
-use `op run` for resolution. A 1Password Environment named pipe supplies literal
-dotenv values and is read once. The TypeScript entrypoint requires a resolved PAT.
+- **Pull request**: an Azure Repos pull request from a source branch into a target
+  branch. Commands find it by ID or from the current branch.
+- **PR head**: the newest source commit of a pull request
+  (`lastMergeSourceCommit`).
+- **Merge commit**: the commit Azure creates by merging the PR head into the target
+  branch (`lastMergeCommit`). It changes when either branch moves.
+- **Iteration**: one pushed version of a pull request. `pr diff` compares iterations.
+- **Review thread**: a discussion on a pull request, optionally anchored to a file
+  and line, with a status such as active or fixed.
+- **Comment**: one message in a review thread.
+- **Build pipeline**: an Azure Pipelines definition. A build policy names the
+  build pipeline that validates pull requests into a branch.
+- **PR validation build**: a run of a build pipeline associated with a pull request.
+  Its association is `pr-merge` for a run on the merge commit or `branch-head` for
+  a run on the source branch ([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
+- **Validates the head**: a `pr-merge` build validates the head when it ran on the
+  current merge commit, a `branch-head` build when it ran on the PR head.
+
+## Context
 
 ```mermaid
+---
+title: ado-pr and its surroundings
+---
 flowchart TD
-    Launcher[pr.sh] --> Credentials[Exported PAT or launcher .env]
-    Credentials -->|literal PAT| Node[Node type stripping: src/pr.ts]
-    Credentials -->|op:// reference| Op[1Password CLI: op run]
-    Op --> Node
-    Node --> Parse[CLI parsing and validation]
-    Parse --> Context[Git origin and repository context]
-    Context --> Services[Create and dispatch feature services]
-    Services --> Requester[Azure requester]
-    Requester --> REST[Azure DevOps REST API]
-    REST --> Requester
-    Requester --> Services
-    Services --> Output[Human output or JSON result]
+    agent(["Coding agent"]):::person
+    adopr["ado-pr<br>Manages Azure DevOps pull requests, comments and builds"]:::system
+    azure["Azure DevOps<br>REST API, PAT Basic auth"]:::external
+    git["git<br>Origin remote of the checkout"]:::external
+    op["1Password CLI<br>Resolves op:// references"]:::external
+    env[(".env<br>Dotenv file beside pr.sh")]:::store
+    agent -->|runs pr.sh commands, reads text or JSON| adopr
+    adopr -->|reads PAT| env
+    adopr -->|resolves op:// PAT| op
+    adopr -->|reads origin URL| git
+    adopr -->|HTTP JSON requests| azure
 ```
 
-`src/pr.ts` parses arguments before reading credentials or Git context, so direct
-Node invocation can show help without authentication. It creates one requester,
-injects it and the repository context into the services, dispatches the command
-and selects output and exit status. PR resolution uses an explicit ID or the
-current branch where the command allows it.
+The agent runs `pr.sh` from the root of an Azure Repos checkout. The launcher takes
+the PAT from `AZURE_DEVOPS_PAT` or from the `.env` file beside the real script.
+`src/shared/` reads the organisation, project and repository from the checkout's
+origin remote.
 
 ## Modules and dependencies
 
@@ -67,25 +83,23 @@ Arrows show permitted imports between modules, including type-only imports.
 They describe dependency permissions, not every current import.
 
 ```mermaid
+---
+title: Modules of the ado-pr CLI
+---
 flowchart TD
-    Entry[src/pr.ts] --> CLI[src/cli/]
-    Entry --> PR[src/pull-requests/]
-    Entry --> Comments[src/comments/]
-    Entry --> Builds[src/builds/]
-    Entry --> Status[src/status/]
-    Entry --> Shared[src/shared/]
-    CLI --> PR
-    CLI --> Comments
-    CLI --> Builds
-    CLI --> Shared
-    Status --> PR
-    Status --> Comments
-    Status --> Builds
-    Status --> Shared
-    Builds --> PR
-    Builds --> Shared
-    PR --> Shared
-    Comments --> Shared
+    entry["entrypoint<br>src/pr.ts<br>Wires modules, dispatches commands, writes output"]:::module
+    cli["cli<br>src/cli/<br>Arguments, validation, help and PAT lookup"]:::module
+    status["status<br>src/status/<br>pr status application service"]:::module
+    builds["builds<br>src/builds/<br>PR validation builds"]:::module
+    prs["pull-requests<br>src/pull-requests/<br>Pull requests, diffs and attachments"]:::module
+    comments["comments<br>src/comments/<br>Review threads and comments"]:::module
+    shared["shared<br>src/shared/<br>Azure requester, repository context, contracts"]:::module
+    entry --> cli & status & builds & prs & comments & shared
+    cli --> builds & prs & comments & shared
+    status --> builds & prs & comments & shared
+    builds --> prs & shared
+    prs --> shared
+    comments --> shared
 ```
 
 Features depend on shared code; builds may also depend on pull requests. Status
@@ -97,7 +111,121 @@ folders as boundary zones with explicit allowed dependencies.
 `pnpm fallow:architecture` rejects violations. See
 [ADR 0002](adr/0002-organise-code-by-feature.md).
 
-## Azure requests and output
+## Runtime flow
+
+Link the launcher into a directory on PATH, as `AGENTS.md` describes, then run
+`pr.sh` from the target checkout. The launcher resolves its real path with
+`readlink -f` to find its source and dependencies without changing the caller's
+working directory. It prefers an exported `AZURE_DEVOPS_PAT`, then loads `.env`
+beside the real script. Literal values use Node's dotenv loader; `op://` references
+use `op run` for resolution. A 1Password Environment named pipe supplies literal
+dotenv values and is read once. The TypeScript entrypoint requires a resolved PAT.
+
+```mermaid
+---
+title: Running a command
+---
+sequenceDiagram
+    actor Agent as Coding agent
+    participant Launcher as pr.sh
+    participant Op as 1Password CLI
+    participant Entry as entrypoint
+    participant Cli as cli
+    participant Feature as feature service
+    participant Shared as shared
+    participant Azure as Azure DevOps
+    Agent->>Launcher: pr.sh <command> [flags]
+    opt PAT is an op:// reference
+        Launcher->>Op: op run
+        Op-->>Launcher: environment with the PAT
+    end
+    Launcher->>Entry: node src/pr.ts
+    Entry->>Cli: parse and validate arguments
+    Cli-->>Entry: options, or help and usage errors
+    Entry->>Shared: repository context from git origin
+    Entry->>Feature: create with requester and context, dispatch
+    Feature->>Shared: request
+    Shared->>Azure: HTTP request with PAT
+    alt success
+        Azure-->>Shared: JSON response
+        Shared-->>Feature: response data
+    else failure
+        Shared--xFeature: classified, redacted error
+    end
+    Feature-->>Entry: domain result or error
+    Entry-->>Agent: stdout result or stderr error, exit code
+```
+
+`src/pr.ts` parses arguments before reading credentials or Git context, so direct
+Node invocation can show help without authentication. It creates one requester,
+injects it and the repository context into the services, dispatches the command
+and selects output and exit status. PR resolution uses an explicit ID or the
+current branch where the command allows it.
+
+```mermaid
+---
+title: Reporting pull request status
+---
+sequenceDiagram
+    actor Agent as Coding agent
+    participant Entry as entrypoint
+    participant Status as status
+    participant Prs as pull-requests
+    participant Builds as builds
+    participant Comments as comments
+    participant Azure as Azure DevOps
+    Agent->>Entry: pr status [--pr id] [--json]
+    Entry->>Status: get(pr)
+    Status->>Prs: resolve the pull request
+    Prs->>Azure: GET pull request
+    Status->>Builds: build validating the head
+    Builds->>Azure: list associated builds
+    Status->>Comments: list all review threads
+    Comments->>Azure: GET threads
+    Status->>Azure: latest iteration, conflicts if any
+    Status->>Builds: policy evaluations
+    Builds->>Azure: GET policy evaluations
+    Status-->>Entry: status value
+    Entry-->>Agent: report or JSON, exit 0
+```
+
+The status module runs the requests one after another. A failed conflict, iteration
+or policy request becomes a note in the report instead of an error.
+
+```mermaid
+---
+title: Waiting for a build
+---
+sequenceDiagram
+    actor Agent as Coding agent
+    participant Entry as entrypoint
+    participant Builds as builds
+    participant Prs as pull-requests
+    participant Azure as Azure DevOps
+    Agent->>Entry: build wait (--build id | --latest)
+    Entry->>Builds: wait(pr, build, options)
+    Builds->>Prs: resolve the pull request
+    Prs->>Azure: GET pull request
+    opt --latest
+        Builds->>Azure: list associated builds
+    end
+    loop every interval until a terminal state or the timeout
+        Builds->>Azure: GET build
+        opt transient failure
+            Azure--xBuilds: retried, the third in a row aborts
+        end
+        Builds-->>Entry: progress and heartbeats
+        Entry-->>Agent: progress on stderr
+    end
+    Builds-->>Entry: final result
+    Entry-->>Agent: result on stdout, exit 0, 1 or 124
+```
+
+`--latest` selects the build once, from the PR metadata read at the start. The wait
+follows that build ID and doesn't switch builds when the pull request changes
+([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
+
+## Azure requests
 
 The requester centralises PAT Basic authentication, JSON or raw request bodies,
 JSON/text/no-content responses and optional status/header metadata. Callers can
@@ -112,6 +240,8 @@ redact credentials and sensitive values, strip terminal controls and bound detai
 This sanitisation applies to diagnostics, not all successful API data. Build
 waiting decides which transient read failures to retry; the requester does not
 automatically retry mutations.
+
+## Command output and exit codes
 
 Results and mutation confirmations go to stdout. Commands that accept `--json`
 emit their result there as JSON instead of human formatting. Help, usage errors,
@@ -196,6 +326,8 @@ set in the `mutation` script. `pnpm mutation` defaults to `origin/main`, overrid
 `MUTATION_BASE`. Full runs use `pnpm mutation:all`, report the score and run in CI
 only through `workflow_dispatch`. See [ADR 0004](adr/0004-quality-gates.md).
 
-The [ADR index](adr/README.md) records decisions behind these rules. Keep changes
+## Decisions
+
+The [ADR index](adr/README.md) records the decisions behind these rules. Keep changes
 proportionate to this tool's users and realistic failures, as described in
 [ADR 0003](adr/0003-keep-the-tool-small.md).
