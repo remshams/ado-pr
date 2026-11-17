@@ -3132,6 +3132,11 @@ describe("build queueing", () => {
 			/requeued policy evaluation context\.buildId must be a positive safe integer/,
 		],
 		["a non-object body", ["queued"], /requeued policy evaluation response/],
+		[
+			"a non-object context",
+			{ context: "queued" },
+			/requeued policy evaluation context must be an object/,
+		],
 	]) {
 		test(`says the requeue was accepted when the response has ${name}`, async (t) => {
 			const pr = pullRequest({
