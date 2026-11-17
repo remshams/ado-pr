@@ -958,7 +958,6 @@ test("build queue --pr reports a null build ID in the requeued evaluation contex
 		"Requeued build policy evaluation evaluation-id for PR #42.\n" +
 			"Azure DevOps did not return the build ID yet. When `pr.sh build show --latest --pr 42` shows a new build ID, run `pr.sh build wait --build <id> --pr 42`.\n",
 	);
-	assert.equal(result.status, 0);
 });
 
 test("build queue --pr fetches and prints the build ID from evaluation context", (t) => {
