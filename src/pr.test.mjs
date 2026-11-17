@@ -442,6 +442,7 @@ test("build list dispatches through BuildService and prints a normalized JSON en
 			status: "active",
 			draft: true,
 			currentMergeCommit: "merge-1",
+			currentHeadCommit: null,
 		},
 		history: false,
 		builds: [],
@@ -3326,11 +3327,6 @@ test("build wait --latest selects and polls the newest validating build", (t) =>
 					{ json: { value: [validationBuild()] } },
 					{ json: { value: [branch] } },
 					{ json: branch },
-					{
-						json: validationPr({
-							lastMergeSourceCommit: { commitId: "head-1" },
-						}),
-					},
 				],
 			},
 		);
@@ -3353,23 +3349,42 @@ test("build wait --latest selects and polls the newest validating build", (t) =>
 				/Association: branch-head\nValidates head: yes/,
 			);
 		}
-		assert.equal(result.calls.length, 5);
+		assert.equal(result.calls.length, 4);
 		assert.equal(result.calls[3].url, `${buildApiBase}/701?api-version=7.1`);
 	}
 });
 
-test("build wait --latest fails naming the head when no build validates it", (t) => {
-	const result = runPr(t, ["build", "wait", "--pr=42", "--latest", "--json"], {
-		cwd: createRepo(t),
-		responses: [
-			{ json: validationPr({ lastMergeSourceCommit: { commitId: "head-1" } }) },
-			{ json: { value: [validationBuild({ sourceVersion: "old-merge" })] } },
-			{ json: { value: [] } },
+test("build wait --latest keeps waiting while no build validates the head", (t) => {
+	const result = runPr(
+		t,
+		[
+			"build",
+			"wait",
+			"--pr=42",
+			"--latest",
+			"--json",
+			"--interval=10",
+			"--timeout=10",
 		],
-	});
-	assert.equal(result.status, 1);
-	assert.equal(result.stdout, "");
-	assert.match(result.stderr, /No build validates PR #42 head commit head-1/);
+		{
+			cwd: createRepo(t),
+			responses: [
+				{
+					json: validationPr({ lastMergeSourceCommit: { commitId: "head-1" } }),
+				},
+				{ json: { value: [validationBuild({ sourceVersion: "old-merge" })] } },
+				{ json: { value: [] } },
+			],
+		},
+	);
+	assert.equal(result.status, 124, result.stderr);
+	assert.match(
+		result.stderr,
+		/PR #42: no build validates head head-1 yet; waiting up to 10 minutes for one\./,
+	);
+	const output = JSON.parse(result.stdout);
+	assert.equal(output.outcome, "timeout");
+	assert.equal(output.buildId, null);
 	assert.equal(result.calls.length, 3);
 });
 
