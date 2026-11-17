@@ -1274,7 +1274,7 @@ test("build queue requires exactly one queue target before any Azure request", (
 	}
 });
 
-test("build wait polls exactly PR and build metadata for every terminal outcome", (t) => {
+test("build wait polls exactly PR and build metadata for every terminal outcome, then rereads the PR", (t) => {
 	for (const [resultName, expectedStatus] of [
 		["succeeded", 0],
 		["failed", 1],
@@ -1303,6 +1303,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
 							unsafeMetadata: "C1\u009b bidi\u202e line\u2028separator",
 						}),
 					},
+					{ json: validationPr() },
 				],
 			},
 		);
@@ -1315,6 +1316,11 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
 				body: null,
 			},
 			{ url: `${buildApiBase}/700?api-version=7.1`, method: "GET", body: null },
+			{
+				url: `${apiBase}/pullRequests/42?api-version=7.1`,
+				method: "GET",
+				body: null,
+			},
 		]);
 		assert.match(result.stderr, /PR #42, build 700: initial state completed\//);
 		assert.doesNotMatch(
@@ -1327,6 +1333,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
 			const parsed = JSON.parse(result.stdout);
 			assert.equal(parsed.outcome, resultName);
 			assert.equal(parsed.buildId, 700);
+			assert.equal(parsed.validatesHead, true);
 			assert.equal(
 				parsed.build.unsafeMetadata,
 				"C1\u009b bidi\u202e line\u2028separator",
@@ -1341,7 +1348,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome"
 					`^build 700 for PR #42 finished with outcome ${expectedOutcome}\\.`,
 				),
 			);
-			assert.equal(result.stdout.split("\n").length, 5);
+			assert.match(result.stdout, /\nValidates head: yes\n/);
 		}
 	}
 });
@@ -3284,6 +3291,11 @@ test("build wait --latest selects and polls the newest validating build", (t) =>
 					{ json: { value: [validationBuild()] } },
 					{ json: { value: [branch] } },
 					{ json: branch },
+					{
+						json: validationPr({
+							lastMergeSourceCommit: { commitId: "head-1" },
+						}),
+					},
 				],
 			},
 		);
@@ -3298,11 +3310,15 @@ test("build wait --latest selects and polls the newest validating build", (t) =>
 			assert.equal(output.association, "branch-head");
 			assert.equal(output.outcome, "succeeded");
 			assert.equal(output.pollCount, 1);
+			assert.equal(output.validatesHead, true);
 		} else {
 			assert.match(result.stdout, /build 701.*outcome succeeded/);
-			assert.match(result.stdout, /Association: branch-head/);
+			assert.match(
+				result.stdout,
+				/Association: branch-head\nValidates head: yes/,
+			);
 		}
-		assert.equal(result.calls.length, 4);
+		assert.equal(result.calls.length, 5);
 		assert.equal(result.calls[3].url, `${buildApiBase}/701?api-version=7.1`);
 	}
 });
