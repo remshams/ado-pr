@@ -2173,7 +2173,13 @@ export function createBuildService({
 		): Promise<boolean | null> {
 			try {
 				const refreshed = validatePullRequest(
-					await pullRequests.get(pr.id, prReadOptions),
+					await pullRequests.get(pr.id, {
+						...prReadOptions,
+						timeoutMs: Math.min(
+							READ_TIMEOUT_MS,
+							Math.max(1, Math.ceil(deadline - now())),
+						),
+					}),
 					"refreshed pull request",
 				);
 				return validatesHead(observedBuild, refreshed);
@@ -2417,7 +2423,7 @@ export function createBuildService({
 		];
 		if (result.validatesHead === false) {
 			lines.push(
-				`The pull request changed after this build was queued; wait for the build of its current head with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
+				`This build doesn't validate the current head of the pull request; wait for the build that does with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
 			);
 		}
 		if (result.outcome !== "succeeded" && buildId !== undefined) {
