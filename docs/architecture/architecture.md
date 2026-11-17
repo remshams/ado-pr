@@ -207,11 +207,15 @@ sequenceDiagram
     Entry->>Builds: wait(pr, build, options)
     Builds->>Prs: resolve the pull request
     Prs->>Azure: GET pull request
-    opt --latest, selected once
-        Builds->>Azure: list PR merge and branch builds
-    end
-    loop every interval until a terminal state or the timeout
-        Builds->>Azure: GET build
+    loop every interval until a terminal state, no-build or the timeout
+        opt --latest
+            Builds->>Prs: read the pull request again
+            Prs->>Azure: GET pull request
+            opt source head moved, or no build selected yet
+                Builds->>Azure: list PR merge and branch builds
+            end
+        end
+        Builds->>Azure: GET the selected build
         opt transient failure
             Azure--xBuilds: retried, the third in a row aborts
         end
@@ -220,13 +224,18 @@ sequenceDiagram
             Entry-->>Agent: progress on stderr
         end
     end
-    opt build finished
+    opt --build id and the build finished
         Builds->>Prs: read the pull request again
         Prs->>Azure: GET pull request
     end
     Builds-->>Entry: final result with validatesHead
     Entry-->>Agent: result on stdout, exit 0, 1 or 124
 ```
+
+With `--latest` the wait follows the PR head
+([ADR 0009](adr/0009-build-wait-follows-the-pr-head.md)). It skips the PR read on
+the first poll, which uses the PR it just resolved. While no build validates the
+head, it polls without a build GET and ends with `no-build` after 10 minutes.
 
 ## Azure requests
 
@@ -303,8 +312,8 @@ uploaded link for reuse. On `comment reply --status`, the status is set after th
 is posted; if only that update fails, the error says the reply was posted and still
 names the attachment. Batch operations have no attachments.
 
-`build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
-and 124 for its deadline. When the build finishes, it reads the pull request again
+`build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes, including
+`no-build`, or errors, and 124 for its deadline. When the build finishes, it reads the pull request again
 and reports in `validatesHead` whether the build still validates the head, by the
 commit rule of ADR 0006 and regardless of the PR status. It is `null` on timeout and
 when the read fails, runs out of time or finds no commit to compare. The field doesn't change the
