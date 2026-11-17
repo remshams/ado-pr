@@ -1881,32 +1881,32 @@ export function createBuildService({
 				REQUEUE_SCOPE_HINT,
 			);
 		}
-		let requeued: { buildId: number | undefined };
+		let buildId: number | undefined;
 		try {
-			requeued = requeuedBuildId(response);
+			buildId = requeuedBuildId(response);
 		} catch (error) {
 			throw new Error(
 				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} was accepted, but the build ID in the Azure DevOps response is invalid. Find the new build with \`pr.sh build list --pr ${pr.id} --history\`.\n${sanitizeError(error)}`,
 			);
 		}
-		if (requeued.buildId === undefined) return { evaluationId: candidate.id };
+		if (buildId === undefined) return { evaluationId: candidate.id };
 		try {
 			return {
 				build: assertFetchedBuild(
 					await azure.request<unknown>(
-						`${buildApiUrl(ctx)}/${requeued.buildId}?api-version=${API_VERSION}`,
+						`${buildApiUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
 						{
 							timeoutMs: READ_TIMEOUT_MS,
 							maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
 						},
 					),
-					requeued.buildId,
+					buildId,
 					"requeued build response",
 				),
 			};
 		} catch (error) {
 			throw new Error(
-				`Requeued build policy evaluation ${candidate.id} on PR #${pr.id}; reading build ${requeued.buildId} failed. Check it with \`pr.sh build show --build ${requeued.buildId} --pr ${pr.id}\`.\n${sanitizeError(error)}`,
+				`Requeued build policy evaluation ${candidate.id} on PR #${pr.id}; reading build ${buildId} failed. Check it with \`pr.sh build show --build ${buildId} --pr ${pr.id}\`.\n${sanitizeError(error)}`,
 			);
 		}
 	}
@@ -1923,17 +1923,15 @@ export function createBuildService({
 	}
 
 	/** Azure sends no build ID, or null, until the requeued build exists. */
-	function requeuedBuildId(response: unknown): { buildId: number | undefined } {
+	function requeuedBuildId(response: unknown): number | undefined {
 		const body = requireObject(response, "requeued policy evaluation response");
 		const context = isObject(body.context) ? body.context : undefined;
 		if (context?.buildId === undefined || context.buildId === null)
-			return { buildId: undefined };
-		return {
-			buildId: requirePositiveInteger(
-				context.buildId,
-				"requeued policy evaluation context.buildId",
-			),
-		};
+			return undefined;
+		return requirePositiveInteger(
+			context.buildId,
+			"requeued policy evaluation context.buildId",
+		);
 	}
 
 	async function listBuildPolicies(): Promise<AzureObject[]> {
