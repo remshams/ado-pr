@@ -16,7 +16,7 @@ Assign at least one relevant GitHub label to every issue. Check the repository's
 
 ## Affected modules
 
-Include an "Affected modules" section. Use the module names in the [architecture document](architecture.md) and list each affected module when you can identify it. Briefly explain its connection to the issue. Include affected command rules where relevant.
+Include an "Affected modules" section. Use the module names in the [architecture document](architecture/architecture.md) and list each affected module when you can identify it. Briefly explain its connection to the issue. Include affected command rules where relevant.
 
 For example, a build wait output issue might list `src/pr.ts` for stdout/stderr routing and `src/builds/` for progress events and formatting. Check the code before treating either as a confirmed cause.
 

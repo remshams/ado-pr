@@ -18,7 +18,7 @@ Read the [pull request visuals guide](pull-request-visuals.md) for an example of
 
 ## Architecture impact
 
-Use the module names in the [architecture document](architecture.md). Include a table with one row for each affected module. Describe changes to its responsibilities, dependencies, contracts, or communication with other components. Include affected command rules, such as PR/build association or comment anchoring, where relevant.
+Use the module names in the [architecture document](architecture/architecture.md). Include a table with one row for each affected module. Describe changes to its responsibilities, dependencies, contracts, or communication with other components. Include affected command rules, such as PR/build association or comment anchoring, where relevant.
 
 The following rows illustrate a hypothetical build output change.
 
