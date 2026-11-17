@@ -1,8 +1,7 @@
-import {
-	type BuildService,
-	type HeadBuild,
-	type PolicyEvaluation,
-	stripTerminalControls,
+import type {
+	BuildService,
+	HeadBuild,
+	PolicyEvaluation,
 } from "../builds/builds.ts";
 import {
 	countUnresolvedThreads,
@@ -21,6 +20,7 @@ import {
 	type AzureRequester,
 } from "../shared/azure.ts";
 import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import { stripTerminalControls } from "../shared/terminal.ts";
 import {
 	latestCopilotActivity,
 	type CopilotActivity,
