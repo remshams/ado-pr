@@ -69,4 +69,11 @@ describe("stripTerminalControls", () => {
 		stripTerminalControls("\u001b]\u001bP".repeat(50_000));
 		assert.ok(performance.now() - started < 500);
 	});
+
+	test("removes a string payload of ten million characters without a stack overflow", () => {
+		assert.equal(
+			stripTerminalControls(`a\u001b]${"x".repeat(10_000_000)}\u0007b`),
+			"ab",
+		);
+	});
 });

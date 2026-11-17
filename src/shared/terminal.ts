@@ -6,7 +6,7 @@
  * - Other ESC sequences: intermediate bytes plus one final byte, such as `ESC c` or `ESC ( B`.
  */
 const ESCAPE_SEQUENCE =
-	/\x1B(?:[\]P^_](?:[^\x07\x1B\n]|\x1B(?!\\))*(?:\x07|\x1B\\)?|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])/g;
+	/\x1B(?:[\]P^_](?:[^\x07\x1B\n]+|\x1B(?!\\))*(?:\x07|\x1B\\)?|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])/g;
 const CONTROL_CHARACTERS =
 	/[\x00-\x08\x0B-\x1F\x7F-\x9F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
