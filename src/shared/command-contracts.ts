@@ -35,7 +35,7 @@ export const FLAG_DEFINITIONS = {
 		kind: "boolean",
 		usage: "--latest",
 		description:
-			"Select the newest build validating the PR head by queue time.",
+			"Select the newest build validating the PR head by queue time; build wait follows the head.",
 	},
 	"since-iteration": {
 		kind: "positiveInteger",
