@@ -3217,6 +3217,40 @@ describe("build queueing", () => {
 		assert.equal(calls.filter(({ method }) => method === "PATCH").length, 1);
 	});
 
+	test("keeps the uncertain-outcome guidance for an empty or non-JSON 2xx requeue body", async (t) => {
+		const pr = pullRequest({
+			repository: {
+				id: "Repo-ID",
+				name: "widgets",
+				project: { id: projectId },
+			},
+		});
+		for (const body of ["", "<html>proxy</html>"]) {
+			const { service } = setup(
+				t,
+				[
+					{
+						json: {
+							value: [
+								{
+									evaluationId: "evaluation-id",
+									configuration: { type: { id: buildPolicyType } },
+								},
+							],
+						},
+					},
+					{ status: 200, body },
+				],
+				{ resolveValues: [pr] },
+			);
+			await assert.rejects(service.queuePr(42), (error) => {
+				assert.match(error.message, /failed after dispatch/);
+				assert.doesNotMatch(error.message, /was accepted/);
+				return true;
+			});
+		}
+	});
+
 	test("lists several build policy evaluations and asks for a manual choice", async (t) => {
 		const pr = pullRequest({
 			repository: {
