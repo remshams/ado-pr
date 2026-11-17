@@ -1377,16 +1377,34 @@ describe("deterministic build wait", () => {
 		const result = await service.wait(42, 700);
 		assert.equal(result.validatesHead, false);
 		assert.equal(result.pullRequest.status, "completed");
+		assert.deepEqual(Object.keys(result).slice(0, 3), [
+			"association",
+			"pullRequest",
+			"buildId",
+		]);
+		assert.equal(Object.keys(result).at(-1), "validatesHead");
 		assert.equal(result.pullRequest.currentMergeCommit, "new-merge");
 	});
 
 	test("reports an unknown head when the final read has no commit to compare", async () => {
-		const { service } = createWaitHarness([build({ result: "succeeded" })], {
-			refreshedPr: pullRequest({ lastMergeCommit: undefined }),
-		});
-		const result = await service.wait(42, 700);
-		assert.equal(result.validatesHead, null);
-		assert.doesNotMatch(service.formatWaitResult(result), /--latest/);
+		for (const [observed, refreshedPr] of [
+			[
+				build({ result: "succeeded" }),
+				pullRequest({ lastMergeCommit: undefined }),
+			],
+			[
+				branchBuild({ result: "succeeded" }),
+				pullRequest({ lastMergeSourceCommit: undefined }),
+			],
+		]) {
+			const { service } = createWaitHarness([observed], {
+				resolvedPr: headPr(),
+				refreshedPr,
+			});
+			const result = await service.wait(42, 700);
+			assert.equal(result.validatesHead, null);
+			assert.doesNotMatch(service.formatWaitResult(result), /--latest/);
+		}
 	});
 
 	test("skips the final PR read when the deadline passed while reporting progress", async () => {
@@ -1401,6 +1419,7 @@ describe("deterministic build wait", () => {
 		});
 		assert.equal(result.outcome, "succeeded");
 		assert.equal(result.validatesHead, null);
+		assert.equal(result.pullRequest.id, 42);
 		assert.deepEqual(pullRequestCalls, [
 			{ method: "resolve", requestedPrId: 42 },
 		]);
@@ -1445,6 +1464,13 @@ describe("deterministic build wait", () => {
 			const result = await service.wait(42, 700);
 			assert.equal(result.outcome, "failed");
 			assert.equal(result.validatesHead, null);
+			assert.deepEqual(result.pullRequest, {
+				id: 42,
+				title: "Validate widgets",
+				status: "active",
+				draft: false,
+				currentMergeCommit: "ABCDEF123",
+			});
 			assert.match(service.formatWaitResult(result), /Validates head: unknown/);
 		}
 	});
