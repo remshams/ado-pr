@@ -6,6 +6,7 @@ import {
 } from "../shared/azure.ts";
 import type { AzureRequester } from "../shared/azure.ts";
 import type { AzureDevOpsRepoContext } from "../shared/lib.ts";
+import { stripTerminalControls } from "../shared/terminal.ts";
 import type {
 	PullRequest,
 	PullRequestReadOptions,
@@ -1038,21 +1039,6 @@ function display(value: unknown): string {
 	if (typeof value === "number" || typeof value === "boolean")
 		return String(value);
 	return "unknown";
-}
-
-/** Removes ANSI/terminal control sequences while preserving ordinary log tabs and newlines. */
-export function stripTerminalControls(value: string): string {
-	return value
-		.replace(/\r\n/g, "\n")
-		.replace(/\r/g, "")
-		.replace(/\x1B\][^\x07]*?(?:\x07|\x1B\\)/g, "")
-		.replace(/\x1B[P^_][\s\S]*?\x1B\\/g, "")
-		.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/\x1B[@-_]/g, "")
-		.replace(
-			/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g,
-			"",
-		);
 }
 
 function finalLines(value: string, maximum: number): string {

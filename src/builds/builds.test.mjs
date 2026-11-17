@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createMockFetch } from "../../tests/test-helpers.mjs";
 import { AzureRequestError, createAzureRequester } from "../shared/azure.ts";
-import { createBuildService, stripTerminalControls } from "./builds.ts";
+import { createBuildService } from "./builds.ts";
 
 const ctx = {
 	organization: "test org",
@@ -1002,19 +1002,6 @@ describe("build diagnosis", () => {
 		assert.equal((human.match(/Task\/Orphan/g) ?? []).length, 1);
 		assert.match(human, /orphan parent missing/);
 		assert.match(human, /cycle/);
-		assert.equal(
-			stripTerminalControls("a\u001b[2Jb\u0000c\rrewrite\r\nnext\t\nd\u202E"),
-			"abcrewrite\nnext\t\nd",
-		);
-	});
-
-	test("preserves text between ST-terminated and BEL-terminated OSC sequences", () => {
-		assert.equal(
-			stripTerminalControls(
-				"before\u001b]0;first\u001b\\between\u001b]0;second\u0007after",
-			),
-			"beforebetweenafter",
-		);
 	});
 
 	test("formats a deep timeline iteratively with bounded indentation", async (t) => {
