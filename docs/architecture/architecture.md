@@ -23,8 +23,8 @@ kept small ([ADR 0003](adr/0003-keep-the-tool-small.md)).
 - **Build pipeline**: an Azure Pipelines definition. A build policy names the
   build pipeline that validates pull requests into a branch.
 - **PR validation build**: a run of a build pipeline associated with a pull request.
-  Its association is `pr-merge` for a run on the merge commit or `branch-head` for
-  a run on the source branch ([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
+  Its association is `pr-merge` for a run on the PR merge ref `refs/pull/N/merge`
+  or `branch-head` for a run on the source branch ([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
 - **Validates the head**: a `pr-merge` build validates the head when it ran on the
   current merge commit, a `branch-head` build when it ran on the PR head.
 
@@ -42,7 +42,7 @@ flowchart TD
     op["1Password CLI<br>Resolves op:// references"]:::external
     env[(".env<br>Dotenv file beside pr.sh")]:::store
     agent -->|runs pr.sh commands, reads text or JSON| adopr
-    adopr -->|reads PAT| env
+    adopr -->|launcher reads the PAT unless exported| env
     adopr -->|resolves op:// PAT| op
     adopr -->|reads origin URL| git
     adopr -->|HTTP JSON requests| azure
@@ -130,13 +130,18 @@ sequenceDiagram
     participant Shared as shared
     participant Azure as Azure DevOps
     Agent->>Launcher: pr.sh <command> [flags]
-    opt PAT is an op:// reference
-        Launcher->>Op: op run
-        Op-->>Launcher: environment with the PAT
+    alt PAT is an op:// reference
+        Launcher->>Op: exec op run
+        Op->>Entry: node src/pr.ts with the resolved PAT
+    else literal PAT
+        Launcher->>Entry: exec node src/pr.ts
     end
-    Launcher->>Entry: node src/pr.ts
-    Entry->>Cli: parse and validate arguments
-    Cli-->>Entry: options, or help and usage errors
+    Entry->>Cli: parse arguments, read the PAT
+    alt help, usage error or no PAT
+        Cli-->>Agent: help or error on stderr, exit 0 or 1
+    else valid
+        Cli-->>Entry: options and PAT
+    end
     Entry->>Shared: repository context from git origin
     Entry->>Feature: create with requester and context, dispatch
     Feature->>Shared: request
@@ -173,7 +178,7 @@ sequenceDiagram
     Status->>Prs: resolve the pull request
     Prs->>Azure: GET pull request
     Status->>Builds: build validating the head
-    Builds->>Azure: list associated builds
+    Builds->>Azure: list PR merge and branch builds
     Status->>Comments: list all review threads
     Comments->>Azure: GET threads
     Status->>Azure: latest iteration, conflicts if any
@@ -198,7 +203,7 @@ sequenceDiagram
     Builds->>Prs: resolve the pull request
     Prs->>Azure: GET pull request
     opt --latest, selected once
-        Builds->>Azure: list associated builds
+        Builds->>Azure: list PR merge and branch builds
     end
     loop every interval until a terminal state or the timeout
         Builds->>Azure: GET build
@@ -228,7 +233,7 @@ This sanitisation applies to diagnostics, not all successful API data. Build
 waiting decides which transient read failures to retry; the requester does not
 automatically retry mutations.
 
-## Command output and exit codes
+## Commands, output and exit codes
 
 Results and mutation confirmations go to stdout. Commands that accept `--json`
 emit their result there as JSON instead of human formatting. Help, usage errors,
@@ -252,8 +257,8 @@ list, one request after another. The result is a domain value, not the raw Azure
 objects: id, title, state, draft, URL, head and merge commit, iteration, build,
 Copilot activity, unresolved thread count, merge status, conflicts, blocking
 policies and reviewers with vote and required flag. The builds module exposes the
-policy evaluation lookup it already uses for `build queue --pr`. It marks an
-evaluation satisfied when it is approved or not applicable, and status keeps the
+policy evaluation lookup it already uses for `build queue --pr` and marks an
+evaluation satisfied when it is approved or not applicable. Status keeps the
 blocking ones that are not satisfied and prints them as the `Blocked by:` line. A
 build that does not validate the head is marked stale; with no build it says so.
 Both exit 0. If the conflict list, the iteration or the policy evaluations cannot be
