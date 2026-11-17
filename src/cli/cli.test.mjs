@@ -350,6 +350,14 @@ test("legacy flat action aliases remain rejected even when combined with help", 
 
 test("build wait maps completed and timeout outcomes to stable exit codes", () => {
 	assert.equal(buildWaitExitCode({ timedOut: false, outcome: "succeeded" }), 0);
+	assert.equal(
+		buildWaitExitCode({
+			timedOut: false,
+			outcome: "succeeded",
+			validatesHead: false,
+		}),
+		0,
+	);
 	for (const outcome of [
 		"partiallySucceeded",
 		"failed",
