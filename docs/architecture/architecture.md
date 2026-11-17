@@ -220,7 +220,11 @@ sequenceDiagram
             Entry-->>Agent: progress on stderr
         end
     end
-    Builds-->>Entry: final result
+    opt build finished
+        Builds->>Prs: read the pull request again
+        Prs->>Azure: GET pull request
+    end
+    Builds-->>Entry: final result with validatesHead
     Entry-->>Agent: result on stdout, exit 0, 1 or 124
 ```
 
@@ -300,7 +304,10 @@ is posted; if only that update fails, the error says the reply was posted and st
 names the attachment. Batch operations have no attachments.
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes or errors,
-and 124 for its deadline. SIGINT and SIGTERM cancel local work and exit 130 and
+and 124 for its deadline. When the build finishes, it reads the pull request again
+and reports in `validatesHead` whether the build still validates the head, by the
+commit rule of ADR 0006 and regardless of the PR status. The field doesn't change the
+exit code. SIGINT and SIGTERM cancel local work and exit 130 and
 143 respectively, without a final result or cancellation of the remote build.
 A repeated signal forces exit.
 
