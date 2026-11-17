@@ -29,10 +29,11 @@ review.
 
 | Record | Title | Status |
 | --- | --- | --- |
-| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Partially superseded by [0008](0008-follow-the-shared-architecture-docs-standard.md) |
 | [0002](0002-organise-code-by-feature.md) | Organise code by feature with explicit dependency rules | Accepted |
 | [0003](0003-keep-the-tool-small.md) | Keep the tool small and handle realistic failures | Accepted |
 | [0004](0004-quality-gates.md) | Check quality with Biome and Fallow | Accepted |
 | [0005](0005-run-typescript-directly.md) | Run TypeScript directly with Node type stripping | Accepted |
 | [0006](0006-match-builds-to-the-pr-head.md) | Match builds to the PR head | Proposed |
 | [0007](0007-report-pr-status-from-a-status-module.md) | Report PR status from a status module | Proposed |
+| [0008](0008-follow-the-shared-architecture-docs-standard.md) | Follow the shared architecture-docs standard | Proposed |
