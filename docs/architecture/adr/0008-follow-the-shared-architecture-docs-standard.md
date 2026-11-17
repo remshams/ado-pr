@@ -10,9 +10,10 @@ Proposed
 
 ## Context
 
-ado-pr kept its architecture document in `docs/architecture.md`, a hand-written
-HTML copy in `docs/architecture.html` and its ADRs in `docs/adr/`, as
-[ADR 0001](0001-record-architecture-decisions.md) decided. The two formats had to
+ado-pr kept its architecture document in `docs/architecture.md` with a
+hand-written HTML copy in `docs/architecture.html`, as `AGENTS.md` required. Its
+ADRs lived in `docs/adr/`, as [ADR 0001](0001-record-architecture-decisions.md)
+decided. The two formats had to
 be kept in sync by hand, and the layout differed from the maintainer's other
 projects. The `architecture-docs` skill now defines one layout for all of them:
 a fixed section outline, Mermaid views with a shared vocabulary, a checker, and an
