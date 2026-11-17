@@ -32,10 +32,8 @@ import {
 } from "./shared/operation-types.ts";
 import { createPullRequestCompletionService } from "./pull-requests/completion.ts";
 import { createPullRequestDiffService } from "./pull-requests/diff.ts";
-import {
-	attachmentMarkdownLink,
-	createPullRequestService,
-} from "./pull-requests/pull-requests.ts";
+import { attachmentMarkdownLink } from "./pull-requests/attachments.ts";
+import { createPullRequestService } from "./pull-requests/pull-requests.ts";
 import { latestReviewActivity } from "./comments/review-activity.ts";
 import {
 	createThreadService,
