@@ -233,9 +233,9 @@ sequenceDiagram
 ```
 
 With `--latest` the wait follows the PR head
-([ADR 0009](adr/0009-build-wait-follows-the-pr-head.md)). It skips the PR read on
-the first poll, which uses the PR it just resolved. While no build validates the
-head, it polls without a build GET and ends with `no-build` after 10 minutes.
+([ADR 0009](adr/0009-build-wait-follows-the-pr-head.md)). While no build validates
+the head, it polls without a build GET and ends with `no-build` after 10 minutes. It
+stops with an error if the pull request is no longer active by then.
 
 ## Azure requests
 
@@ -313,13 +313,14 @@ is posted; if only that update fails, the error says the reply was posted and st
 names the attachment. Batch operations have no attachments.
 
 `build wait` exits 0 only for `succeeded`, 1 for other terminal outcomes, including
-`no-build`, or errors, and 124 for its deadline. When the build finishes, it reads the pull request again
-and reports in `validatesHead` whether the build still validates the head, by the
-commit rule of ADR 0006 and regardless of the PR status. It is `null` on timeout and
-when the read fails, runs out of time or finds no commit to compare. The field doesn't change the
-exit code. SIGINT and SIGTERM cancel local work and exit 130 and
-143 respectively, without a final result or cancellation of the remote build.
-A repeated signal forces exit.
+`no-build`, or errors, and 124 for its deadline. When the build finishes, it checks
+the pull request head again, rereading the pull request for `--build`, and reports
+in `validatesHead` whether the build still validates the head, by the commit rule of
+ADR 0006 and regardless of the PR status. It is `null` on timeout and when the read
+fails, runs out of time or finds no commit to compare. The field doesn't change the
+exit code. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively,
+without a final result or cancellation of the remote build. A repeated signal forces
+exit.
 
 ## Tests and quality gates
 
