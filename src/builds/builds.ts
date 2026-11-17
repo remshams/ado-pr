@@ -231,7 +231,7 @@ export interface BuildWaitEnvelope {
 	elapsedSeconds: number;
 	timedOut: boolean;
 	outcome: BuildWaitOutcome;
-	/** Whether the build validates the PR head read when it finished; null on timeout or if that read failed. */
+	/** Whether the build validates the PR head read when it finished; null if unknown, including on timeout. */
 	validatesHead: boolean | null;
 }
 
@@ -2224,8 +2224,10 @@ export function createBuildService({
 				previousStateKey = stateKey;
 			}
 			if (observedStatus !== "completed") return undefined;
+			const { pullRequest, validatesHead } = await refreshedHead(observedBuild);
 			return {
 				association: buildAssociation(observedBuild),
+				pullRequest,
 				buildId,
 				build: observedBuild,
 				pollCount,
@@ -2233,7 +2235,7 @@ export function createBuildService({
 				elapsedSeconds: elapsedSeconds(completedAt),
 				timedOut: false,
 				outcome: waitResultOutcome(observedBuild),
-				...(await refreshedHead(observedBuild)),
+				validatesHead,
 			};
 		}
 
