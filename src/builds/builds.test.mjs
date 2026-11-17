@@ -4319,6 +4319,17 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.pollCount, 2);
 	});
 
+	test("ends with no-build on time after a transient failure", async () => {
+		const { wait } = followHarness(
+			[...noBuilds(), transientError("http", 503), ...noBuilds()],
+			[headPr()],
+		);
+		const result = await wait({ intervalSeconds: 3600, timeoutSeconds: 7200 });
+		assert.equal(result.outcome, "no-build");
+		assert.equal(result.transientFailureCount, 1);
+		assert.equal(result.elapsedSeconds, 600);
+	});
+
 	test("follows the head through two moves", async () => {
 		const third = pullRequest({
 			...headPr(),
