@@ -1,10 +1,9 @@
 /**
  * Removes terminal control sequences, control characters and bidi marks from text before it
- * reaches a terminal. Tabs and newlines stay; `\r\n` becomes `\n` and a lone `\r` is removed.
+ * reaches a terminal. Tabs and newlines stay and every `\r` is removed, so `\r\n` becomes `\n`.
  */
 export function stripTerminalControls(value: string): string {
 	return value
-		.replace(/\r\n/g, "\n")
 		.replace(/\r/g, "")
 		.replace(/\x1B\][^\x07]*?(?:\x07|\x1B\\)/g, "")
 		.replace(/\x1B[P^_][\s\S]*?\x1B\\/g, "")
