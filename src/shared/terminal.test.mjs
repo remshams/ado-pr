@@ -35,4 +35,20 @@ describe("stripTerminalControls", () => {
 	test("removes Arabic letter mark, left-to-right mark and right-to-left mark", () => {
 		assert.equal(stripTerminalControls("a\u061Cb\u200Ec\u200Fd"), "abcd");
 	});
+
+	test("removes an unterminated OSC or DCS string up to the next ESC", () => {
+		assert.equal(stripTerminalControls("a\u001b]0;title"), "a");
+		assert.equal(stripTerminalControls("a\u001b]0;t\u001b[31mb"), "ab");
+		assert.equal(stripTerminalControls("a\u001bPdcs\u001b[31mb"), "ab");
+	});
+
+	test("removes ESC together with the printable byte after it", () => {
+		assert.equal(stripTerminalControls("a\u001bcb\u001b7c\u001b=d"), "abcd");
+	});
+
+	test("stays fast on many unterminated introducers", () => {
+		const started = performance.now();
+		stripTerminalControls("\u001b]\u001bP".repeat(50_000));
+		assert.ok(performance.now() - started < 500);
+	});
 });
