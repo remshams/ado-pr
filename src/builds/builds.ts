@@ -1187,6 +1187,13 @@ function waitResultOutcome(
 	return WAIT_OUTCOMES.get(normalized(build.result)) ?? "unknown";
 }
 
+/** The Retry-After delay of an HTTP error, if Azure sent one. */
+function retryAfterOf(error: unknown): number | undefined {
+	return isAzureRequestError(error) && error.kind === "http"
+		? error.retryAfterMs
+		: undefined;
+}
+
 function yesNoUnknown(value: boolean | null): string {
 	if (value === null) return "unknown";
 	return value ? "yes" : "no";
@@ -2163,6 +2170,18 @@ export function createBuildService({
 		});
 		const emit = createWaitProgressEmitter(onProgress, signal);
 
+		/** Polls at `at`, but no later than the deadline or, while no build is selected, the end of the wait for one. */
+		const scheduleNextPoll = (at: number): void => {
+			nextPollAt = Math.min(
+				deadline,
+				buildId === null ? waitingForBuildSince + WAIT_FOR_BUILD_MS : at,
+				at,
+			);
+		};
+
+		const waitForBuildEnded = (at: number): boolean =>
+			buildId === null && at - waitingForBuildSince >= WAIT_FOR_BUILD_MS;
+
 		const waitLabel = (): string =>
 			buildId === null
 				? `Build wait for PR #${pr.id}`
@@ -2183,11 +2202,10 @@ export function createBuildService({
 			if (completedAt >= deadline)
 				return unfinishedEnvelope("timeout", completedAt);
 			if (!transient) throw error;
+			if (waitForBuildEnded(completedAt))
+				return unfinishedEnvelope("no-build", completedAt);
 
-			const retryAfterMs =
-				isAzureRequestError(error) && error.kind === "http"
-					? error.retryAfterMs
-					: undefined;
+			const retryAfterMs = retryAfterOf(error);
 			const errorText = sanitizeWaitError(error);
 			await emit({
 				type: "transient-warning",
@@ -2202,10 +2220,7 @@ export function createBuildService({
 					`${waitLabel()} stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
 				);
 			}
-			nextPollAt = Math.min(
-				deadline,
-				completedAt + Math.max(intervalMs, retryAfterMs ?? 0),
-			);
+			scheduleNextPoll(completedAt + Math.max(intervalMs, retryAfterMs ?? 0));
 			return undefined;
 		}
 
@@ -2339,18 +2354,14 @@ export function createBuildService({
 			completedAt: number,
 		): Promise<BuildWaitEnvelope | undefined> {
 			consecutiveTransientFailures = 0;
-			if (completedAt - waitingForBuildSince >= WAIT_FOR_BUILD_MS)
+			if (waitForBuildEnded(completedAt))
 				return unfinishedEnvelope("no-build", completedAt);
 			const head = pr.headCommit ?? "";
 			if (announcedWaitForHead !== head) {
 				announcedWaitForHead = head;
 				await emit({ type: "waiting-for-build", ...progressBase(completedAt) });
 			}
-			nextPollAt = Math.min(
-				deadline,
-				waitingForBuildSince + WAIT_FOR_BUILD_MS,
-				completedAt + intervalMs,
-			);
+			scheduleNextPoll(completedAt + intervalMs);
 			return undefined;
 		}
 
