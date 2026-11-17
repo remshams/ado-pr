@@ -1384,6 +1384,7 @@ describe("deterministic build wait", () => {
 		]);
 		assert.equal(Object.keys(result).at(-1), "validatesHead");
 		assert.equal(result.pullRequest.currentMergeCommit, "new-merge");
+		assert.doesNotMatch(service.formatWaitResult(result), /--latest/);
 	});
 
 	test("reports an unknown head when the final read has no commit to compare", async () => {
