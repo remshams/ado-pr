@@ -1349,8 +1349,43 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 				),
 			);
 			assert.match(result.stdout, /\nValidates head: yes\n/);
+			assert.equal(result.stdout.split("\n").length, 6);
 		}
 	}
+});
+
+test("build wait reports a finished build that no longer validates the head", (t) => {
+	const result = runPr(t, ["build", "wait", "--pr", "42", "--build", "700"], {
+		cwd: createRepo(t),
+		responses: [
+			{ json: validationPr() },
+			{ json: validationBuild({ result: "succeeded" }) },
+			{ json: validationPr({ lastMergeCommit: { commitId: "merge-2" } }) },
+		],
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		result.stdout,
+		"build 700 for PR #42 finished with outcome succeeded.\n" +
+			`${result.stdout.split("\n")[1]}\n` +
+			"Association: pr-merge\n" +
+			"Validates head: no\n" +
+			"This build doesn't validate the current head of the pull request; wait for the build that does with `pr.sh build wait --latest --pr 42`.\n",
+	);
+	const json = runPr(
+		t,
+		["build", "wait", "--pr", "42", "--build", "700", "--json"],
+		{
+			cwd: createRepo(t),
+			responses: [
+				{ json: validationPr() },
+				{ json: validationBuild({ result: "succeeded" }) },
+				{ json: validationPr({ lastMergeCommit: { commitId: "merge-2" } }) },
+			],
+		},
+	);
+	assert.equal(json.status, 0, json.stderr);
+	assert.equal(JSON.parse(json.stdout).validatesHead, false);
 });
 
 test("build wait reports operational HTTP errors without a result document", (t) => {
