@@ -136,7 +136,8 @@ Build wait:
   With --latest the wait follows the PR head. Each poll reads the PR again; when its source commit
   changes, the wait switches to the build that validates the new head. While no build validates
   the head it keeps polling, and after 10 minutes without one, counted from the last head change,
-  it ends with outcome no-build. A change of the merge commit alone keeps the selected build.
+  it ends with outcome no-build. It stops with an error if the pull request is no longer active
+  while no build is selected. A change of the merge commit alone keeps the selected build.
   --build <id> always waits for that build.
   Five-minute heartbeats and progress go to stderr. Completed and timed-out waits emit one final
   human or pretty JSON result to stdout; operational failures and signals emit none. JSON includes
