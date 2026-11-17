@@ -4284,7 +4284,7 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.elapsedSeconds, 900);
 		const waiting = events.filter(({ type }) => type === "waiting-for-build");
 		assert.equal(waiting.length, 1);
-		assert.equal(waiting[0].previousBuildId, 700);
+		assert.equal(waiting[0].pullRequest.currentHeadCommit, "HEAD-2");
 	});
 
 	test("keeps the selected build when only the merge commit changes", async () => {
