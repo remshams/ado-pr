@@ -4157,7 +4157,11 @@ describe("build wait --latest follows the PR head", () => {
 		let reads = 0;
 		const harness = createWaitHarness(responses, {
 			resolvedPr: headPr(),
-			refreshedPr: () => refreshed[Math.min(reads++, refreshed.length - 1)],
+			refreshedPr: () => {
+				const next = refreshed[Math.min(reads++, refreshed.length - 1)];
+				if (next instanceof Error) throw next;
+				return next;
+			},
 			...options,
 		});
 		const events = [];
@@ -4231,7 +4235,7 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.buildId, null);
 		assert.match(
 			service.formatWaitResult(result),
-			/^build wait for PR #42 timed out\./,
+			/^build wait for PR #42 timed out before a build validated head HEAD-1;/,
 		);
 	});
 
@@ -4305,6 +4309,69 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.buildId, 700);
 		assert.equal(result.outcome, "succeeded");
 		assert.equal(result.validatesHead, false);
+	});
+
+	test("ends with no-build after 10 minutes even with a longer interval", async () => {
+		const { wait } = followHarness([...noBuilds(), ...noBuilds()], [headPr()]);
+		const result = await wait({ intervalSeconds: 3600, timeoutSeconds: 7200 });
+		assert.equal(result.outcome, "no-build");
+		assert.equal(result.elapsedSeconds, 600);
+		assert.equal(result.pollCount, 2);
+	});
+
+	test("follows the head through two moves", async () => {
+		const third = pullRequest({
+			...headPr(),
+			lastMergeSourceCommit: { commitId: "HEAD-3" },
+			lastMergeCommit: { commitId: "third-merge" },
+		});
+		const last = build({ id: 702, sourceVersion: "third-merge" });
+		const { events, wait } = followHarness(
+			[
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				...noBuilds(),
+				...listed({ ...last, status: "inProgress" }),
+				{ ...last, result: "succeeded" },
+			],
+			[newHead(), third],
+		);
+		const result = await wait();
+		assert.equal(result.buildId, 702);
+		assert.equal(result.outcome, "succeeded");
+		assert.deepEqual(
+			events
+				.filter(({ type }) => type === "build-selected")
+				.map(({ buildId, previousBuildId }) => [buildId, previousBuildId]),
+			[
+				[700, null],
+				[702, 700],
+			],
+		);
+	});
+
+	test("retries a transient failure while rereading the PR", async () => {
+		const { wait } = followHarness(
+			[
+				...listed(build({ status: "inProgress" })),
+				build({ status: "inProgress" }),
+				build({ result: "succeeded" }),
+			],
+			[transientError("http", 503), headPr()],
+		);
+		const result = await wait();
+		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.transientFailureCount, 1);
+	});
+
+	test("stops with an error when the PR is not active and no build is selected", async () => {
+		const completed = pullRequest({ ...headPr(), status: "completed" });
+		const atStart = followHarness([], [completed], { resolvedPr: completed });
+		await assert.rejects(atStart.wait(), /PR #42 is completed/);
+		assert.equal(atStart.calls.length, 0);
+
+		const whileWaiting = followHarness([...noBuilds()], [completed]);
+		await assert.rejects(whileWaiting.wait(), /PR #42 is completed/);
 	});
 
 	test("keeps --build pinned when the head moves", async () => {
