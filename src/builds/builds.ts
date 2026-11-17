@@ -36,6 +36,7 @@ const MAX_WAIT_INTERVAL_SECONDS = 3_600;
 const MIN_WAIT_TIMEOUT_SECONDS = 10;
 const MAX_WAIT_TIMEOUT_SECONDS = 86_400;
 const WAIT_HEARTBEAT_MS = 5 * 60_000;
+const WAIT_FOR_BUILD_MS = 10 * 60_000;
 const MAX_CONSECUTIVE_TRANSIENT_FAILURES = 3;
 const MAX_WAIT_ERROR_LENGTH = 4_096;
 const MAX_DISPLAY_DEPTH = 20;
@@ -140,6 +141,7 @@ export interface PullRequestBuildSummary {
 	status: string | null;
 	draft: boolean | null;
 	currentMergeCommit: string | null;
+	currentHeadCommit: string | null;
 }
 
 export interface ListedBuild extends AzureBuild {
@@ -219,12 +221,14 @@ export type BuildWaitOutcome =
 	| "failed"
 	| "canceled"
 	| "unknown"
-	| "timeout";
+	| "timeout"
+	| "no-build";
 
 export interface BuildWaitEnvelope {
 	association: BuildAssociation | null;
 	pullRequest: PullRequestBuildSummary;
-	buildId: number;
+	/** The build that reached the final state; null if no build validated the head. */
+	buildId: number | null;
 	build: AzureBuild | null;
 	pollCount: number;
 	transientFailureCount: number;
@@ -237,7 +241,7 @@ export interface BuildWaitEnvelope {
 
 interface BuildWaitProgressBase {
 	pullRequest: PullRequestBuildSummary;
-	buildId: number;
+	buildId: number | null;
 	build: AzureBuild | null;
 	pollCount: number;
 	transientFailureCount: number;
@@ -264,10 +268,24 @@ export interface BuildWaitTransientWarningProgress
 	retryAfterMs?: number;
 }
 
+/** `--latest` selected the build that validates the head, replacing `previousBuildId` if the head moved. */
+export interface BuildWaitBuildSelectedProgress extends BuildWaitProgressBase {
+	type: "build-selected";
+	previousBuildId: number | null;
+}
+
+/** `--latest` found no build that validates the head yet. */
+export interface BuildWaitNoBuildProgress extends BuildWaitProgressBase {
+	type: "waiting-for-build";
+	previousBuildId: number | null;
+}
+
 export type BuildWaitProgress =
 	| BuildWaitStateProgress
 	| BuildWaitHeartbeatProgress
-	| BuildWaitTransientWarningProgress;
+	| BuildWaitTransientWarningProgress
+	| BuildWaitBuildSelectedProgress
+	| BuildWaitNoBuildProgress;
 
 export interface WaitBuildOptions {
 	intervalSeconds?: number;
@@ -494,6 +512,7 @@ function validatePullRequest(
 			status: status ?? null,
 			draft: value.isDraft ?? null,
 			currentMergeCommit: mergeCommit ?? null,
+			currentHeadCommit: headCommit ?? null,
 		},
 	};
 }
@@ -1168,6 +1187,11 @@ function waitResultOutcome(
 	return WAIT_OUTCOMES.get(normalized(build.result)) ?? "unknown";
 }
 
+function yesNoUnknown(value: boolean | null): string {
+	if (value === null) return "unknown";
+	return value ? "yes" : "no";
+}
+
 function waitStateKey(build: AzureBuild): string {
 	return `${normalized(build.status as string)}\u0000${
 		typeof build.result === "string" ? normalized(build.result) : "<missing>"
@@ -1540,13 +1564,11 @@ export function createBuildService({
 
 	async function selectLatestBuild(
 		pr: ValidatedPullRequest,
-		requireCurrent: boolean,
-		signal?: AbortSignal,
 	): Promise<AzureBuild> {
-		const builds = await listNewestBuilds(pr, signal);
+		const builds = await listNewestBuilds(pr);
 		const current = builds.find((build) => isCurrentBuild(build, pr));
 		if (current !== undefined) return current;
-		if (requireCurrent || builds.length === 0) {
+		if (builds.length === 0) {
 			throw new Error(
 				`No build validates PR #${pr.id} head commit ${pr.headCommit ?? "(unavailable)"}.`,
 			);
@@ -1652,7 +1674,7 @@ export function createBuildService({
 		const pr = await resolvePullRequest(requestedPrId);
 		const build =
 			buildId === "latest"
-				? await selectLatestBuild(pr, false)
+				? await selectLatestBuild(pr)
 				: await fetchBuild(buildId);
 		buildId = build.id as number;
 		assertBuildAssociation(build, pr);
@@ -2093,16 +2115,17 @@ export function createBuildService({
 			timeoutMs: READ_TIMEOUT_MS,
 			maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
 		};
-		const pr = await resolvePullRequest(requestedPrId, prReadOptions);
+		let pr = await resolvePullRequest(requestedPrId, prReadOptions);
 		throwIfWaitAborted(signal);
 
-		const buildId =
-			requestedBuild === "latest"
-				? ((await selectLatestBuild(pr, true, signal)).id as number)
-				: requestedBuild;
-		throwIfWaitAborted(signal);
+		const followsHead = requestedBuild === "latest";
+		let buildId: number | null = followsHead ? null : requestedBuild;
+		let previousBuildId: number | null = null;
+		let selectionPending = false;
 
 		const startedAt = now();
+		let waitingForBuildSince = startedAt;
+		let announcedWaitForHead: string | undefined;
 		const deadline = startedAt + timeoutSeconds * 1_000;
 		const intervalMs = intervalSeconds * 1_000;
 		let nextPollAt = startedAt;
@@ -2127,6 +2150,18 @@ export function createBuildService({
 			outcome: "timeout",
 			validatesHead: null,
 		});
+		const noBuildEnvelope = (at: number): BuildWaitEnvelope => ({
+			association: null,
+			pullRequest: pr.summary,
+			buildId: null,
+			build: null,
+			pollCount,
+			transientFailureCount,
+			elapsedSeconds: elapsedSeconds(at),
+			timedOut: false,
+			outcome: "no-build",
+			validatesHead: null,
+		});
 		const progressBase = (at = now()): BuildWaitProgressBase => ({
 			pullRequest: pr.summary,
 			buildId,
@@ -2136,6 +2171,11 @@ export function createBuildService({
 			elapsedSeconds: elapsedSeconds(at),
 		});
 		const emit = createWaitProgressEmitter(onProgress, signal);
+
+		const waitLabel = (): string =>
+			buildId === null
+				? `Build wait for PR #${pr.id}`
+				: `Build ${buildId} wait`;
 
 		async function handlePollError(
 			error: unknown,
@@ -2167,7 +2207,7 @@ export function createBuildService({
 			});
 			if (consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_FAILURES) {
 				throw new Error(
-					`Build ${buildId} wait stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
+					`${waitLabel()} stopped after ${consecutiveTransientFailures} consecutive transient Azure DevOps failures: ${errorText}`,
 				);
 			}
 			nextPollAt = Math.min(
@@ -2175,6 +2215,17 @@ export function createBuildService({
 				completedAt + Math.max(intervalMs, retryAfterMs ?? 0),
 			);
 			return undefined;
+		}
+
+		function headValidity(
+			observedBuild: AzureBuild,
+			current: ValidatedPullRequest,
+		): Pick<BuildWaitEnvelope, "pullRequest" | "validatesHead"> {
+			const headKnown = headCommitFor(observedBuild, current) !== undefined;
+			return {
+				pullRequest: current.summary,
+				validatesHead: headKnown ? validatesHead(observedBuild, current) : null,
+			};
 		}
 
 		/** Rereads the PR once the build finished; validatesHead is null if that isn't possible. */
@@ -2192,13 +2243,7 @@ export function createBuildService({
 					}),
 					"refreshed pull request",
 				);
-				const headKnown = headCommitFor(observedBuild, refreshed) !== undefined;
-				return {
-					pullRequest: refreshed.summary,
-					validatesHead: headKnown
-						? validatesHead(observedBuild, refreshed)
-						: null,
-				};
+				return headValidity(observedBuild, refreshed);
 			} catch (error) {
 				throwIfWaitAborted(signal);
 				if (isAzureRequestError(error) && error.kind === "abort") throw error;
@@ -2210,7 +2255,7 @@ export function createBuildService({
 			rawBuild: unknown,
 			completedAt: number,
 		): Promise<BuildWaitEnvelope | undefined> {
-			const observedBuild = validateWaitBuild(rawBuild, buildId, pr);
+			const observedBuild = validateWaitBuild(rawBuild, buildId as number, pr);
 			const observedStatus = normalized(observedBuild.status);
 
 			latestBuild = observedBuild;
@@ -2230,7 +2275,9 @@ export function createBuildService({
 				previousStateKey = stateKey;
 			}
 			if (observedStatus !== "completed") return undefined;
-			const { pullRequest, validatesHead } = await refreshedHead(observedBuild);
+			const { pullRequest, validatesHead } = followsHead
+				? headValidity(observedBuild, pr)
+				: await refreshedHead(observedBuild);
 			return {
 				association: buildAssociation(observedBuild),
 				pullRequest,
@@ -2251,21 +2298,75 @@ export function createBuildService({
 			while (nextHeartbeatAt <= current);
 		}
 
+		/** Rereads the PR and drops the selected build when the source head moved. */
+		async function followHead(requestTimeoutMs: number): Promise<void> {
+			const refreshed = validatePullRequest(
+				await pullRequests.get(pr.id, {
+					...prReadOptions,
+					timeoutMs: requestTimeoutMs,
+				}),
+				"refreshed pull request",
+			);
+			if (!equalsIdentifier(refreshed.headCommit ?? "", pr.headCommit ?? "")) {
+				if (buildId !== null) previousBuildId = buildId;
+				buildId = null;
+				latestBuild = null;
+				previousStateKey = undefined;
+				waitingForBuildSince = now();
+			}
+			pr = refreshed;
+		}
+
+		/** Follows the head if asked, selects its build if none is selected, and reads that build. */
+		async function requestPoll(requestTimeoutMs: number): Promise<unknown> {
+			if (followsHead && pollCount > 1) await followHead(requestTimeoutMs);
+			if (buildId === null) {
+				const headBuild = (await listNewestBuilds(pr, signal)).find(
+					(candidate) => isCurrentBuild(candidate, pr),
+				);
+				buildId = (headBuild?.id as number | undefined) ?? null;
+				selectionPending = buildId !== null;
+			}
+			if (buildId === null) return undefined;
+			return azure.request<unknown>(
+				`${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`,
+				{
+					timeoutMs: requestTimeoutMs,
+					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+					signal,
+				},
+			);
+		}
+
+		async function awaitHeadBuild(
+			completedAt: number,
+		): Promise<BuildWaitEnvelope | undefined> {
+			consecutiveTransientFailures = 0;
+			if (completedAt - waitingForBuildSince >= WAIT_FOR_BUILD_MS)
+				return noBuildEnvelope(completedAt);
+			const head = pr.headCommit ?? "";
+			if (announcedWaitForHead !== head) {
+				announcedWaitForHead = head;
+				await emit({
+					type: "waiting-for-build",
+					...progressBase(completedAt),
+					previousBuildId,
+				});
+			}
+			nextPollAt = Math.min(deadline, completedAt + intervalMs);
+			return undefined;
+		}
+
 		async function pollBuild(
 			current: number,
 		): Promise<BuildWaitEnvelope | undefined> {
 			const remainingMs = Math.max(1, Math.ceil(deadline - current));
 			pollCount += 1;
 			const requestTimeoutMs = Math.min(READ_TIMEOUT_MS, remainingMs);
-			const url = `${buildBaseUrl(ctx)}/${buildId}?api-version=${API_VERSION}`;
 			let rawBuild: unknown;
 			let completedAt: number;
 			try {
-				rawBuild = await azure.request<unknown>(url, {
-					timeoutMs: requestTimeoutMs,
-					maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-					signal,
-				});
+				rawBuild = await requestPoll(requestTimeoutMs);
 				completedAt = now();
 			} catch (error) {
 				completedAt = now();
@@ -2274,6 +2375,15 @@ export function createBuildService({
 
 			throwIfWaitAborted(signal);
 			if (completedAt >= deadline) return timeoutEnvelope(completedAt);
+			if (buildId === null) return awaitHeadBuild(completedAt);
+			if (selectionPending) {
+				selectionPending = false;
+				await emit({
+					type: "build-selected",
+					...progressBase(completedAt),
+					previousBuildId,
+				});
+			}
 			const result = await observeBuild(rawBuild, completedAt);
 			if (!result) nextPollAt = Math.min(deadline, completedAt + intervalMs);
 			return result;
@@ -2405,7 +2515,23 @@ export function createBuildService({
 		const counters =
 			`${event.elapsedSeconds.toFixed(1)}s elapsed; ${event.pollCount} poll(s); ` +
 			`${event.transientFailureCount} transient failure(s)`;
-		const prefix = `PR #${event.pullRequest.id}, build ${event.buildId}`;
+		const prefix =
+			event.buildId === null
+				? `PR #${event.pullRequest.id}`
+				: `PR #${event.pullRequest.id}, build ${event.buildId}`;
+		const head = display(event.pullRequest.currentHeadCommit);
+		const replaces =
+			event.type !== "build-selected" && event.type !== "waiting-for-build"
+				? ""
+				: event.previousBuildId === null
+					? ""
+					: ` The head moved, so build ${event.previousBuildId} no longer counts.`;
+		if (event.type === "build-selected") {
+			return `${prefix}: selected for head ${head}.${replaces}`;
+		}
+		if (event.type === "waiting-for-build") {
+			return `${prefix}: no build validates head ${head} yet; waiting up to ${WAIT_FOR_BUILD_MS / 60_000} minutes for one.${replaces}`;
+		}
 		if (event.type === "state") {
 			return `${prefix}: ${event.change} state ${state}; ${counters}.`;
 		}
@@ -2419,13 +2545,22 @@ export function createBuildService({
 		);
 	}
 
+	function formatNoBuild(result: BuildWaitEnvelope, counters: string): string {
+		const pr = result.pullRequest;
+		return (
+			`No build validated the head of PR #${pr.id} (commit ${display(pr.currentHeadCommit)}) within ${WAIT_FOR_BUILD_MS / 60_000} minutes; ${counters}.\n` +
+			`Draft: ${yesNoUnknown(pr.draft)}. Check that the build policy runs for this pull request, or queue a build with \`pr.sh build queue --pr ${pr.id}\`.`
+		);
+	}
+
 	function formatWaitResult(result: BuildWaitEnvelope): string {
 		const buildId = result.buildId;
-		const identifier = `build ${buildId}`;
+		const identifier = buildId === null ? "build wait" : `build ${buildId}`;
 		const statusResult = `${display(result.build?.status)}/${display(result.build?.result)}`;
 		const counters =
 			`${result.elapsedSeconds.toFixed(1)}s elapsed; ${result.pollCount} poll(s); ` +
 			`${result.transientFailureCount} transient failure(s)`;
+		if (result.outcome === "no-build") return formatNoBuild(result, counters);
 		if (result.timedOut) {
 			return (
 				`${identifier} for PR #${result.pullRequest.id} timed out. ` +
@@ -2436,7 +2571,7 @@ export function createBuildService({
 			`${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
 			`Status/result: ${statusResult}; ${counters}.`,
 			`Association: ${display(result.association)}`,
-			`Validates head: ${result.validatesHead === null ? "unknown" : result.validatesHead ? "yes" : "no"}`,
+			`Validates head: ${yesNoUnknown(result.validatesHead)}`,
 		];
 		if (
 			result.validatesHead === false &&
@@ -2446,7 +2581,7 @@ export function createBuildService({
 				`This build doesn't validate the current head of the pull request; wait for the build that does with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
 			);
 		}
-		if (result.outcome !== "succeeded" && buildId !== undefined) {
+		if (result.outcome !== "succeeded" && buildId !== null) {
 			lines.push(
 				`Inspect failure details with \`pr.sh build show --pr ${result.pullRequest.id} --build ${buildId}\`.`,
 			);
