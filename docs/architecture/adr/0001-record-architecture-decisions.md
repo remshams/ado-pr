@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded by [ADR 0008](0008-follow-the-shared-architecture-docs-standard.md); all other decisions remain accepted.
 
 ## Date
 
