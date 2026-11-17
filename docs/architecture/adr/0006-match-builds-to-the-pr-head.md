@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Proposed. Partially superseded by
+[ADR 0009](0009-build-wait-follows-the-pr-head.md) for how `build wait --latest`
+follows the PR head; all other decisions remain proposed.
 
 ## Date
 
