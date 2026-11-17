@@ -3162,7 +3162,7 @@ describe("build queueing", () => {
 			await assert.rejects(service.queuePr(42), (error) => {
 				assert.match(
 					error.message,
-					/Requeue request for build policy evaluation evaluation-id on PR #42 was accepted, but the build ID in the Azure DevOps response is invalid/,
+					/Requeue request for build policy evaluation evaluation-id on PR #42 was accepted, but Azure DevOps sent an invalid build ID or response/,
 				);
 				assert.match(error.message, /pr\.sh build list --pr 42 --history/);
 				assert.match(error.message, reason);

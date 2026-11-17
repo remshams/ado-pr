@@ -1886,7 +1886,7 @@ export function createBuildService({
 			buildId = requeuedBuildId(response);
 		} catch (error) {
 			throw new Error(
-				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} was accepted, but the build ID in the Azure DevOps response is invalid. Find the new build with \`pr.sh build list --pr ${pr.id} --history\`.\n${sanitizeError(error)}`,
+				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} was accepted, but Azure DevOps sent an invalid build ID or response. Find the new build with \`pr.sh build list --pr ${pr.id} --history\`.\n${sanitizeError(error)}`,
 			);
 		}
 		if (buildId === undefined) return { evaluationId: candidate.id };
