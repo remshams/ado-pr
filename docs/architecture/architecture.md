@@ -52,7 +52,8 @@ flowchart TD
 ## Modules and dependencies
 
 - `src/shared/`: Azure HTTP access, URL helpers, Git repository context, safe JSON
-  formatting for stdout and the command contracts and types that several modules use.
+  formatting for stdout, the terminal control sanitizer and the command contracts and
+  types that several modules use.
 - `src/pull-requests/`: finding, listing, creating, editing and completing pull
   requests, including generic attachment uploads, description images and reviewers.
   It sets the user's vote and abandons or reactivates a pull request. An application
