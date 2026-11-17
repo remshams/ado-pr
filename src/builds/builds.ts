@@ -2137,7 +2137,7 @@ export function createBuildService({
 
 		const elapsedSeconds = (at = now()): number =>
 			Math.max(0, at - startedAt) / 1_000;
-		/** The result when no build reached a final state; `latestBuild` is null whenever `buildId` is. */
+		/** The result when no build reached a final state. */
 		const unfinishedEnvelope = (
 			outcome: "timeout" | "no-build",
 			at = now(),
@@ -2313,11 +2313,12 @@ export function createBuildService({
 		async function requestPoll(requestTimeoutMs: number): Promise<unknown> {
 			if (followsHead && pollCount > 1) await followHead(requestTimeoutMs);
 			if (buildId === null) {
-				const headBuild = (await listNewestBuilds(pr, signal)).find(
+				assertActivePullRequest(pr, "wait for a build of the PR head");
+				const selected = (await listNewestBuilds(pr, signal)).find(
 					(candidate) => isCurrentBuild(candidate, pr),
 				);
-				if (headBuild === undefined) return undefined;
-				buildId = headBuild.id as number;
+				if (selected === undefined) return undefined;
+				buildId = selected.id as number;
 				await emit({
 					type: "build-selected",
 					...progressBase(),
@@ -2345,7 +2346,11 @@ export function createBuildService({
 				announcedWaitForHead = head;
 				await emit({ type: "waiting-for-build", ...progressBase(completedAt) });
 			}
-			nextPollAt = Math.min(deadline, completedAt + intervalMs);
+			nextPollAt = Math.min(
+				deadline,
+				waitingForBuildSince + WAIT_FOR_BUILD_MS,
+				completedAt + intervalMs,
+			);
 			return undefined;
 		}
 
@@ -2544,6 +2549,9 @@ export function createBuildService({
 			`${result.elapsedSeconds.toFixed(1)}s elapsed; ${result.pollCount} poll(s); ` +
 			`${result.transientFailureCount} transient failure(s)`;
 		if (result.outcome === "no-build") return formatNoBuild(result, counters);
+		if (result.timedOut && buildId === null) {
+			return `build wait for PR #${result.pullRequest.id} timed out before a build validated head ${display(result.pullRequest.currentHeadCommit)}; ${counters}.`;
+		}
 		if (result.timedOut) {
 			return (
 				`${identifier} for PR #${result.pullRequest.id} timed out. ` +
