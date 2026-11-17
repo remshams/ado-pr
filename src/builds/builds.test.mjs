@@ -3079,6 +3079,7 @@ describe("build queueing", () => {
 	for (const [name, requeueResponse] of [
 		["context.buildId is null", { context: { buildId: null } }],
 		["context.buildId is missing", { context: {} }],
+		["context is null", { context: null }],
 		["context is missing", {}],
 	]) {
 		test(`returns the evaluation ID when the requeue response says ${name}`, async (t) => {
