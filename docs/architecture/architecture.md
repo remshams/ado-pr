@@ -215,7 +215,9 @@ sequenceDiagram
                 Builds->>Azure: list PR merge and branch builds
             end
         end
-        Builds->>Azure: GET the selected build
+        opt a build is selected
+            Builds->>Azure: GET the selected build
+        end
         opt transient failure
             Azure--xBuilds: retried, the third in a row aborts
         end
