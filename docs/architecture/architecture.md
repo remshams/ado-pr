@@ -23,7 +23,8 @@ kept small ([ADR 0003](adr/0003-keep-the-tool-small.md)).
 - **Build pipeline**: an Azure Pipelines definition. A build policy names the
   build pipeline that validates pull requests into a branch.
 - **PR validation build**: a run of a build pipeline associated with a pull request.
-  Its association is `pr-merge` for a run on the PR merge ref `refs/pull/N/merge`
+  Its association is `pr-merge` for a PR-triggered run on the merge ref
+  `refs/pull/N/merge`
   or `branch-head` for a run on the source branch ([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
 - **Validates the head**: a `pr-merge` build validates the head when it ran on the
   current merge commit, a `branch-head` build when it ran on the PR head.
@@ -38,13 +39,13 @@ flowchart TD
     agent(["Coding agent"]):::person
     adopr["ado-pr<br>Manages Azure DevOps pull requests, comments and builds"]:::system
     azure["Azure DevOps<br>REST API, PAT Basic auth"]:::external
-    git["git<br>Origin remote of the checkout"]:::external
+    git["git<br>Origin remote and current branch"]:::external
     op["1Password CLI<br>Resolves op:// references"]:::external
     env[(".env<br>Dotenv file beside pr.sh")]:::store
     agent -->|runs pr.sh commands, reads text or JSON| adopr
     adopr -->|launcher reads the PAT unless exported| env
     adopr -->|resolves op:// PAT| op
-    adopr -->|reads origin URL| git
+    adopr -->|reads origin URL and current branch| git
     adopr -->|HTTP JSON requests| azure
 ```
 
@@ -73,6 +74,7 @@ flowchart TD
   review matching.
 - `src/cli/`: argument parsing, validation, help and PAT lookup.
 - `src/pr.ts`: wires the modules together, dispatches commands and writes output.
+  Batch operations write their own per-operation lines from `src/comments/`.
 
 Arrows show permitted imports between modules, including type-only imports.
 They describe dependency permissions, not every current import.
@@ -101,7 +103,7 @@ Features depend on shared code; builds may also depend on pull requests. Status
 may depend on pull requests, comments and builds, so those features stay independent
 of each other ([ADR 0007](adr/0007-report-pr-status-from-a-status-module.md)). Only
 the CLI and entrypoint may wire features together. Shared code cannot depend on a
-feature, and features cannot depend on the CLI. `.fallowrc.json` declares these
+feature, and features cannot depend on the CLI. [`.fallowrc.json`](../../.fallowrc.json) declares these
 folders as boundary zones with explicit allowed dependencies.
 `pnpm fallow:architecture` rejects violations. See
 [ADR 0002](adr/0002-organise-code-by-feature.md).
@@ -130,7 +132,9 @@ sequenceDiagram
     participant Shared as shared
     participant Azure as Azure DevOps
     Agent->>Launcher: pr.sh <command> [flags]
-    alt PAT is an op:// reference
+    alt no exported PAT and no .env, or op missing
+        Launcher-->>Agent: error on stderr, exit 1
+    else PAT is an op:// reference
         Launcher->>Op: exec op run
         Op->>Entry: node src/pr.ts with the resolved PAT
     else literal PAT
@@ -157,7 +161,8 @@ sequenceDiagram
 ```
 
 `src/pr.ts` parses arguments before reading credentials or Git context, so direct
-Node invocation can show help without authentication. All services share one
+Node invocation can show help without authentication. The feature service lane
+stands for pull-requests, comments, builds or status, whichever owns the command. All services share one
 requester. PR resolution uses an explicit ID or the current branch where the
 command allows it.
 
@@ -210,8 +215,10 @@ sequenceDiagram
         opt transient failure
             Azure--xBuilds: retried, the third in a row aborts
         end
-        Builds-->>Entry: progress and heartbeats
-        Entry-->>Agent: progress on stderr
+        opt state change, transient warning or heartbeat
+            Builds-->>Entry: progress event
+            Entry-->>Agent: progress on stderr
+        end
     end
     Builds-->>Entry: final result
     Entry-->>Agent: result on stdout, exit 0, 1 or 124
@@ -276,7 +283,7 @@ measures each file entry as it will be printed: a file whose content doesn't fit
 marked `omitted` and later files still get content, while every file stays listed.
 `--since-last-review` compares with the latest iteration created before the user's
 newest text comment or vote entry. Azure keeps no vote timestamp on reviewers, so
-votes come from the system entries in the PR threads. `src/comments/review-activity.ts`
+votes come from the system entries in the PR threads. [`src/comments/review-activity.ts`](../../src/comments/review-activity.ts)
 owns that matching, next to the thread model. The entrypoint reads the threads,
 computes the cutoff and passes it to the diff service, which selects the iteration and
 reports when there is none. The help marks the flag as a heuristic because Azure's
@@ -299,11 +306,11 @@ A repeated signal forces exit.
 
 ## Tests and quality gates
 
-Tests use `node:test` in adjacent `.test.mjs` files. `tests/test-helpers.mjs`
+Tests use `node:test` in adjacent `.test.mjs` files. [`tests/test-helpers.mjs`](../../tests/test-helpers.mjs)
 provides isolated Git repositories, environment/global-state helpers and bounded
 subprocess runners. The FIFO fetch implementation in
-`tests/support/fetch-harness.mjs` backs in-process mocks and
-`tests/fixtures/fetch-preload.mjs`. The preload replaces fetch in CLI subprocesses,
+[`tests/support/fetch-harness.mjs`](../../tests/support/fetch-harness.mjs) backs in-process mocks and
+[`tests/fixtures/fetch-preload.mjs`](../../tests/fixtures/fetch-preload.mjs). The preload replaces fetch in CLI subprocesses,
 records requests with redacted authorisation, and rejects unused or unexpected
 responses. CLI subprocess tests check streams, exit codes and signals; launcher
 tests use temporary dotenv files, pipes and a fake `op` executable.
