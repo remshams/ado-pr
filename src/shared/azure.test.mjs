@@ -1189,3 +1189,28 @@ test("requests send the literal Basic authorization header and omit unnecessary 
 		ok: true,
 	});
 });
+
+test("HTTP error bodies redact a PAT next to or split by an escape sequence", async () => {
+	const half = fakePat.length / 2;
+	for (const body of [
+		`\u001b(${fakePat}`,
+		`\u001b ${fakePat}`,
+		`\u001b${fakePat}`,
+		JSON.stringify({ message: `\u001b(${fakePat}` }),
+		`${fakePat.slice(0, half)}\u001b[31m${fakePat.slice(half)}`,
+	]) {
+		const azure = createAzureRequester({
+			pat: fakePat,
+			fetch: async () => new Response(body, { status: 403 }),
+		});
+		await assert.rejects(
+			azure.request("https://example.invalid/escaped-pat"),
+			(error) => {
+				// A bare ESC may swallow the marker's "<"; only the PAT must not leak.
+				assert.match(error.message, /redacted>/);
+				assert.doesNotMatch(error.message, new RegExp(fakePat.slice(1)));
+				return true;
+			},
+		);
+	}
+});
