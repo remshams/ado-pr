@@ -1870,15 +1870,23 @@ export function createBuildService({
 		}
 
 		const candidate = matches[0];
-		let requeued: { buildId: number | undefined };
+		let response: unknown;
 		try {
-			requeued = await requeueEvaluation(candidate.id);
+			response = await requeueEvaluation(candidate.id);
 		} catch (error) {
 			throw buildMutationError(
 				error,
 				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id}`,
 				`Inspect it with \`pr.sh build show --latest --pr ${pr.id}\` or \`pr.sh build list --pr ${pr.id} --history\` before trying again.`,
 				REQUEUE_SCOPE_HINT,
+			);
+		}
+		let requeued: { buildId: number | undefined };
+		try {
+			requeued = requeuedBuildId(response);
+		} catch (error) {
+			throw new Error(
+				`Requeue request for build policy evaluation ${candidate.id} on PR #${pr.id} was accepted, but the build ID in the Azure DevOps response is invalid. Find the new build with \`pr.sh build list --pr ${pr.id} --history\`.\n${sanitizeError(error)}`,
 			);
 		}
 		if (requeued.buildId === undefined) return { evaluationId: candidate.id };
@@ -1903,22 +1911,23 @@ export function createBuildService({
 		}
 	}
 
-	/** Sends the requeue request and returns the build ID Azure names, if any. */
-	async function requeueEvaluation(
-		evaluationId: string,
-	): Promise<{ buildId: number | undefined }> {
+	/** Sends the requeue request and returns the response body. */
+	async function requeueEvaluation(evaluationId: string): Promise<unknown> {
 		const evaluationUrl = `${orgProjectUrl(ctx)}/_apis/policy/evaluations/${evaluationId}?api-version=7.1-preview.1`;
-		const response = requireObject(
-			await azure.request<unknown>(evaluationUrl, {
-				method: "PATCH",
-				body: { status: "queued" },
-				timeoutMs: RETRY_TIMEOUT_MS,
-				maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
-			}),
-			"requeued policy evaluation response",
-		);
-		const context = isObject(response.context) ? response.context : undefined;
-		if (context?.buildId === undefined) return { buildId: undefined };
+		return azure.request<unknown>(evaluationUrl, {
+			method: "PATCH",
+			body: { status: "queued" },
+			timeoutMs: RETRY_TIMEOUT_MS,
+			maxResponseBytes: MAX_JSON_RESPONSE_BYTES,
+		});
+	}
+
+	/** Azure sends no build ID, or null, until the requeued build exists. */
+	function requeuedBuildId(response: unknown): { buildId: number | undefined } {
+		const body = requireObject(response, "requeued policy evaluation response");
+		const context = isObject(body.context) ? body.context : undefined;
+		if (context?.buildId === undefined || context.buildId === null)
+			return { buildId: undefined };
 		return {
 			buildId: requirePositiveInteger(
 				context.buildId,

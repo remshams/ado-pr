@@ -3076,48 +3076,102 @@ describe("build queueing", () => {
 		);
 	});
 
-	test("rejects an invalid evaluation build ID without requesting a build", async (t) => {
-		const pr = pullRequest({
-			repository: {
-				id: "Repo-ID",
-				name: "widgets",
-				project: { id: projectId },
-			},
-		});
-		const { service, calls } = setup(
-			t,
-			[
-				{
-					json: {
-						value: [
-							{
-								evaluationId: "evaluation-id",
-								configuration: { type: { id: buildPolicyType } },
-							},
-						],
-					},
+	for (const [name, requeueResponse] of [
+		["context.buildId is null", { context: { buildId: null } }],
+		["context.buildId is missing", { context: {} }],
+		["context is missing", {}],
+	]) {
+		test(`returns the evaluation ID when the requeue response says ${name}`, async (t) => {
+			const pr = pullRequest({
+				repository: {
+					id: "Repo-ID",
+					name: "widgets",
+					project: { id: projectId },
 				},
-				{
-					json: {
-						evaluationId: "evaluation-id",
-						status: "queued",
-						context: { buildId: 0 },
+			});
+			const { service, calls } = setup(
+				t,
+				[
+					{
+						json: {
+							value: [
+								{
+									evaluationId: "evaluation-id",
+									configuration: { type: { id: buildPolicyType } },
+								},
+							],
+						},
 					},
-				},
-			],
-			{ resolveValues: [pr] },
-		);
-
-		await assert.rejects(service.queuePr(42), (error) => {
-			assert.match(error.message, /failed after dispatch/);
-			assert.match(
-				error.message,
-				/requeued policy evaluation context\.buildId must be a positive safe integer/,
+					{
+						json: {
+							evaluationId: "evaluation-id",
+							status: "queued",
+							...requeueResponse,
+						},
+					},
+				],
+				{ resolveValues: [pr] },
 			);
-			return true;
+
+			assert.deepEqual(await service.queuePr(42), {
+				evaluationId: "evaluation-id",
+			});
+			assert.equal(calls.length, 2);
 		});
-		assert.equal(calls.length, 2);
-	});
+	}
+
+	for (const [name, requeueResponse, reason] of [
+		[
+			"a build ID of 0",
+			{ context: { buildId: 0 } },
+			/requeued policy evaluation context\.buildId must be a positive safe integer/,
+		],
+		[
+			"a string build ID",
+			{ context: { buildId: "703" } },
+			/requeued policy evaluation context\.buildId must be a positive safe integer/,
+		],
+		["a non-object body", ["queued"], /requeued policy evaluation response/],
+	]) {
+		test(`says the requeue was accepted when the response has ${name}`, async (t) => {
+			const pr = pullRequest({
+				repository: {
+					id: "Repo-ID",
+					name: "widgets",
+					project: { id: projectId },
+				},
+			});
+			const { service, calls } = setup(
+				t,
+				[
+					{
+						json: {
+							value: [
+								{
+									evaluationId: "evaluation-id",
+									configuration: { type: { id: buildPolicyType } },
+								},
+							],
+						},
+					},
+					{ json: requeueResponse },
+				],
+				{ resolveValues: [pr] },
+			);
+
+			await assert.rejects(service.queuePr(42), (error) => {
+				assert.match(
+					error.message,
+					/Requeue request for build policy evaluation evaluation-id on PR #42 was accepted, but the build ID in the Azure DevOps response is invalid/,
+				);
+				assert.match(error.message, /pr\.sh build list --pr 42 --history/);
+				assert.match(error.message, reason);
+				assert.doesNotMatch(error.message, /failed after dispatch|uncertain/);
+				return true;
+			});
+			assert.equal(calls.length, 2);
+		});
+	}
 
 	test("gives uncertain-outcome guidance when the evaluation requeue fails after dispatch", async (t) => {
 		const pr = pullRequest({
