@@ -148,7 +148,8 @@ Build queue:
   build policy evaluation; branch builds use the build pipeline of the repository's build policy.
   Both print the queued build ID, build pipeline and URL. A PR requeue may not return the build ID
   yet; it then prints the requeued evaluation ID and exits 0. If the response has an invalid build
-  ID, the error says Azure accepted the requeue and points to \`build list --pr <id> --history\`.
+  ID or body, the error says Azure accepted the requeue and points to
+  \`build list --pr <id> --history\`.
   Queued builds print a ready-to-run \`build wait\` line; a branch build gets one only when the
   branch has an active pull request, because \`build wait\` needs one. --definition <id> picks the
   build pipeline. With --pr it selects the build policy evaluation for that build pipeline and
