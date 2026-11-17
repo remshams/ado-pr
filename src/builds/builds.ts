@@ -2194,22 +2194,6 @@ export function createBuildService({
 			latestBuild = observedBuild;
 			consecutiveTransientFailures = 0;
 			const stateKey = waitStateKey(observedBuild);
-			const terminalEnvelope:
-				| Omit<BuildWaitEnvelope, "validatesHead">
-				| undefined =
-				observedStatus === "completed"
-					? {
-							association: buildAssociation(observedBuild),
-							pullRequest: pr.summary,
-							buildId,
-							build: observedBuild,
-							pollCount,
-							transientFailureCount,
-							elapsedSeconds: elapsedSeconds(completedAt),
-							timedOut: false,
-							outcome: waitResultOutcome(observedBuild),
-						}
-					: undefined;
 			if (stateKey !== previousStateKey) {
 				await emit({
 					type: "state",
@@ -2223,9 +2207,17 @@ export function createBuildService({
 				});
 				previousStateKey = stateKey;
 			}
-			if (terminalEnvelope === undefined) return undefined;
+			if (observedStatus !== "completed") return undefined;
 			return {
-				...terminalEnvelope,
+				association: buildAssociation(observedBuild),
+				pullRequest: pr.summary,
+				buildId,
+				build: observedBuild,
+				pollCount,
+				transientFailureCount,
+				elapsedSeconds: elapsedSeconds(completedAt),
+				timedOut: false,
+				outcome: waitResultOutcome(observedBuild),
 				validatesHead: await validatesRefreshedHead(observedBuild),
 			};
 		}
