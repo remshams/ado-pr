@@ -1032,6 +1032,10 @@ test("request diagnostics redact URL credentials, sensitive queries, and credent
 			"https://example.invalid/%invalid/items",
 			"https://example.invalid/<redacted>/items",
 		],
+		[
+			`https://example.invalid/%1BP${encodeURIComponent(pat)}%1B%5C/items?label=%1B_${encodeURIComponent(pat)}%1B%5C#%1B%5E${encodeURIComponent(pat)}%1B%5C`,
+			"https://example.invalid/<redacted>/items?label=<redacted>#<redacted>",
+		],
 	]) {
 		const azure = createAzureRequester({
 			pat,
