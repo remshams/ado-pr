@@ -48,7 +48,7 @@ flowchart TD
     adopr -->|HTTP JSON requests| azure
 ```
 
-The agent runs `pr.sh` from the root of an Azure Repos checkout. `src/shared/` reads the organisation, project and repository from the checkout's
+`src/shared/` reads the organisation, project and repository from the checkout's
 origin remote.
 
 ## Modules and dependencies
@@ -200,7 +200,7 @@ sequenceDiagram
     Entry->>Builds: wait(pr, build, options)
     Builds->>Prs: resolve the pull request
     Prs->>Azure: GET pull request
-    opt --latest
+    opt --latest, selected once
         Builds->>Azure: list associated builds
     end
     loop every interval until a terminal state or the timeout
@@ -214,10 +214,6 @@ sequenceDiagram
     Builds-->>Entry: final result
     Entry-->>Agent: result on stdout, exit 0, 1 or 124
 ```
-
-`--latest` selects the build once, from the PR metadata read at the start. The wait
-follows that build ID and doesn't switch builds when the pull request changes
-([ADR 0006](adr/0006-match-builds-to-the-pr-head.md)).
 
 ## Azure requests
 
