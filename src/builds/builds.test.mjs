@@ -1,157 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { createMockFetch } from "../../tests/test-helpers.mjs";
-import { AzureRequestError, createAzureRequester } from "../shared/azure.ts";
+import {
+	branchBuild,
+	build,
+	buildBase,
+	createPullRequestStub,
+	ctx,
+	headPr,
+	listUrl,
+	pullRequest,
+	requestShapes,
+	setup,
+	showResponses,
+} from "../../tests/support/builds.mjs";
+import { AzureRequestError } from "../shared/azure.ts";
 import { createBuildService } from "./builds.ts";
-
-const ctx = {
-	organization: "test org",
-	project: "test/project",
-	repository: "checkout-name",
-};
-const pat = "test-only-fake-pat";
-const buildBase =
-	"https://dev.azure.com/test%20org/test%2Fproject/_apis/build/builds";
-
-function pullRequest(overrides = {}) {
-	return {
-		pullRequestId: 42,
-		title: "Validate widgets",
-		status: "active",
-		isDraft: false,
-		sourceRefName: "refs/heads/feature/widgets",
-		repository: { id: "Repo-ID", name: "widgets" },
-		lastMergeCommit: { commitId: "ABCDEF123" },
-		...overrides,
-	};
-}
-
-function build(overrides = {}) {
-	return {
-		id: 700,
-		buildNumber: "2026.8.18.1",
-		status: "completed",
-		result: "failed",
-		reason: "pullRequest",
-		sourceBranch: "refs/pull/42/merge",
-		sourceVersion: "abcdef123",
-		queueTime: "2026-08-18T10:00:00Z",
-		startTime: "2026-08-18T10:01:00Z",
-		finishTime: "2026-08-18T10:04:00Z",
-		repository: { id: "repo-id", name: "widgets", type: "TfsGit" },
-		definition: { id: 9, name: "Widget CI" },
-		_links: { web: { href: "https://dev.azure.com/build/700" } },
-		...overrides,
-	};
-}
-
-function headPr() {
-	return pullRequest({
-		lastMergeSourceCommit: { commitId: "HEAD-1" },
-		isDraft: true,
-	});
-}
-
-function branchBuild(overrides = {}) {
-	return build({
-		reason: "manual",
-		sourceBranch: "refs/heads/feature/widgets",
-		sourceVersion: "head-1",
-		...overrides,
-	});
-}
-
-function createPullRequestStub(
-	resolveValues = [pullRequest()],
-	getValues = resolveValues,
-	branchPullRequests = [],
-) {
-	let resolveIndex = 0;
-	let getIndex = 0;
-	const calls = [];
-	return {
-		calls,
-		service: {
-			async resolve(requestedPrId) {
-				calls.push({ method: "resolve", requestedPrId });
-				const value =
-					resolveValues[Math.min(resolveIndex, resolveValues.length - 1)];
-				resolveIndex += 1;
-				return value;
-			},
-			async get(prId) {
-				calls.push({ method: "get", prId });
-				const value = getValues[Math.min(getIndex, getValues.length - 1)];
-				getIndex += 1;
-				return value;
-			},
-			async findActiveForBranch(branch) {
-				calls.push({ method: "findActiveForBranch", branch });
-				return branchPullRequests;
-			},
-		},
-	};
-}
-
-function setup(
-	t,
-	responses,
-	{ resolveValues, getValues, branchPullRequests } = {},
-) {
-	const { fetch, calls } = createMockFetch(t, responses);
-	const azure = createAzureRequester({ pat, fetch });
-	const pullRequests = createPullRequestStub(
-		resolveValues,
-		getValues,
-		branchPullRequests,
-	);
-	const service = createBuildService({
-		azure,
-		ctx,
-		pullRequests: pullRequests.service,
-	});
-	return { service, calls, pullRequestCalls: pullRequests.calls };
-}
-
-function requestShapes(calls) {
-	return calls.map(({ url, method, body, headers }) => ({
-		url,
-		method,
-		body,
-		headers,
-	}));
-}
-
-function listUrl(continuation) {
-	return (
-		`${buildBase}?reasonFilter=pullRequest&branchName=refs%2Fpull%2F42%2Fmerge&` +
-		`repositoryId=Repo-ID&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&` +
-		(continuation === undefined
-			? ""
-			: `continuationToken=${encodeURIComponent(continuation)}&`) +
-		"api-version=7.1"
-	);
-}
 
 function branchListUrl() {
 	return (
 		`${buildBase}?branchName=refs%2Fheads%2Ffeature%2Fwidgets&` +
 		"repositoryId=Repo-ID&repositoryType=TfsGit&queryOrder=queueTimeDescending&$top=100&api-version=7.1"
 	);
-}
-
-function showResponses({
-	shownBuild = build(),
-	records = [],
-	logs = [],
-	texts = [],
-} = {}) {
-	return [
-		{ json: shownBuild },
-		{ json: { id: "timeline", records } },
-		{ json: { count: logs.length, value: logs } },
-		...texts,
-	];
 }
 
 function transientError(kind, status, retryAfterMs) {
@@ -2300,88 +2169,6 @@ describe("deterministic build wait", () => {
 		});
 		assert.match(timeoutText, /build 700.*timed out/);
 		assert.doesNotMatch(timeoutText, /requested build/);
-	});
-});
-
-describe("build response validation contracts", () => {
-	test("show identifies malformed optional build metadata", async (t) => {
-		for (const [overrides, field, expectedType] of [
-			[{ definition: [] }, "build.definition", "an object"],
-			[
-				{ definition: { id: 0 } },
-				"build.definition.id",
-				"a positive safe integer",
-			],
-			[
-				{ definition: { name: false } },
-				"build.definition.name",
-				"a non-empty string",
-			],
-			[{ _links: [] }, "build._links", "an object"],
-			[{ _links: { web: null } }, "build._links.web", "an object"],
-			[
-				{ _links: { web: { href: 4 } } },
-				"build._links.web.href",
-				"a non-empty string",
-			],
-			[{ buildNumber: false }, "build.buildNumber", "a non-empty string"],
-		]) {
-			const { service } = setup(t, [{ json: build(overrides) }]);
-			await assert.rejects(service.show(42, 700), {
-				message: `Malformed Azure DevOps response: ${field} must be ${expectedType}.`,
-			});
-		}
-	});
-
-	test("show identifies malformed issue fields before reading logs", async (t) => {
-		for (const field of ["type", "category", "message"]) {
-			const { service } = setup(t, [
-				{ json: build() },
-				{
-					json: {
-						records: [{ id: "task", type: "Task", issues: [{ [field]: 42 }] }],
-					},
-				},
-			]);
-			await assert.rejects(service.show(42, 700), {
-				message: `Malformed Azure DevOps response: timeline.records[0].issues[0].${field} must be a non-empty string.`,
-			});
-		}
-	});
-
-	test("show validates log metadata and rejects duplicate IDs", async (t) => {
-		for (const [logs, detail] of [
-			[
-				[{ id: 0 }],
-				"build logs response.value[0].id must be a positive safe integer.",
-			],
-			[
-				[{ id: 1, type: 7 }],
-				"build logs response.value[0].type must be a non-empty string.",
-			],
-			[
-				[{ id: 1, url: false }],
-				"build logs response.value[0].url must be a non-empty string.",
-			],
-			[
-				[{ id: 1, lineCount: -1 }],
-				"build logs response.value[0].lineCount must be a non-negative safe integer.",
-			],
-			[
-				[{ id: 1, lineCount: 0.5 }],
-				"build logs response.value[0].lineCount must be a non-negative safe integer.",
-			],
-			[
-				[{ id: 1, lineCount: "2" }],
-				"build logs response.value[0].lineCount must be a non-negative safe integer.",
-			],
-			[[{ id: 1 }, { id: 1 }], "duplicate build log ID 1."],
-		]) {
-			const { service } = setup(t, showResponses({ logs }));
-			await assert.rejects(service.show(42, 700), {
-				message: `Malformed Azure DevOps response: ${detail}`,
-			});
-		}
 	});
 });
 
