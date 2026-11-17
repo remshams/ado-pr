@@ -48,9 +48,7 @@ flowchart TD
     adopr -->|HTTP JSON requests| azure
 ```
 
-The agent runs `pr.sh` from the root of an Azure Repos checkout. The launcher takes
-the PAT from `AZURE_DEVOPS_PAT` or from the `.env` file beside the real script.
-`src/shared/` reads the organisation, project and repository from the checkout's
+The agent runs `pr.sh` from the root of an Azure Repos checkout. `src/shared/` reads the organisation, project and repository from the checkout's
 origin remote.
 
 ## Modules and dependencies
@@ -157,9 +155,8 @@ sequenceDiagram
 ```
 
 `src/pr.ts` parses arguments before reading credentials or Git context, so direct
-Node invocation can show help without authentication. It creates one requester,
-injects it and the repository context into the services, dispatches the command
-and selects output and exit status. PR resolution uses an explicit ID or the
+Node invocation can show help without authentication. All services share one
+requester. PR resolution uses an explicit ID or the
 current branch where the command allows it.
 
 ```mermaid
@@ -188,9 +185,6 @@ sequenceDiagram
     Status-->>Entry: status value
     Entry-->>Agent: report or JSON, exit 0
 ```
-
-The status module runs the requests one after another. A failed conflict, iteration
-or policy request becomes a note in the report instead of an error.
 
 ```mermaid
 ---
