@@ -1347,8 +1347,45 @@ describe("deterministic build wait", () => {
 		assert.equal(result.validatesHead, false);
 		assert.match(
 			service.formatWaitResult(result),
-			/Validates head: no\nThe pull request changed after this build was queued; wait for the build of its current head with `pr\.sh build wait --latest --pr 42`\./,
+			/Validates head: no\nThis build doesn't validate the current head of the pull request; wait for the build that does with `pr\.sh build wait --latest --pr 42`\./,
 		);
+	});
+
+	test("reports a branch build as stale when the source head moved", async () => {
+		const { service } = createWaitHarness(
+			[branchBuild({ result: "succeeded", sourceVersion: "head-1" })],
+			{
+				resolvedPr: headPr(),
+				refreshedPr: pullRequest({
+					...headPr(),
+					lastMergeSourceCommit: { commitId: "head-2" },
+				}),
+			},
+		);
+		const result = await service.wait(42, 700);
+		assert.equal(result.association, "branch-head");
+		assert.equal(result.validatesHead, false);
+	});
+
+	test("bounds the final PR read by the wait deadline", async () => {
+		const readTimeouts = [];
+		const { service } = createWaitHarness(
+			[
+				({ clock }) => {
+					clock.value = 9_000;
+					return build({ result: "succeeded" });
+				},
+			],
+			{
+				refreshedPr: (options) => {
+					readTimeouts.push(options.timeoutMs);
+					return pullRequest();
+				},
+			},
+		);
+		const result = await service.wait(42, 700, { timeoutSeconds: 10 });
+		assert.equal(result.validatesHead, true);
+		assert.deepEqual(readTimeouts, [1_000]);
 	});
 
 	test("still validates the head when auto-complete merged the PR as the build finished", async () => {
