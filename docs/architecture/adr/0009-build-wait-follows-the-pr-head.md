@@ -30,15 +30,17 @@ head:
   the newest build that validates the new head. A change of the merge commit alone,
   for example when the target branch moves, keeps the selected build.
 - While no build validates the head, the wait keeps polling. After 10 minutes
-  without one, counted from the last head change and capped by `--timeout`, it ends
-  with outcome `no-build` and exit code 1. The result's `buildId` is then `null`.
+  without one, counted from the last head change, it ends with outcome `no-build`
+  and exit code 1, and the result's `buildId` is `null`. If `--timeout` ends first,
+  the outcome is `timeout`.
 - Progress on stderr names the selected build and the build it replaces.
 
 `--build <id>` keeps waiting for that build. `build show --latest` still reports a
 stale build at once.
 
-This supersedes the clause of ADR 0006 that says waiting follows the selected
-build ID and doesn't switch builds when the PR changes. The rest of ADR 0006 stands.
+This supersedes two clauses of ADR 0006: that wait fails with an error naming the
+head commit when no build validates it, and that waiting follows the selected build
+ID and doesn't switch builds when the PR changes. The rest of ADR 0006 stands.
 
 ## Consequences
 
