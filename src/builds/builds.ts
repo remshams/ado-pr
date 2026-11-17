@@ -2552,6 +2552,21 @@ export function createBuildService({
 		);
 	}
 
+	function formatTimeout(
+		result: BuildWaitEnvelope,
+		statusResult: string,
+		counters: string,
+	): string {
+		const pr = result.pullRequest;
+		if (result.buildId === null) {
+			return `build wait for PR #${pr.id} timed out before a build validated head ${display(pr.currentHeadCommit)}; ${counters}.`;
+		}
+		return (
+			`build ${result.buildId} for PR #${pr.id} timed out. ` +
+			`Latest status/result: ${statusResult}; ${counters}.\nAssociation: ${display(result.association)}`
+		);
+	}
+
 	function formatWaitResult(result: BuildWaitEnvelope): string {
 		const buildId = result.buildId;
 		const identifier = buildId === null ? "build wait" : `build ${buildId}`;
@@ -2560,15 +2575,7 @@ export function createBuildService({
 			`${result.elapsedSeconds.toFixed(1)}s elapsed; ${result.pollCount} poll(s); ` +
 			`${result.transientFailureCount} transient failure(s)`;
 		if (result.outcome === "no-build") return formatNoBuild(result, counters);
-		if (result.timedOut && buildId === null) {
-			return `build wait for PR #${result.pullRequest.id} timed out before a build validated head ${display(result.pullRequest.currentHeadCommit)}; ${counters}.`;
-		}
-		if (result.timedOut) {
-			return (
-				`${identifier} for PR #${result.pullRequest.id} timed out. ` +
-				`Latest status/result: ${statusResult}; ${counters}.\nAssociation: ${display(result.association)}`
-			);
-		}
+		if (result.timedOut) return formatTimeout(result, statusResult, counters);
 		const lines = [
 			`${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
 			`Status/result: ${statusResult}; ${counters}.`,
