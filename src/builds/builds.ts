@@ -1925,11 +1925,10 @@ export function createBuildService({
 	/** Azure sends no build ID, or null, until the requeued build exists. */
 	function requeuedBuildId(response: unknown): number | undefined {
 		const body = requireObject(response, "requeued policy evaluation response");
-		const context = isObject(body.context) ? body.context : undefined;
-		if (context?.buildId === undefined || context.buildId === null)
-			return undefined;
+		const buildId = isObject(body.context) ? body.context.buildId : undefined;
+		if (buildId === undefined || buildId === null) return undefined;
 		return requirePositiveInteger(
-			context.buildId,
+			buildId,
 			"requeued policy evaluation context.buildId",
 		);
 	}
