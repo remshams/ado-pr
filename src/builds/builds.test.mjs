@@ -4330,6 +4330,17 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.elapsedSeconds, 600);
 	});
 
+	test("caps a retry after a transient failure at the end of the wait for a build", async () => {
+		const { wait } = followHarness(
+			[transientError("http", 503), ...noBuilds()],
+			[headPr()],
+		);
+		const result = await wait({ intervalSeconds: 3600, timeoutSeconds: 7200 });
+		assert.equal(result.outcome, "no-build");
+		assert.equal(result.elapsedSeconds, 600);
+		assert.equal(result.pollCount, 2);
+	});
+
 	test("follows the head through two moves", async () => {
 		const third = pullRequest({
 			...headPr(),
