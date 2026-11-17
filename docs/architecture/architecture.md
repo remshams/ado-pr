@@ -68,7 +68,10 @@ flowchart TD
   operations read from stdin. It also finds the user's last comment or vote in the
   threads for `pr diff --since-last-review`.
 - `src/builds/`: PR validation builds: listing, queueing, diagnostics and logs,
-  retries and waiting for completion.
+  retries and waiting for completion. `builds.ts` wires the build service from the
+  anti-corruption layer `azure-builds.ts`, the domain services `head-builds.ts` and
+  `diagnosis.ts`, the application services `wait.ts` and `queue.ts`, and the text
+  output in `format.ts`.
 - `src/status/`: the `pr status` application service. It combines the pull request,
   the build validating its head, review threads, the latest iteration, merge
   conflicts and blocking policies into one report, and owns the best-effort Copilot
