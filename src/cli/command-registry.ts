@@ -146,8 +146,11 @@ Build wait:
   state, and outcome; inspect raw metadata before persisting it. When the build finishes, the wait checks
   the PR head again and reports whether the build still validates the head: human output adds a
   "Validates head" line, JSON adds validatesHead (null on timeout, if that read fails, or if the PR
-  has no commit to compare). A successful read also supplies the PR summary. The exit code still
-  follows the outcome.
+  has no commit to compare). A successful read also supplies the PR summary. If the build no
+  longer validates the head of an active PR, human output marks it superseded and names the head
+  commit and the newest build that validates it; JSON adds headBuildId (null if none does or that
+  lookup fails). A build that had already finished at the first read says so, and JSON sets
+  alreadyCompleted. The exit code still follows the outcome.
   Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes (including no-build) and
   errors, 130 for SIGINT, and 143 for SIGTERM. Transient poll requests retry, but a third
   consecutive transient failure aborts. Waiting never retries/requeues the build, fetches logs,
@@ -159,8 +162,9 @@ Build queue:
   Both print the queued build ID, build pipeline and URL. A PR requeue may not return the build ID
   yet; it then prints the requeued evaluation ID and exits 0. If the response has an invalid build
   ID or response, the error says Azure accepted the requeue and points to \`build list --pr <id>
-  --history\`. Queued builds print a ready-to-run \`build wait\` line; a branch build gets one only
-  when the branch has an active pull request, because \`build wait\` needs one. --definition <id>
+  --history\`. Queued builds print a ready-to-run \`build wait\` line: --latest for a PR build, so the
+  wait follows later pushes, and --build <id> for a branch build, which gets one only when the
+  branch has an active pull request, because \`build wait\` needs one. --definition <id>
   picks the build pipeline. With --pr it selects the build policy evaluation for that build pipeline
   and fails, listing the candidates, when none matches; it never queues a plain build. With --branch
   it queues that build pipeline directly, even when the repository has no build policy. Without it,
