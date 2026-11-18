@@ -110,6 +110,8 @@ describe("deterministic build wait", () => {
 			assert.equal(result.elapsedSeconds, 0);
 			assert.deepEqual(sleeps, []);
 			assert.equal(result.validatesHead, true);
+			assert.equal(result.alreadyCompleted, true);
+			assert.equal(result.headBuildId, null);
 			assert.deepEqual(pullRequestCalls, [
 				{ method: "resolve", requestedPrId: undefined },
 				{ method: "get", prId: 42 },
@@ -140,9 +142,19 @@ describe("deterministic build wait", () => {
 		]);
 	});
 
-	test("reports a build as stale when the PR head moved during the wait", async () => {
-		const { service } = createWaitHarness(
-			[build({ status: "inProgress" }), build({ result: "succeeded" })],
+	test("names the build that validates the head when the PR head moved during the wait", async () => {
+		const newer = build({
+			id: 701,
+			status: "inProgress",
+			sourceVersion: "new-merge",
+		});
+		const { service, calls } = createWaitHarness(
+			[
+				build({ status: "inProgress" }),
+				build({ result: "canceled" }),
+				{ value: [newer, build({ result: "canceled" })] },
+				{ value: [] },
+			],
 			{
 				refreshedPr: pullRequest({
 					lastMergeCommit: { commitId: "new-merge" },
@@ -150,11 +162,64 @@ describe("deterministic build wait", () => {
 			},
 		);
 		const result = await service.wait(42, 700);
-		assert.equal(result.outcome, "succeeded");
+		assert.equal(result.outcome, "canceled");
 		assert.equal(result.validatesHead, false);
+		assert.equal(result.headBuildId, 701);
+		assert.equal(result.alreadyCompleted, false);
+		assert.equal(calls.length, 4);
+		const text = service.formatWaitResult(result);
 		assert.match(
-			service.formatWaitResult(result),
-			/Validates head: no\nThis build doesn't validate the current head of the pull request; wait for the build that does with `pr\.sh build wait --latest --pr 42`\./,
+			text,
+			/^build 700 for PR #42 finished with outcome canceled\./,
+		);
+		assert.match(
+			text,
+			/Validates head: no\nSuperseded: this build no longer validates the head of the pull request \(commit unknown\)\. Build 701 validates it; wait for it with `pr\.sh build wait --latest --pr 42`\.$/,
+		);
+	});
+
+	test("reports no head build when none validates the moved head or the lookup fails", async () => {
+		for (const lookup of [
+			[{ value: [build({ result: "canceled" })] }, { value: [] }],
+			[new AzureRequestError("Bad Request", "http", { status: 400 })],
+		]) {
+			const { service } = createWaitHarness(
+				[build({ result: "canceled" }), ...lookup],
+				{
+					refreshedPr: pullRequest({
+						lastMergeCommit: { commitId: "new-merge" },
+					}),
+				},
+			);
+			const result = await service.wait(42, 700);
+			assert.equal(result.validatesHead, false);
+			assert.equal(result.headBuildId, null);
+			assert.match(
+				service.formatWaitResult(result),
+				/No build for it was found/,
+			);
+		}
+	});
+
+	test("cancels instead of reporting when aborted during the head build lookup", async () => {
+		const controller = new AbortController();
+		const { service } = createWaitHarness(
+			[
+				build({ result: "canceled" }),
+				() => {
+					controller.abort();
+					throw new AzureRequestError("request aborted", "abort");
+				},
+			],
+			{
+				refreshedPr: pullRequest({
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
+		await assert.rejects(
+			service.wait(42, 700, { signal: controller.signal }),
+			(error) => error.kind === "abort",
 		);
 	});
 
@@ -189,7 +254,11 @@ describe("deterministic build wait", () => {
 			"pullRequest",
 			"buildId",
 		]);
-		assert.equal(Object.keys(result).at(-1), "validatesHead");
+		assert.deepEqual(Object.keys(result).slice(-3), [
+			"validatesHead",
+			"headBuildId",
+			"alreadyCompleted",
+		]);
 		assert.equal(result.pullRequest.currentMergeCommit, "new-merge");
 		assert.doesNotMatch(service.formatWaitResult(result), /--latest/);
 	});
@@ -424,6 +493,8 @@ describe("deterministic build wait", () => {
 			timedOut: true,
 			outcome: "timeout",
 			validatesHead: null,
+			headBuildId: null,
+			alreadyCompleted: false,
 		});
 		assert.equal(calls.length, 1);
 		assert.deepEqual(sleeps, [{ at: 0, milliseconds: 10_000 }]);
