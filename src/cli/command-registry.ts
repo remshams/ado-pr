@@ -148,10 +148,11 @@ Build wait:
   "Validates head" line, JSON adds validatesHead (null on timeout, if that read fails, or if the PR
   has no commit to compare). A successful read also supplies the PR summary. If the build no
   longer validates the head of an active PR, human output marks it superseded and names the head
-  commit and the newest build of the same build pipeline that validates it; JSON adds headBuildId
-  (null if none does, or if that lookup fails or reaches the timeout). A build that had already
-  finished when the wait started says so, and JSON sets alreadyCompleted. The exit code still
-  follows the outcome.
+  commit. When the newest build of the same build pipeline validates the head, it names that build
+  with a \`build wait --build\` command; otherwise it suggests \`--latest\`, which follows any build
+  pipeline. JSON adds headBuildId (null if no such build exists, or if that lookup fails or
+  reaches the timeout). A build that had already finished at the first poll says so, and JSON sets
+  alreadyCompleted. The exit code still follows the outcome.
   Exit codes are 0 for succeeded, 124 for timeout, 1 for other outcomes (including no-build) and
   errors, 130 for SIGINT, and 143 for SIGTERM. Transient poll requests retry, but a third
   consecutive transient failure aborts. Waiting never retries/requeues the build, fetches logs,
@@ -163,16 +164,17 @@ Build queue:
   Both print the queued build ID, build pipeline and URL. A PR requeue may not return the build ID
   yet; it then prints the requeued evaluation ID and exits 0. If the response has an invalid build
   ID or response, the error says Azure accepted the requeue and points to \`build list --pr <id>
-  --history\`. Queued builds print a ready-to-run \`build wait\` line. A PR build without --definition
-  gets --latest, so the wait follows later pushes; other builds get --build <id>. A branch build
-  gets one only when the branch has an active pull request, because \`build wait\` needs one.
-  --definition <id> picks the build pipeline. With --pr it selects the build policy evaluation for
-  that build pipeline and fails, listing the candidates, when none matches; it never queues a
-  plain build. With --branch it queues that build pipeline directly, even when the repository has
-  no build policy. Without it, several matching policies or evaluations are reported for manual
-  resolution. A 401, 403, 400 or 404 means nothing was queued; 401 and 403 name the Build (Read &
-  execute) scope. Any other failed queue request may still have queued a build; inspect before
-  trying again.
+  --history\`. Queued builds print a ready-to-run \`build wait --build <id>\` line. A PR build
+  without --definition also gets a \`build wait --latest\` line, which follows the PR head and
+  reports whichever build validates it, from any build pipeline, after later pushes. A branch
+  build gets a wait line only when the branch has an active pull request, because \`build wait\`
+  needs one. --definition <id> picks the build pipeline. With --pr it selects the build policy
+  evaluation for that build pipeline and fails, listing the candidates, when none matches; it
+  never queues a plain build. With --branch it queues that build pipeline directly, even when the
+  repository has no build policy. Without it, several matching policies or evaluations are
+  reported for manual resolution. A 401, 403, 400 or 404 means nothing was queued; 401 and 403
+  name the Build (Read & execute) scope. Any other failed queue request may still have queued a
+  build; inspect before trying again.
 
 Pull request status:
   \`pr status\` reports the head and merge commits, the latest iteration, the draft state, the build
