@@ -323,6 +323,8 @@ export async function wait(
 		timedOut: outcome === "timeout",
 		outcome,
 		validatesHead: null,
+		headBuildId: null,
+		alreadyCompleted: false,
 	});
 	const progressBase = (at = now()): BuildWaitProgressBase => ({
 		pullRequest: pr.summary,
@@ -395,34 +397,61 @@ export async function wait(
 		);
 	}
 
-	function headValidity(
+	type HeadCheck = Pick<
+		BuildWaitEnvelope,
+		"pullRequest" | "validatesHead" | "headBuildId"
+	>;
+
+	/** The newest build that validates the head of `current`; null if none does or the lookup fails. */
+	async function findHeadBuild(
+		current: ValidatedPullRequest,
+	): Promise<number | null> {
+		if (now() >= deadline || current.status === undefined) return null;
+		if (normalized(current.status) !== "active") return null;
+		try {
+			const found = (await listNewestBuilds(deps, current, signal)).find(
+				(candidate) => isCurrentBuild(candidate, current),
+			);
+			return found === undefined ? null : (found.id as number);
+		} catch (error) {
+			throwIfWaitAborted(signal);
+			if (isAzureRequestError(error) && error.kind === "abort") throw error;
+			return null;
+		}
+	}
+
+	/** Whether the build validates the head of `current` and, if it no longer does, which build does. */
+	async function headCheck(
 		observedBuild: AzureBuild,
 		current: ValidatedPullRequest,
-	): Pick<BuildWaitEnvelope, "pullRequest" | "validatesHead"> {
+	): Promise<HeadCheck> {
 		const headKnown = headCommitFor(observedBuild, current) !== undefined;
+		const validates = headKnown ? validatesHead(observedBuild, current) : null;
 		return {
 			pullRequest: current.summary,
-			validatesHead: headKnown ? validatesHead(observedBuild, current) : null,
+			validatesHead: validates,
+			headBuildId: validates === false ? await findHeadBuild(current) : null,
 		};
 	}
 
 	/** Rereads the PR once the build finished; validatesHead is null if that isn't possible. */
-	async function refreshedHead(
-		observedBuild: AzureBuild,
-	): Promise<Pick<BuildWaitEnvelope, "pullRequest" | "validatesHead">> {
+	async function refreshedHead(observedBuild: AzureBuild): Promise<HeadCheck> {
+		const unknown = {
+			pullRequest: pr.summary,
+			validatesHead: null,
+			headBuildId: null,
+		};
 		const remainingMs = Math.ceil(deadline - now());
-		if (remainingMs <= 0)
-			return { pullRequest: pr.summary, validatesHead: null };
+		if (remainingMs <= 0) return unknown;
+		let current: ValidatedPullRequest;
 		try {
-			return headValidity(
-				observedBuild,
-				await rereadPullRequest(Math.min(READ_TIMEOUT_MS, remainingMs)),
-			);
+			current = await rereadPullRequest(Math.min(READ_TIMEOUT_MS, remainingMs));
 		} catch (error) {
 			throwIfWaitAborted(signal);
 			if (isAzureRequestError(error) && error.kind === "abort") throw error;
-			return { pullRequest: pr.summary, validatesHead: null };
+			return unknown;
 		}
+		return headCheck(observedBuild, current);
 	}
 
 	async function observeBuild(
@@ -432,6 +461,7 @@ export async function wait(
 	): Promise<BuildWaitEnvelope | undefined> {
 		const observedBuild = validateWaitBuild(rawBuild, selectedBuildId, pr);
 		const observedStatus = normalized(observedBuild.status);
+		const firstObservation = previousStateKey === undefined;
 
 		latestBuild = observedBuild;
 		consecutiveTransientFailures = 0;
@@ -450,8 +480,8 @@ export async function wait(
 			previousStateKey = stateKey;
 		}
 		if (observedStatus !== "completed") return undefined;
-		const { pullRequest, validatesHead } = followsHead
-			? headValidity(observedBuild, pr)
+		const { pullRequest, validatesHead, headBuildId } = followsHead
+			? await headCheck(observedBuild, pr)
 			: await refreshedHead(observedBuild);
 		return {
 			association: buildAssociation(observedBuild),
@@ -464,6 +494,8 @@ export async function wait(
 			timedOut: false,
 			outcome: waitResultOutcome(observedBuild),
 			validatesHead,
+			headBuildId,
+			alreadyCompleted: firstObservation,
 		};
 	}
 

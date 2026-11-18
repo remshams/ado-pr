@@ -170,4 +170,48 @@ describe("build output contracts", () => {
 			"PR #42, build 700: still waiting at unknown/unknown; 12.3s elapsed; 3 poll(s); 1 transient failure(s).",
 		);
 	});
+
+	test("wait reports a superseded build instead of failure guidance", (t) => {
+		const { service } = setup(t, []);
+		const result = {
+			pullRequest: { id: 42, status: "active", currentHeadCommit: "head-2" },
+			buildId: 700,
+			build: { status: "completed", result: "canceled" },
+			association: "pr-merge",
+			elapsedSeconds: 0,
+			pollCount: 1,
+			transientFailureCount: 0,
+			timedOut: false,
+			outcome: "canceled",
+			validatesHead: false,
+			headBuildId: 702,
+			alreadyCompleted: true,
+		};
+		const lines = service.formatWaitResult(result).split("\n");
+		assert.equal(
+			lines[0],
+			"build 700 for PR #42 had already finished when the wait first read it, with outcome canceled.",
+		);
+		assert.equal(
+			lines.at(-1),
+			"Superseded: this build no longer validates the head of the pull request (commit head-2). Build 702 validates it; wait for it with `pr.sh build wait --latest --pr 42`.",
+		);
+		assert.equal(
+			service
+				.formatWaitResult({ ...result, headBuildId: null })
+				.split("\n")
+				.at(-1),
+			"Superseded: this build no longer validates the head of the pull request (commit head-2). No build for it was found; wait for one with `pr.sh build wait --latest --pr 42`.",
+		);
+		assert.equal(
+			service
+				.formatWaitResult({
+					...result,
+					pullRequest: { ...result.pullRequest, status: "completed" },
+				})
+				.split("\n")
+				.at(-1),
+			"Inspect failure details with `pr.sh build show --pr 42 --build 700`.",
+		);
+	});
 });

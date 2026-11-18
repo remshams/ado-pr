@@ -244,6 +244,16 @@ function formatTimeout(
 	);
 }
 
+function formatSuperseded(result: BuildWaitEnvelope): string {
+	const pr = result.pullRequest;
+	const waitLatest = `\`pr.sh build wait --latest --pr ${pr.id}\``;
+	const replacement =
+		result.headBuildId === null
+			? `No build for it was found; wait for one with ${waitLatest}.`
+			: `Build ${result.headBuildId} validates it; wait for it with ${waitLatest}.`;
+	return `Superseded: this build no longer validates the head of the pull request (commit ${display(pr.currentHeadCommit)}). ${replacement}`;
+}
+
 export function formatWaitResult(result: BuildWaitEnvelope): string {
 	const buildId = result.buildId;
 	const identifier = buildId === null ? "build wait" : `build ${buildId}`;
@@ -253,21 +263,21 @@ export function formatWaitResult(result: BuildWaitEnvelope): string {
 		`${result.transientFailureCount} transient failure(s)`;
 	if (result.outcome === "no-build") return formatNoBuild(result, counters);
 	if (result.timedOut) return formatTimeout(result, statusResult, counters);
+	const finished = result.alreadyCompleted
+		? "had already finished when the wait first read it, with outcome"
+		: "finished with outcome";
+	const superseded =
+		result.validatesHead === false &&
+		result.pullRequest.status?.toLowerCase() === "active";
 	const lines = [
-		`${identifier} for PR #${result.pullRequest.id} finished with outcome ${display(result.outcome)}.`,
+		`${identifier} for PR #${result.pullRequest.id} ${finished} ${display(result.outcome)}.`,
 		`Status/result: ${statusResult}; ${counters}.`,
 		`Association: ${display(result.association)}`,
 		`Validates head: ${yesNoUnknown(result.validatesHead)}`,
 	];
-	if (
-		result.validatesHead === false &&
-		result.pullRequest.status?.toLowerCase() === "active"
-	) {
-		lines.push(
-			`This build doesn't validate the current head of the pull request; wait for the build that does with \`pr.sh build wait --latest --pr ${result.pullRequest.id}\`.`,
-		);
-	}
-	if (result.outcome !== "succeeded" && buildId !== null) {
+	if (superseded) {
+		lines.push(formatSuperseded(result));
+	} else if (result.outcome !== "succeeded" && buildId !== null) {
 		lines.push(
 			`Inspect failure details with \`pr.sh build show --pr ${result.pullRequest.id} --build ${buildId}\`.`,
 		);
