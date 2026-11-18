@@ -416,8 +416,10 @@ export async function wait(
 		current: ValidatedPullRequest,
 	): Promise<number | null> {
 		const remainingMs = Math.ceil(deadline - now());
+		const definitionId = observedBuild.definition?.id;
 		if (
 			remainingMs <= 0 ||
+			definitionId === undefined ||
 			current.status === undefined ||
 			normalized(current.status) !== "active"
 		)
@@ -429,7 +431,7 @@ export async function wait(
 		try {
 			const found = (await listNewestBuilds(deps, current, lookupSignal)).find(
 				(candidate) =>
-					candidate.definition?.id === observedBuild.definition?.id &&
+					candidate.definition?.id === definitionId &&
 					isCurrentBuild(candidate, current),
 			);
 			return found === undefined ? null : (found.id as number);

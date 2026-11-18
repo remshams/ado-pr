@@ -170,7 +170,7 @@ export interface BuildWaitEnvelope {
 	outcome: BuildWaitOutcome;
 	/** Whether the build validates the PR head read when it finished; null if unknown, including on timeout. */
 	validatesHead: boolean | null;
-	/** When the build no longer validates the head of an active PR: the newest build of the same build pipeline that does; null if none does, if that lookup fails, and in every other case. */
+	/** When the build no longer validates the head of an active PR: the newest build of the same build pipeline that does; null if none does, if that lookup fails or the waited build has no build pipeline ID, and in every other case. */
 	headBuildId: number | null;
 	/** Whether the build had already finished at the first poll of the wait. */
 	alreadyCompleted: boolean;
