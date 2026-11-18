@@ -203,15 +203,14 @@ describe("build output contracts", () => {
 			lines.at(-1),
 			"Superseded: this build no longer validates the head of the pull request (head commit head-2, merge commit merge-2). Build 702 of this build pipeline validates it; wait for it with `pr.sh build wait --build 702 --pr 42`.",
 		);
+		const withoutHeadBuild = service.formatWaitResult({
+			...result,
+			association: "branch-head",
+			headBuildId: null,
+		});
+		assert.doesNotMatch(withoutHeadBuild, /Inspect failure details/);
 		assert.equal(
-			service
-				.formatWaitResult({
-					...result,
-					association: "branch-head",
-					headBuildId: null,
-				})
-				.split("\n")
-				.at(-1),
+			withoutHeadBuild.split("\n").at(-1),
 			"Superseded: this build no longer validates the head of the pull request (head commit head-2). The wait found no build of this build pipeline for it, or couldn't look one up. To wait for the newest build that validates the head, from any build pipeline, run `pr.sh build wait --latest --pr 42`.",
 		);
 		assert.equal(
