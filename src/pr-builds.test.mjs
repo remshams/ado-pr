@@ -1020,7 +1020,7 @@ test("build wait names the build that superseded a canceled build after the head
 			`${result.stdout.split("\n")[1]}\n` +
 			"Association: pr-merge\n" +
 			"Validates head: no\n" +
-			"Superseded: this build no longer validates the head of the pull request (head commit head-2, merge commit merge-2). Build 702 of this build pipeline validates it; wait for it with `pr.sh build wait --latest --pr 42`.\n",
+			"Superseded: this build no longer validates the head of the pull request (head commit head-2, merge commit merge-2). Build 702 of this build pipeline validates it; wait for it with `pr.sh build wait --build 702 --pr 42`.\n",
 	);
 	const json = runPr(t, [...args, "--json"], {
 		cwd: createRepo(t),
