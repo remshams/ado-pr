@@ -258,7 +258,7 @@ export interface BuildService {
 	formatShow(result: BuildShowEnvelope): string;
 	formatRetry(build: AzureBuild): string;
 	branchPullRequestId(branch: string): Promise<number | undefined>;
-	formatQueue(build: AzureBuild, prId?: number): string;
+	formatQueue(build: AzureBuild, prId?: number, followHead?: boolean): string;
 	formatRequeue(evaluationId: string, prId: number): string;
 	formatWaitProgress(event: BuildWaitProgress): string;
 	formatWaitResult(result: BuildWaitEnvelope): string;

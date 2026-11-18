@@ -163,7 +163,12 @@ export function formatRetry(build: AzureBuild): string {
 	].join("\n");
 }
 
-export function formatQueue(build: AzureBuild, prId?: number): string {
+/** `followHead` suggests a wait that follows the PR head instead of the queued build ID. */
+export function formatQueue(
+	build: AzureBuild,
+	prId?: number,
+	followHead = false,
+): string {
 	const definition = build.definition;
 	return [
 		`Azure DevOps queued build ${build.id as number}/${display(build.buildNumber)}.`,
@@ -176,7 +181,7 @@ export function formatQueue(build: AzureBuild, prId?: number): string {
 		...(prId === undefined
 			? []
 			: [
-					`Wait with: pr.sh build wait --build ${build.id as number} --pr ${prId}`,
+					`Wait with: pr.sh build wait ${followHead ? "--latest" : `--build ${build.id as number}`} --pr ${prId}`,
 				]),
 	].join("\n");
 }
