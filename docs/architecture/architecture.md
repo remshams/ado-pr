@@ -234,7 +234,7 @@ sequenceDiagram
         Builds->>Prs: read the pull request again
         Prs->>Azure: GET pull request
     end
-    opt the build no longer validates the head of an active PR, with time left
+    opt the build no longer validates the head of an active PR, with a build pipeline ID and time left
         Builds->>Azure: list PR merge and branch builds
     end
     Builds-->>Entry: final result with validatesHead and headBuildId
