@@ -192,10 +192,12 @@ describe("build output contracts", () => {
 			headBuildId: 702,
 			alreadyCompleted: true,
 		};
-		const lines = service.formatWaitResult(result).split("\n");
+		const text = service.formatWaitResult(result);
+		assert.doesNotMatch(text, /Inspect failure details/);
+		const lines = text.split("\n");
 		assert.equal(
 			lines[0],
-			"build 700 for PR #42 had already finished when the wait started, with outcome canceled.",
+			"build 700 for PR #42 had already finished at the first poll, with outcome canceled.",
 		);
 		assert.equal(
 			lines.at(-1),
@@ -210,7 +212,7 @@ describe("build output contracts", () => {
 				})
 				.split("\n")
 				.at(-1),
-			"Superseded: this build no longer validates the head of the pull request (head commit head-2). The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with `pr.sh build wait --latest --pr 42`.",
+			"Superseded: this build no longer validates the head of the pull request (head commit head-2). The wait found no build of this build pipeline for it, or couldn't look one up. To wait for the newest build that validates the head, from any build pipeline, run `pr.sh build wait --latest --pr 42`.",
 		);
 		assert.equal(
 			service

@@ -163,7 +163,7 @@ export function formatRetry(build: AzureBuild): string {
 	].join("\n");
 }
 
-/** `followHead` suggests a wait that follows the PR head instead of the queued build ID. */
+/** `followHead` adds a wait that follows the PR head to the wait for the queued build. */
 export function formatQueue(
 	build: AzureBuild,
 	prId?: number,
@@ -181,7 +181,12 @@ export function formatQueue(
 		...(prId === undefined
 			? []
 			: [
-					`Wait with: pr.sh build wait ${followHead ? "--latest" : `--build ${build.id as number}`} --pr ${prId}`,
+					`Wait with: pr.sh build wait --build ${build.id as number} --pr ${prId}`,
+					...(followHead
+						? [
+								`Or follow the PR head, whichever build validates it after later pushes: pr.sh build wait --latest --pr ${prId}`,
+							]
+						: []),
 				]),
 	].join("\n");
 }
@@ -257,7 +262,7 @@ function formatSuperseded(result: BuildWaitEnvelope): string {
 			: `head commit ${display(pr.currentHeadCommit)}`;
 	const replacement =
 		result.headBuildId === null
-			? `The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with \`pr.sh build wait --latest --pr ${pr.id}\`.`
+			? `The wait found no build of this build pipeline for it, or couldn't look one up. To wait for the newest build that validates the head, from any build pipeline, run \`pr.sh build wait --latest --pr ${pr.id}\`.`
 			: `Build ${result.headBuildId} of this build pipeline validates it; wait for it with \`pr.sh build wait --build ${result.headBuildId} --pr ${pr.id}\`.`;
 	return `Superseded: this build no longer validates the head of the pull request (${commits}). ${replacement}`;
 }
@@ -272,7 +277,7 @@ export function formatWaitResult(result: BuildWaitEnvelope): string {
 	if (result.outcome === "no-build") return formatNoBuild(result, counters);
 	if (result.timedOut) return formatTimeout(result, statusResult, counters);
 	const finished = result.alreadyCompleted
-		? "had already finished when the wait started, with outcome"
+		? "had already finished at the first poll, with outcome"
 		: "finished with outcome";
 	const superseded =
 		result.validatesHead === false &&

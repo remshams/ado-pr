@@ -1156,12 +1156,12 @@ describe("build queueing", () => {
 			);
 		});
 
-		test("formatQueue suggests a wait that follows the PR head for a PR build", (t) => {
+		test("formatQueue adds a wait that follows the PR head for a PR build", (t) => {
 			const { service } = setup(t, []);
 
 			assert.match(
 				service.formatQueue(build({ id: 701 }), 42, true),
-				/\nWait with: pr\.sh build wait --latest --pr 42$/,
+				/\nWait with: pr\.sh build wait --build 701 --pr 42\nOr follow the PR head, whichever build validates it after later pushes: pr\.sh build wait --latest --pr 42$/,
 			);
 		});
 

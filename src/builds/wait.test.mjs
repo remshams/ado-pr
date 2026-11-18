@@ -228,6 +228,21 @@ describe("deterministic build wait", () => {
 		assert.equal(result.headBuildId, 702);
 	});
 
+	test("names no head build when the waited build has no build pipeline ID", async () => {
+		const { service, calls } = createWaitHarness(
+			[build({ result: "canceled", definition: undefined })],
+			{
+				refreshedPr: pullRequest({
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
+		const result = await service.wait(42, 700);
+		assert.equal(result.validatesHead, false);
+		assert.equal(result.headBuildId, null);
+		assert.equal(calls.length, 1);
+	});
+
 	test("gives up the head build lookup at the wait deadline", async () => {
 		const { service } = createWaitHarness(
 			[
