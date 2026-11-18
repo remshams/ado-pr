@@ -328,10 +328,12 @@ in `validatesHead` whether the build still validates the head, by the commit rul
 ADR 0006 and regardless of the PR status. It is `null` on timeout and when the read
 fails, runs out of time or finds no commit to compare. When the build no longer
 validates the head of an active pull request, the wait lists the PR builds once more
-and reports the newest build that validates the head in `headBuildId`, or `null` if
-none does or the lookup fails. Neither field changes the exit code. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively,
-without a final result or cancellation of the remote build. A repeated signal forces
-exit.
+and reports the newest build of the same build pipeline that validates the head in
+`headBuildId`. It is `null` if none does or the lookup fails or reaches the
+deadline. `alreadyCompleted` says whether the build had already finished at the
+first poll. None of these fields changes the exit code. SIGINT and SIGTERM cancel
+local work and exit 130 and 143 respectively, without a final result or cancellation
+of the remote build. A repeated signal forces exit.
 
 ## Tests and quality gates
 
