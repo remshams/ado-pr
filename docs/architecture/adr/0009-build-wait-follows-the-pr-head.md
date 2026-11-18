@@ -35,11 +35,13 @@ head:
   the outcome is `timeout`.
 - Progress on stderr names the selected build and the build it replaces.
 
-`--build <id>` keeps waiting for that build. When that build no longer validates
-the head of an active pull request at the end, the result marks it superseded and
-names the newest build that validates the head. `build queue --pr` suggests a wait
-with `--latest`, since the build it queued is the newest one for the head.
-`build show --latest` still reports a stale build at once.
+`--build <id>` keeps waiting for that build. When that build no longer validates the
+head of an active pull request at the end, the result marks it superseded and names
+the newest build of the same build pipeline that validates the head. `build queue
+--pr` without `--definition` suggests a wait with `--latest`: the repository then
+has one build policy, and the build it queued is the newest one for the head. With
+`--definition` it keeps `--build <id>`, because `--latest` doesn't filter by build
+pipeline. `build show --latest` still reports a stale build at once.
 
 This supersedes two clauses of ADR 0006: that wait fails with an error naming the
 head commit when no build validates it, and that waiting follows the selected build
