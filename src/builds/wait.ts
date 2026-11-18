@@ -407,23 +407,34 @@ export async function wait(
 		"pullRequest" | "validatesHead" | "headBuildId"
 	>;
 
-	/** The newest build that validates the head of `current`; null if none does or the lookup fails. */
+	/**
+	 * The newest build of the same build pipeline as `observedBuild` that validates the head of
+	 * `current`; null if none does or the lookup fails or runs past the wait deadline.
+	 */
 	async function findHeadBuild(
+		observedBuild: AzureBuild,
 		current: ValidatedPullRequest,
 	): Promise<number | null> {
+		const remainingMs = Math.ceil(deadline - now());
 		if (
-			now() >= deadline ||
+			remainingMs <= 0 ||
 			current.status === undefined ||
 			normalized(current.status) !== "active"
 		)
 			return null;
+		const lookupSignal = AbortSignal.any([
+			AbortSignal.timeout(remainingMs),
+			...(signal === undefined ? [] : [signal]),
+		]);
 		try {
-			const found = (await listNewestBuilds(deps, current, signal)).find(
-				(candidate) => isCurrentBuild(candidate, current),
+			const found = (await listNewestBuilds(deps, current, lookupSignal)).find(
+				(candidate) =>
+					candidate.definition?.id === observedBuild.definition?.id &&
+					isCurrentBuild(candidate, current),
 			);
 			return found === undefined ? null : (found.id as number);
-		} catch (error) {
-			rethrowAbort(error, signal);
+		} catch {
+			throwIfWaitAborted(signal);
 			return null;
 		}
 	}
@@ -438,7 +449,10 @@ export async function wait(
 		return {
 			pullRequest: current.summary,
 			validatesHead: validates,
-			headBuildId: validates === false ? await findHeadBuild(current) : null,
+			headBuildId:
+				validates === false
+					? await findHeadBuild(observedBuild, current)
+					: null,
 		};
 	}
 
@@ -468,7 +482,6 @@ export async function wait(
 	): Promise<BuildWaitEnvelope | undefined> {
 		const observedBuild = validateWaitBuild(rawBuild, selectedBuildId, pr);
 		const observedStatus = normalized(observedBuild.status);
-		const firstObservation = previousStateKey === undefined;
 
 		latestBuild = observedBuild;
 		consecutiveTransientFailures = 0;
@@ -502,7 +515,7 @@ export async function wait(
 			outcome: waitResultOutcome(observedBuild),
 			validatesHead,
 			headBuildId,
-			alreadyCompleted: firstObservation,
+			alreadyCompleted: pollCount === 1,
 		};
 	}
 

@@ -252,11 +252,15 @@ function formatTimeout(
 function formatSuperseded(result: BuildWaitEnvelope): string {
 	const pr = result.pullRequest;
 	const waitLatest = `\`pr.sh build wait --latest --pr ${pr.id}\``;
+	const commits =
+		result.association === "pr-merge"
+			? `head commit ${display(pr.currentHeadCommit)}, merge commit ${display(pr.currentMergeCommit)}`
+			: `head commit ${display(pr.currentHeadCommit)}`;
 	const replacement =
 		result.headBuildId === null
-			? `No build for it was found; wait for one with ${waitLatest}.`
-			: `Build ${result.headBuildId} validates it; wait for it with ${waitLatest}.`;
-	return `Superseded: this build no longer validates the head of the pull request (commit ${display(pr.currentHeadCommit)}). ${replacement}`;
+			? `The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with ${waitLatest}.`
+			: `Build ${result.headBuildId} of this build pipeline validates it; wait for it with ${waitLatest}.`;
+	return `Superseded: this build no longer validates the head of the pull request (${commits}). ${replacement}`;
 }
 
 export function formatWaitResult(result: BuildWaitEnvelope): string {
@@ -269,7 +273,7 @@ export function formatWaitResult(result: BuildWaitEnvelope): string {
 	if (result.outcome === "no-build") return formatNoBuild(result, counters);
 	if (result.timedOut) return formatTimeout(result, statusResult, counters);
 	const finished = result.alreadyCompleted
-		? "had already finished when the wait first read it, with outcome"
+		? "had already finished when the wait started, with outcome"
 		: "finished with outcome";
 	const superseded =
 		result.validatesHead === false &&
