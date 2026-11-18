@@ -174,7 +174,7 @@ describe("deterministic build wait", () => {
 		);
 		assert.match(
 			text,
-			/Validates head: no\nSuperseded: this build no longer validates the head of the pull request \(head commit unknown, merge commit new-merge\)\. Build 701 of this build pipeline validates it; wait for it with `pr\.sh build wait --latest --pr 42`\.$/,
+			/Validates head: no\nSuperseded: this build no longer validates the head of the pull request \(head commit unknown, merge commit new-merge\)\. Build 701 of this build pipeline validates it; wait for it with `pr\.sh build wait --build 701 --pr 42`\.$/,
 		);
 	});
 

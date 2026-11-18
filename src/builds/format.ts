@@ -251,15 +251,14 @@ function formatTimeout(
 
 function formatSuperseded(result: BuildWaitEnvelope): string {
 	const pr = result.pullRequest;
-	const waitLatest = `\`pr.sh build wait --latest --pr ${pr.id}\``;
 	const commits =
 		result.association === "pr-merge"
 			? `head commit ${display(pr.currentHeadCommit)}, merge commit ${display(pr.currentMergeCommit)}`
 			: `head commit ${display(pr.currentHeadCommit)}`;
 	const replacement =
 		result.headBuildId === null
-			? `The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with ${waitLatest}.`
-			: `Build ${result.headBuildId} of this build pipeline validates it; wait for it with ${waitLatest}.`;
+			? `The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with \`pr.sh build wait --latest --pr ${pr.id}\`.`
+			: `Build ${result.headBuildId} of this build pipeline validates it; wait for it with \`pr.sh build wait --build ${result.headBuildId} --pr ${pr.id}\`.`;
 	return `Superseded: this build no longer validates the head of the pull request (${commits}). ${replacement}`;
 }
 
