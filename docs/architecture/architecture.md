@@ -234,7 +234,7 @@ sequenceDiagram
         Builds->>Prs: read the pull request again
         Prs->>Azure: GET pull request
     end
-    opt the build no longer validates the head of an active PR
+    opt the build no longer validates the head of an active PR, with time left
         Builds->>Azure: list PR merge and branch builds
     end
     Builds-->>Entry: final result with validatesHead and headBuildId
@@ -329,11 +329,12 @@ ADR 0006 and regardless of the PR status. It is `null` on timeout and when the r
 fails, runs out of time or finds no commit to compare. When the build no longer
 validates the head of an active pull request, the wait lists the PR builds once more
 and reports the newest build of the same build pipeline that validates the head in
-`headBuildId`. It is `null` if none does or the lookup fails or reaches the
-deadline. `alreadyCompleted` says whether the build had already finished at the
-first poll. None of these fields changes the exit code. SIGINT and SIGTERM cancel
-local work and exit 130 and 143 respectively, without a final result or cancellation
-of the remote build. A repeated signal forces exit.
+`headBuildId`. It is `null` if none does, if the waited build has no build pipeline
+ID, or if the lookup fails or reaches the deadline. `alreadyCompleted` says whether
+the build had already finished at the first poll. None of these fields changes the
+exit code. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively,
+without a final result or cancellation of the remote build. A repeated signal forces
+exit.
 
 ## Tests and quality gates
 
