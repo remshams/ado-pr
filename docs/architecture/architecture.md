@@ -234,7 +234,10 @@ sequenceDiagram
         Builds->>Prs: read the pull request again
         Prs->>Azure: GET pull request
     end
-    Builds-->>Entry: final result with validatesHead
+    opt the build no longer validates the head of an active PR
+        Builds->>Azure: list PR merge and branch builds
+    end
+    Builds-->>Entry: final result with validatesHead and headBuildId
     Entry-->>Agent: result on stdout, exit 0, 1 or 124
 ```
 
@@ -323,8 +326,10 @@ names the attachment. Batch operations have no attachments.
 the pull request head again, rereading the pull request for `--build`, and reports
 in `validatesHead` whether the build still validates the head, by the commit rule of
 ADR 0006 and regardless of the PR status. It is `null` on timeout and when the read
-fails, runs out of time or finds no commit to compare. The field doesn't change the
-exit code. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively,
+fails, runs out of time or finds no commit to compare. When the build no longer
+validates the head of an active pull request, the wait lists the PR builds once more
+and reports the newest build that validates the head in `headBuildId`, or `null` if
+none does or the lookup fails. Neither field changes the exit code. SIGINT and SIGTERM cancel local work and exit 130 and 143 respectively,
 without a final result or cancellation of the remote build. A repeated signal forces
 exit.
 
