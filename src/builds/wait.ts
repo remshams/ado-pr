@@ -162,6 +162,12 @@ function throwIfWaitAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw buildWaitAbortError();
 }
 
+/** Rethrows `error` if the caller aborted the wait or the request was aborted. */
+function rethrowAbort(error: unknown, signal: AbortSignal | undefined): void {
+	throwIfWaitAborted(signal);
+	if (isAzureRequestError(error) && error.kind === "abort") throw error;
+}
+
 export function productionSleep(
 	milliseconds: number,
 	signal?: AbortSignal,
@@ -355,8 +361,7 @@ export async function wait(
 		error: unknown,
 		completedAt: number,
 	): Promise<BuildWaitEnvelope | undefined> {
-		throwIfWaitAborted(signal);
-		if (isAzureRequestError(error) && error.kind === "abort") throw error;
+		rethrowAbort(error, signal);
 
 		const transient = isTransientWaitError(error);
 		if (transient) {
@@ -406,16 +411,19 @@ export async function wait(
 	async function findHeadBuild(
 		current: ValidatedPullRequest,
 	): Promise<number | null> {
-		if (now() >= deadline || current.status === undefined) return null;
-		if (normalized(current.status) !== "active") return null;
+		if (
+			now() >= deadline ||
+			current.status === undefined ||
+			normalized(current.status) !== "active"
+		)
+			return null;
 		try {
 			const found = (await listNewestBuilds(deps, current, signal)).find(
 				(candidate) => isCurrentBuild(candidate, current),
 			);
 			return found === undefined ? null : (found.id as number);
 		} catch (error) {
-			throwIfWaitAborted(signal);
-			if (isAzureRequestError(error) && error.kind === "abort") throw error;
+			rethrowAbort(error, signal);
 			return null;
 		}
 	}
@@ -447,8 +455,7 @@ export async function wait(
 		try {
 			current = await rereadPullRequest(Math.min(READ_TIMEOUT_MS, remainingMs));
 		} catch (error) {
-			throwIfWaitAborted(signal);
-			if (isAzureRequestError(error) && error.kind === "abort") throw error;
+			rethrowAbort(error, signal);
 			return unknown;
 		}
 		return headCheck(observedBuild, current);
