@@ -120,7 +120,11 @@ async function runBuildQueue(
 	const result = await builds.queuePr(options.pr, options.definition);
 	console.log(
 		"build" in result
-			? builds.formatQueue(result.build, options.pr, true)
+			? builds.formatQueue(
+					result.build,
+					options.pr,
+					options.definition === undefined,
+				)
 			: builds.formatRequeue(result.evaluationId, options.pr),
 	);
 }
