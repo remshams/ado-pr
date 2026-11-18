@@ -1156,6 +1156,15 @@ describe("build queueing", () => {
 			);
 		});
 
+		test("formatQueue suggests a wait that follows the PR head for a PR build", (t) => {
+			const { service } = setup(t, []);
+
+			assert.match(
+				service.formatQueue(build({ id: 701 }), 42, true),
+				/\nWait with: pr\.sh build wait --latest --pr 42$/,
+			);
+		});
+
 		test("formatQueue omits the wait line without a PR and the pipeline line without a name", (t) => {
 			const { service } = setup(t, []);
 
