@@ -174,7 +174,12 @@ describe("build output contracts", () => {
 	test("wait reports a superseded build instead of failure guidance", (t) => {
 		const { service } = setup(t, []);
 		const result = {
-			pullRequest: { id: 42, status: "active", currentHeadCommit: "head-2" },
+			pullRequest: {
+				id: 42,
+				status: "active",
+				currentHeadCommit: "head-2",
+				currentMergeCommit: "merge-2",
+			},
 			buildId: 700,
 			build: { status: "completed", result: "canceled" },
 			association: "pr-merge",
@@ -190,18 +195,22 @@ describe("build output contracts", () => {
 		const lines = service.formatWaitResult(result).split("\n");
 		assert.equal(
 			lines[0],
-			"build 700 for PR #42 had already finished when the wait first read it, with outcome canceled.",
+			"build 700 for PR #42 had already finished when the wait started, with outcome canceled.",
 		);
 		assert.equal(
 			lines.at(-1),
-			"Superseded: this build no longer validates the head of the pull request (commit head-2). Build 702 validates it; wait for it with `pr.sh build wait --latest --pr 42`.",
+			"Superseded: this build no longer validates the head of the pull request (head commit head-2, merge commit merge-2). Build 702 of this build pipeline validates it; wait for it with `pr.sh build wait --latest --pr 42`.",
 		);
 		assert.equal(
 			service
-				.formatWaitResult({ ...result, headBuildId: null })
+				.formatWaitResult({
+					...result,
+					association: "branch-head",
+					headBuildId: null,
+				})
 				.split("\n")
 				.at(-1),
-			"Superseded: this build no longer validates the head of the pull request (commit head-2). No build for it was found; wait for one with `pr.sh build wait --latest --pr 42`.",
+			"Superseded: this build no longer validates the head of the pull request (head commit head-2). The wait found no build of this build pipeline for it, or couldn't look one up; wait for one with `pr.sh build wait --latest --pr 42`.",
 		);
 		assert.equal(
 			service

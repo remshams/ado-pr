@@ -174,7 +174,7 @@ describe("deterministic build wait", () => {
 		);
 		assert.match(
 			text,
-			/Validates head: no\nSuperseded: this build no longer validates the head of the pull request \(commit unknown\)\. Build 701 validates it; wait for it with `pr\.sh build wait --latest --pr 42`\.$/,
+			/Validates head: no\nSuperseded: this build no longer validates the head of the pull request \(head commit unknown, merge commit new-merge\)\. Build 701 of this build pipeline validates it; wait for it with `pr\.sh build wait --latest --pr 42`\.$/,
 		);
 	});
 
@@ -196,9 +196,62 @@ describe("deterministic build wait", () => {
 			assert.equal(result.headBuildId, null);
 			assert.match(
 				service.formatWaitResult(result),
-				/No build for it was found/,
+				/found no build of this build pipeline for it, or couldn't look one up/,
 			);
 		}
+	});
+
+	test("names only a build of the same build pipeline as the waited build", async () => {
+		const otherPipeline = build({
+			id: 701,
+			sourceVersion: "new-merge",
+			definition: { id: 10, name: "Other CI" },
+		});
+		const samePipeline = build({
+			id: 702,
+			sourceVersion: "new-merge",
+			queueTime: "2026-08-18T09:00:00Z",
+		});
+		const { service } = createWaitHarness(
+			[
+				build({ result: "canceled" }),
+				{ value: [otherPipeline, samePipeline] },
+				{ value: [] },
+			],
+			{
+				refreshedPr: pullRequest({
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
+		const result = await service.wait(42, 700);
+		assert.equal(result.headBuildId, 702);
+	});
+
+	test("gives up the head build lookup at the wait deadline", async () => {
+		const { service } = createWaitHarness(
+			[
+				({ clock }) => {
+					clock.value = 9_950;
+					return build({ result: "canceled" });
+				},
+				({ options }) =>
+					new Promise((_resolve, reject) => {
+						options.signal.addEventListener("abort", () =>
+							reject(new AzureRequestError("request aborted", "abort")),
+						);
+					}),
+			],
+			{
+				refreshedPr: pullRequest({
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
+		const result = await service.wait(42, 700, { timeoutSeconds: 10 });
+		assert.equal(result.outcome, "canceled");
+		assert.equal(result.validatesHead, false);
+		assert.equal(result.headBuildId, null);
 	});
 
 	test("cancels instead of reporting when aborted during the head build lookup", async () => {
@@ -240,14 +293,19 @@ describe("deterministic build wait", () => {
 	});
 
 	test("reports the PR summary from the final read", async () => {
-		const { service } = createWaitHarness([build({ result: "succeeded" })], {
-			refreshedPr: pullRequest({
-				status: "completed",
-				lastMergeCommit: { commitId: "new-merge" },
-			}),
-		});
+		const { service, calls } = createWaitHarness(
+			[build({ result: "succeeded" })],
+			{
+				refreshedPr: pullRequest({
+					status: "completed",
+					lastMergeCommit: { commitId: "new-merge" },
+				}),
+			},
+		);
 		const result = await service.wait(42, 700);
 		assert.equal(result.validatesHead, false);
+		assert.equal(result.headBuildId, null);
+		assert.equal(calls.length, 1);
 		assert.equal(result.pullRequest.status, "completed");
 		assert.deepEqual(Object.keys(result).slice(0, 3), [
 			"association",
@@ -1233,6 +1291,7 @@ describe("build wait --latest follows the PR head", () => {
 		assert.equal(result.outcome, "succeeded");
 		assert.equal(result.buildId, 700);
 		assert.equal(result.validatesHead, true);
+		assert.equal(result.alreadyCompleted, false);
 		assert.equal(result.pollCount, 3);
 		assert.deepEqual(
 			events.map(({ type }) => type),
