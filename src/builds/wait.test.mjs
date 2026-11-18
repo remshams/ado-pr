@@ -237,9 +237,12 @@ describe("deterministic build wait", () => {
 				},
 				({ options }) =>
 					new Promise((_resolve, reject) => {
-						options.signal.addEventListener("abort", () =>
-							reject(new AzureRequestError("request aborted", "abort")),
-						);
+						// Holds the event loop open like a real socket; the deadline timer doesn't.
+						const pending = setTimeout(() => {}, 60_000);
+						options.signal.addEventListener("abort", () => {
+							clearTimeout(pending);
+							reject(new AzureRequestError("request aborted", "abort"));
+						});
 					}),
 			],
 			{
