@@ -714,7 +714,7 @@ test("build queue --pr --definition requeues the evaluation for that pipeline an
 	assert.equal(
 		result.stdout,
 		"Azure DevOps queued build 703/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/703\n" +
-			"Wait with: pr.sh build wait --latest --pr 42\n",
+			"Wait with: pr.sh build wait --build 703 --pr 42\n",
 	);
 });
 
@@ -972,7 +972,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 			assert.match(
 				result.stdout,
 				new RegExp(
-					`^build 700 for PR #42 had already finished when the wait first read it, with outcome ${expectedOutcome}\\.`,
+					`^build 700 for PR #42 had already finished when the wait started, with outcome ${expectedOutcome}\\.`,
 				),
 			);
 			assert.match(result.stdout, /\nValidates head: yes\n/);
@@ -1016,11 +1016,11 @@ test("build wait names the build that superseded a canceled build after the head
 	]);
 	assert.equal(
 		result.stdout,
-		"build 700 for PR #42 had already finished when the wait first read it, with outcome canceled.\n" +
+		"build 700 for PR #42 had already finished when the wait started, with outcome canceled.\n" +
 			`${result.stdout.split("\n")[1]}\n` +
 			"Association: pr-merge\n" +
 			"Validates head: no\n" +
-			"Superseded: this build no longer validates the head of the pull request (commit head-2). Build 702 validates it; wait for it with `pr.sh build wait --latest --pr 42`.\n",
+			"Superseded: this build no longer validates the head of the pull request (head commit head-2, merge commit merge-2). Build 702 of this build pipeline validates it; wait for it with `pr.sh build wait --latest --pr 42`.\n",
 	);
 	const json = runPr(t, [...args, "--json"], {
 		cwd: createRepo(t),
