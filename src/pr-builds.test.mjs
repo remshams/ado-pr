@@ -647,7 +647,8 @@ test("build queue --pr fetches and prints the build ID from evaluation context",
 	assert.equal(
 		result.stdout,
 		"Azure DevOps queued build 701/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/701\n" +
-			"Wait with: pr.sh build wait --latest --pr 42\n",
+			"Wait with: pr.sh build wait --build 701 --pr 42\n" +
+			"Or follow the PR head, whichever build validates it after later pushes: pr.sh build wait --latest --pr 42\n",
 	);
 });
 
@@ -972,13 +973,35 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 			assert.match(
 				result.stdout,
 				new RegExp(
-					`^build 700 for PR #42 had already finished when the wait started, with outcome ${expectedOutcome}\\.`,
+					`^build 700 for PR #42 had already finished at the first poll, with outcome ${expectedOutcome}\\.`,
 				),
 			);
 			assert.match(result.stdout, /\nValidates head: yes\n/);
 			assert.equal(result.stdout.split("\n").length, 6);
 		}
 	}
+});
+
+test("build wait marks a succeeded build superseded and still exits 0", (t) => {
+	const result = runPr(t, ["build", "wait", "--pr", "42", "--build", "700"], {
+		cwd: createRepo(t),
+		responses: [
+			{ json: validationPr() },
+			{ json: validationBuild({ result: "succeeded" }) },
+			{ json: headValidationPr({ lastMergeCommit: { commitId: "merge-2" } }) },
+			{ json: { value: [] } },
+			{ json: { value: [] } },
+		],
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(
+		result.stdout,
+		/^build 700 for PR #42 had already finished at the first poll, with outcome succeeded\./,
+	);
+	assert.match(
+		result.stdout,
+		/\nSuperseded: this build no longer validates the head of the pull request \(head commit head-2, merge commit merge-2\)\. The wait found no build of this build pipeline for it/,
+	);
 });
 
 test("build wait names the build that superseded a canceled build after the head moved", (t) => {
@@ -1016,7 +1039,7 @@ test("build wait names the build that superseded a canceled build after the head
 	]);
 	assert.equal(
 		result.stdout,
-		"build 700 for PR #42 had already finished when the wait started, with outcome canceled.\n" +
+		"build 700 for PR #42 had already finished at the first poll, with outcome canceled.\n" +
 			`${result.stdout.split("\n")[1]}\n` +
 			"Association: pr-merge\n" +
 			"Validates head: no\n" +
