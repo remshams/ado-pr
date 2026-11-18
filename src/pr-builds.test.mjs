@@ -647,7 +647,7 @@ test("build queue --pr fetches and prints the build ID from evaluation context",
 	assert.equal(
 		result.stdout,
 		"Azure DevOps queued build 701/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/701\n" +
-			"Wait with: pr.sh build wait --build 701 --pr 42\n",
+			"Wait with: pr.sh build wait --latest --pr 42\n",
 	);
 });
 
@@ -714,7 +714,7 @@ test("build queue --pr --definition requeues the evaluation for that pipeline an
 	assert.equal(
 		result.stdout,
 		"Azure DevOps queued build 703/20260818.1.\nBuild pipeline: Widget CI (9)\nURL: https://dev.azure.com/acme/build/703\n" +
-			"Wait with: pr.sh build wait --build 703 --pr 42\n",
+			"Wait with: pr.sh build wait --latest --pr 42\n",
 	);
 });
 
@@ -959,6 +959,8 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 			assert.equal(parsed.outcome, resultName);
 			assert.equal(parsed.buildId, 700);
 			assert.equal(parsed.validatesHead, true);
+			assert.equal(parsed.headBuildId, null);
+			assert.equal(parsed.alreadyCompleted, true);
 			assert.equal(
 				parsed.build.unsafeMetadata,
 				"C1\u009b bidi\u202e line\u2028separator",
@@ -970,7 +972,7 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 			assert.match(
 				result.stdout,
 				new RegExp(
-					`^build 700 for PR #42 finished with outcome ${expectedOutcome}\\.`,
+					`^build 700 for PR #42 had already finished when the wait first read it, with outcome ${expectedOutcome}\\.`,
 				),
 			);
 			assert.match(result.stdout, /\nValidates head: yes\n/);
@@ -979,38 +981,57 @@ test("build wait polls exactly PR and build metadata for every terminal outcome,
 	}
 });
 
-test("build wait reports a finished build that no longer validates the head", (t) => {
-	const result = runPr(t, ["build", "wait", "--pr", "42", "--build", "700"], {
-		cwd: createRepo(t),
-		responses: [
-			{ json: validationPr() },
-			{ json: validationBuild({ result: "succeeded" }) },
-			{ json: validationPr({ lastMergeCommit: { commitId: "merge-2" } }) },
-		],
+test("build wait names the build that superseded a canceled build after the head moved", (t) => {
+	const movedPr = headValidationPr({
+		lastMergeCommit: { commitId: "merge-2" },
 	});
-	assert.equal(result.status, 0, result.stderr);
+	const newer = validationBuild({
+		id: 702,
+		status: "inProgress",
+		result: undefined,
+		sourceVersion: "merge-2",
+		queueTime: "2026-08-18T11:00:00Z",
+	});
+	const responses = () => [
+		{ json: validationPr() },
+		{ json: validationBuild({ result: "canceled" }) },
+		{ json: movedPr },
+		{ json: { value: [newer, validationBuild({ result: "canceled" })] } },
+		{ json: { value: [] } },
+	];
+	const args = ["build", "wait", "--pr", "42", "--build", "700"];
+	const result = runPr(t, args, {
+		cwd: createRepo(t),
+		responses: responses(),
+	});
+	assert.equal(result.status, 1, result.stderr);
+	assert.deepEqual(result.calls.map(request).slice(2), [
+		{
+			url: `${apiBase}/pullRequests/42?api-version=7.1`,
+			method: "GET",
+			body: null,
+		},
+		{ url: buildListUrl("merge"), method: "GET", body: null },
+		{ url: buildListUrl("branch"), method: "GET", body: null },
+	]);
 	assert.equal(
 		result.stdout,
-		"build 700 for PR #42 finished with outcome succeeded.\n" +
+		"build 700 for PR #42 had already finished when the wait first read it, with outcome canceled.\n" +
 			`${result.stdout.split("\n")[1]}\n` +
 			"Association: pr-merge\n" +
 			"Validates head: no\n" +
-			"This build doesn't validate the current head of the pull request; wait for the build that does with `pr.sh build wait --latest --pr 42`.\n",
+			"Superseded: this build no longer validates the head of the pull request (commit head-2). Build 702 validates it; wait for it with `pr.sh build wait --latest --pr 42`.\n",
 	);
-	const json = runPr(
-		t,
-		["build", "wait", "--pr", "42", "--build", "700", "--json"],
-		{
-			cwd: createRepo(t),
-			responses: [
-				{ json: validationPr() },
-				{ json: validationBuild({ result: "succeeded" }) },
-				{ json: validationPr({ lastMergeCommit: { commitId: "merge-2" } }) },
-			],
-		},
-	);
-	assert.equal(json.status, 0, json.stderr);
-	assert.equal(JSON.parse(json.stdout).validatesHead, false);
+	const json = runPr(t, [...args, "--json"], {
+		cwd: createRepo(t),
+		responses: responses(),
+	});
+	assert.equal(json.status, 1, json.stderr);
+	const parsed = JSON.parse(json.stdout);
+	assert.equal(parsed.validatesHead, false);
+	assert.equal(parsed.headBuildId, 702);
+	assert.equal(parsed.alreadyCompleted, true);
+	assert.equal(parsed.pullRequest.currentHeadCommit, "head-2");
 });
 
 test("build wait reports operational HTTP errors without a result document", (t) => {
