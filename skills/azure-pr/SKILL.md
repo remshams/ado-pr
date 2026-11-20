@@ -25,6 +25,10 @@ Use `--attachment <path> [--attachment-name <file name>]` on `pr.sh comment crea
 
 Try to combine as many requests as possible with `pr.sh comment batch` to avoid frequent authentication calls (for example, when the user is using the 1Password integration). Batch input uses qualified `command` values such as `comment.create`, `comment.reply`, and `comment.edit`; consult `--help` for the current schema. To answer and close a thread in one step, use `pr.sh comment reply --status <status>` or the optional `status` field of `comment.reply` and `comment.resolve`; accepted statuses are `fixed`, `wontFix`, `byDesign` and `closed`. A failed status update leaves the reply posted. `comment.reopen` reopens a thread in a batch.
 
+## Write comment content
+
+Write PR comments for the PR author or another reviewer. That reader didn't see your conversation with the user, so don't retell it. Leave out what you tried, what you and the user discussed and how you reached the conclusion. State the finding, the question or the requested change, with the file, line or example the reader needs to act on it. Keep comments short. Apply the `unslop` skill to the comment content before posting or editing it.
+
 ## Disclose AI authorship
 
 Every PR comment whose content is written or rewritten by an agent must disclose the AI authorship and the actual model used. This applies to:
