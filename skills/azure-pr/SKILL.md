@@ -29,6 +29,10 @@ Try to combine as many requests as possible with `pr.sh comment batch` to avoid 
 
 Write PR comments for the PR author or another reviewer. That reader didn't see your conversation with the user, so don't retell it. Leave out what you tried, what you and the user discussed and how you reached the conclusion. State the finding, the question or the requested change, with the file, line or example the reader needs to act on it. Keep comments short. Apply the `unslop` skill to the comment content before posting or editing it.
 
+## Don't answer the user's own comments
+
+Never reply to a comment the user wrote. `pr.sh` posts as the authenticated PAT owner, so a comment from that identity without the AI disclosure below is the user's own. Don't reply to it or edit it. If it seems to need an answer, tell the user instead.
+
 ## Disclose AI authorship
 
 Every PR comment whose content is written or rewritten by an agent must disclose the AI authorship and the actual model used. This applies to:
